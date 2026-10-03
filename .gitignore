@@ -289,3 +289,4 @@
 !/ComfyUI-Workspace/projects/director-workbench/tools/check_public_docs.py
 !/ComfyUI-Workspace/projects/director-workbench/tools/restore_comfy_engine.py
 !/ComfyUI-Workspace/projects/director-workbench/tests/test_engine_recovery.py
+!/ComfyUI-Workspace/projects/director-workbench/tests/test_candidate_review_invalidation.py

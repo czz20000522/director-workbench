@@ -787,7 +787,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
     try {
       const response = await fetch(`/api/projects/${encodeURIComponent(project.id)}/reviews`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ expected_revision: projectState?.reviews[current.id]?.[stage]?.revision ?? 0, asset_id: current.id, stage, status, note: currentNote, adopted_variant: adoptedVariant, candidate_ref: kind === 'video' ? current.sources?.[adoptedVariant ?? variant] ?? null : materialCandidateRef, source: 'director-ui' }),
+        body: JSON.stringify({ expected_revision: projectState?.reviews[current.id]?.[stage]?.revision ?? 0, ...(kind === 'video' && status === 'approved' ? { expected_plan_revision: planRevision } : {}), asset_id: current.id, stage, status, note: currentNote, adopted_variant: adoptedVariant, candidate_ref: kind === 'video' ? current.sources?.[adoptedVariant ?? variant] ?? null : materialCandidateRef, source: 'director-ui' }),
       });
       const data = await response.json();
       if (response.status === 409 && data.detail?.code === 'record_revision_conflict') {
@@ -799,7 +799,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
       }
       if (!response.ok) throw new Error(data.detail?.message || data.detail || '审核保存失败');
       await refreshProjectState();
-      setNotice(status === 'approved' ? `${assetLabel(current.id, kind)} ${stage === 'finish' ? '精细版' : stage === 'final' ? '全片' : kind === 'video' ? '样片' : '素材候选'}已采用，版本 ${data.revision}。` : `${assetLabel(current.id, kind)} 审核意见已保存，版本 ${data.revision}。`);
+      setNotice(data.status === 'stale' && status === 'approved' ? data.stale_reason || '审核未绑定当前候选，请重新读取并确认。' : status === 'approved' ? `${assetLabel(current.id, kind)} ${stage === 'finish' ? '精细版' : stage === 'final' ? '全片' : kind === 'video' ? '样片' : '素材候选'}已采用，版本 ${data.revision}。` : `${assetLabel(current.id, kind)} 审核意见已保存，版本 ${data.revision}。`);
     } catch (error) { setNotice(error instanceof Error ? error.message : '审核保存失败。'); }
     finally { setStateSaving(false); }
   }
