@@ -806,7 +806,8 @@ def resolve_pipeline_material(value: Any, kind: str, manifest: dict[str, Any] | 
     return str(resolved)
 
 
-def prepare_pipeline_payload(payload: dict[str, Any], stage_id: str, values: dict[str, Any], manifest: dict[str, Any] | None = None) -> dict[str, Any]:
+def prepare_pipeline_payload(payload: dict[str, Any], stage_id: str, values: dict[str, Any], manifest: dict[str, Any] | None = None,
+                             *, plan_document: dict[str, Any] | None = None) -> dict[str, Any]:
     """Resolve, validate and bind one stage's operator inputs before freezing."""
     project = manifest if manifest is not None else CURRENT_PROJECT
     stages = project.get('pipeline', []) if manifest is not None else PIPELINE_STAGES
@@ -853,7 +854,10 @@ def prepare_pipeline_payload(payload: dict[str, Any], stage_id: str, values: dic
         ):
             raise HTTPException(422, 'H3 工作流的帧网格、画幅或帧率已改变，请重新配置制作方案')
     if preset.get("workflow") == payload.get("workflow") or graph_preset_id in production_presets.PRESET_IDS:
-        document, _ = load_project_plan(str(project['id']) if manifest is not None else CURRENT_PROJECT_ID)
+        if plan_document is None:
+            document, _ = load_project_plan(str(project['id']) if manifest is not None else CURRENT_PROJECT_ID)
+        else:
+            document = plan_document
         segment = next((item for item in document.get("segments", []) if item.get("id") == payload.get("asset_id")), None)
         if segment is None:
             raise HTTPException(422, "请先保存分镜，再配置生成参数")
@@ -2781,6 +2785,8 @@ def repair_project_recipe_identity(project_id: str, segment_id: str, request: Re
             raise ValueError('来源或快照不一致')
         source_graph = json.loads(source.read_text(encoding='utf-8-sig'))
         frozen_graph = json.loads(frozen.read_text(encoding='utf-8-sig'))
+        if not isinstance(source_graph, dict) or not isinstance(frozen_graph, dict):
+            raise ValueError('配方图不是对象')
         if {key: node['class_type'] for key, node in source_graph.items()} != {key: node['class_type'] for key, node in frozen_graph.items()}:
             raise ValueError('图节点来源不一致')
     except (ValueError, OSError, KeyError, TypeError) as exc:
@@ -2790,6 +2796,35 @@ def repair_project_recipe_identity(project_id: str, segment_id: str, request: Re
     current = segment.get('workflow')
     if current not in (original, payload.get('workflow'), root_relative_path(frozen)):
         raise HTTPException(409, '当前配方不是该任务写入的快照，未改写计划')
+    try:
+        # Preview only the identity correction through the same saved-input
+        # contract used by preflight. Never install a recipe or persist a draft.
+        preview = json.loads(json.dumps(document))
+        preview_segment = next(row for row in preview['segments'] if row.get('id') == segment_id)
+        preview_segment['workflow'] = original
+        prepared = prepare_pipeline_payload({'workflow': original, 'asset_id': segment_id}, stage_id, {}, manifest,
+                                            plan_document=preview)
+        if segment_dependency_blockers(preview, preview_segment):
+            raise ValueError('当前输入的前置素材不可用')
+        bindings = execution.get('applied_bindings') or []
+        def binding_identity(rows):
+            return {(row['input_id'], row['node_id'], row['input']) for row in rows}
+        if binding_identity(bindings) != binding_identity(prepared['_graph_bindings']):
+            raise ValueError('执行输入合同已改变')
+        # Reapply only server-recorded freeze changes. Every remaining fixed
+        # input and connection must still equal the successful task's graph.
+        if execution.get('prompt_node_ids'):
+            apply_prompt_override(source_graph, execution['prompt'], execution['prompt_node_ids'])
+        apply_graph_bindings(source_graph, bindings)
+        for material in execution.get('staged_materials') or []:
+            source_graph[material['node_id']]['inputs'][material['input']] = material['reference']
+        source_graph['92']['inputs']['filename_prefix'] = frozen_graph['92']['inputs']['filename_prefix']
+        def graph_contract(graph):
+            return {key: (node['class_type'], node['inputs']) for key, node in graph.items()}
+        if graph_contract(source_graph) != graph_contract(frozen_graph):
+            raise ValueError('配方的固定参数或连接已改变')
+    except (HTTPException, ValueError, OSError, KeyError, TypeError) as exc:
+        raise HTTPException(409, '当前配方或输入合同无法与成功回执对应，未改写计划；请核对来源与制作输入') from exc
     with DB_LOCK, db() as connection:
         placeholders = ','.join('?' for _ in RELEASE_BLOCKING_STATUSES)
         active = connection.execute(f'SELECT id FROM tasks WHERE project_id=? AND status IN ({placeholders}) LIMIT 1',
