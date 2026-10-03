@@ -286,3 +286,5 @@
 /.github/workflows/*
 !/.github/workflows/public-source.yml
 !/ComfyUI-Workspace/projects/director-workbench/tools/check_public_docs.py
+!/ComfyUI-Workspace/projects/director-workbench/tools/restore_comfy_engine.py
+!/ComfyUI-Workspace/projects/director-workbench/tests/test_engine_recovery.py

@@ -105,6 +105,8 @@ npm run build
 
 ## 多设备部署和验收
 
+ComfyUI 引擎恢复使用正式入口 `tools/restore_comfy_engine.py`。先用工作台解释器执行该文件（默认只检查安装、配置和端口，不启动）；仅在已授权的维护窗口加 `--launch`。它读取本机资产配置，使用桌面版 `.venv`、D 盘共享模型/temp 和配置的 E 盘 input/output，监听本机 8188。引擎端口被占用或上一启动仍存活时拒绝重复启动；健康等待超时须核对已有进程和日志，不能盲目重发。入口使用 Windows 隐藏进程启动，日志与启动回执保存在隔离 runtime，不提交；不停止现有引擎、不提交生成。完整引擎启动后的窗口、唯一监听和模型加载仍需实际验收。
+
 现有私人网络可通过客户机 SSH 隧道访问服务器 `127.0.0.1:4100`，或由维护者配置指定监听地址及精确 Origin。浏览器 Origin 包含协议、主机和端口，不带末尾斜杠；非 loopback 启动必须提供 `-Origins`。客户端接入工作台服务，不直接公开 ComfyUI 端口。尾网、SSH 用户/密钥与地址由维护者通过私人渠道提供。
 
 上线前先检查登录、`/api/auth/me`、`/api/health`、本人作品列表与未授权访问拒绝。`health.ok=true` 只说明工作台处理了请求，还需读取 `comfy.online`；声音、图片与媒体工具各自查看 `/api/speech-capability`、`/api/keyframe-capability`、`/api/media-capability`。模型/节点缺失应由能力检查及预检返回，不能盲目提交生成。
