@@ -229,6 +229,7 @@
 !/ComfyUI-Workspace/projects/director-workbench/tests/test_reliability_audit.py
 !/ComfyUI-Workspace/projects/director-workbench/tests/test_reverse_workbench.py
 !/ComfyUI-Workspace/projects/director-workbench/tests/test_scheduler_app.py
+!/ComfyUI-Workspace/projects/director-workbench/tests/test_scheduler_restart.py
 !/ComfyUI-Workspace/projects/director-workbench/tests/test_scoped_assembly.py
 !/ComfyUI-Workspace/projects/director-workbench/tests/test_scoped_batches.py
 !/ComfyUI-Workspace/projects/director-workbench/tests/test_scoped_creative.py
