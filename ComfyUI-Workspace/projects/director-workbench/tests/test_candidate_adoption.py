@@ -43,7 +43,7 @@ def test_current_successful_candidate_adoption_and_original_revision_retry(prese
     client,project=preset_client
     body,path,media=candidate_fixture(client,project,stage=stage,kind=kind)
     if stage == 'finish':
-        backend.persist_review(backend.ReviewRecordRequest(asset_id='S01',stage='sample',status='approved',note='Previously selected sample'), 'preset-test')
+        backend.persist_review(backend.ReviewRecordRequest(asset_id='S01',stage='sample',status='approved',note='Previously selected sample',candidate_ref=str(media),expected_plan_revision=body['expected_plan_revision']), 'preset-test')
     before=path.read_bytes()
     response=client.post(BASE+'/adoptions',json=body)
     assert response.status_code==200,response.text
@@ -109,12 +109,13 @@ def test_visible_b_candidate_uses_its_task_and_variant(preset_client,alternate,s
     document=json.loads(path.read_text())
     video=document['segments'][0]['video']
     video['path']=str(media.with_name('original.bin'))
+    media.with_name('original.bin').write_bytes(b'isolated original sample')
     video[alternate]={'path':str(media),'prompt_id':'task-current'}
     document['segments'][0]['comfyui_task_id']='original-task'
     path.write_text(json.dumps(document))
     if stage=='finish':
         assert client.post(BASE+'/adoptions',json=body).status_code==409
-        backend.persist_review(backend.ReviewRecordRequest(asset_id='S01',stage='sample',status='approved',note='Previously selected sample'), 'preset-test')
+        backend.persist_review(backend.ReviewRecordRequest(asset_id='S01',stage='sample',status='approved',note='Previously selected sample',candidate_ref=video['path'],expected_plan_revision=body['expected_plan_revision']), 'preset-test')
     response=client.post(BASE+'/adoptions',json=body)
     assert response.status_code==200,response.text
     assert response.json()['adopted_variant']=='B'

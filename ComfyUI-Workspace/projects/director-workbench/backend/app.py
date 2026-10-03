@@ -1156,6 +1156,68 @@ def system_time_iso(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+def segment_candidate_identity(segment: dict[str, Any]) -> dict[str, Any]:
+    return {
+        'path': str((segment.get('video') or {}).get('path') or ''),
+        'version_task_id': segment.get('current_version_task_id'),
+        'prompt_id': segment.get('comfyui_task_id'),
+    }
+
+
+def segment_review_binding(segment: dict[str, Any], reference: str) -> dict[str, Any]:
+    """Bind the explicitly selected, visible candidate to its current task."""
+    candidate = adoption_candidate_path(reference)
+    video = segment.get('video') or {}
+    selected = {'path': video.get('path'), 'prompt_id': segment.get('comfyui_task_id'),
+                'version_task_id': segment.get('current_version_task_id')}
+    alternate = video.get('rework_candidate') or {}
+    if not alternate.get('path'):
+        alternate = video.get('finish_review') or {}
+    if alternate.get('path') and candidate == adoption_candidate_path(str(alternate['path'])):
+        selected = {'path': alternate['path'], 'prompt_id': alternate.get('prompt_id'),
+                    'version_task_id': alternate.get('task_id')}
+    if (not selected.get('path') or candidate != adoption_candidate_path(str(selected['path']))
+            or not candidate.is_file()
+            or not (selected.get('version_task_id') or selected.get('prompt_id'))):
+        raise HTTPException(409, '审核候选已变化或缺少任务身份，请重新读取当前作品后再审核')
+    return {'current': segment_candidate_identity(segment), 'selected': selected}
+
+
+def stale_candidate_reviews(project_id: str, asset_id: str, stages: tuple[str, ...], note: str) -> None:
+    """Append invalidation without changing the retained review or candidate."""
+    with DB_LOCK, db() as connection:
+        connection.execute('BEGIN IMMEDIATE')
+        for stage in stages:
+            row = connection.execute(
+                'SELECT data FROM project_records WHERE project_id=? AND asset_id=? AND record_type=? ORDER BY revision DESC, id DESC LIMIT 1',
+                (project_id, asset_id, 'review:' + stage),
+            ).fetchone()
+            if row:
+                review = json.loads(row['data'])
+                if review.get('status') != 'stale':
+                    append_project_record_in_connection(
+                        connection, project_id, 'review:' + stage,
+                        {**review, 'status': 'stale', 'stale_reason': note},
+                        asset_id, 'candidate-change', time.time(),
+                    )
+        connection.commit()
+
+
+def candidate_plan_owner(target_plan: Path, project_id: str | None) -> dict[str, Any] | None:
+    """Resolve the receipt's frozen plan, independently of the selected project."""
+    entries = [{'id': project_id}] if project_id else load_project_catalog()['projects']
+    for entry in entries:
+        if not isinstance(entry, dict) or not entry.get('id'):
+            continue
+        try:
+            owner = load_project_manifest(str(entry['id']))
+            if resolve_registered_path(owner['plan_path']) == target_plan.resolve():
+                return owner
+        except (RuntimeError, KeyError, TypeError, ValueError, HTTPException):
+            continue
+    return None
+
+
 @plan_transaction
 def record_segment_result(
     asset_id: str, prompt_id: str, workflow: str, done: dict[str, Any],
@@ -1173,6 +1235,7 @@ def record_segment_result(
     segment = next((item for item in segments if isinstance(item, dict) and item.get("id") == asset_id), None)
     if segment is None:
         return
+    previous_candidate = segment_candidate_identity(segment)
     output = str(done["outputs"][0]).replace("\\", "/").lstrip("/")
     video_path = (done.get('published_outputs') or [f"output/{output}"])[0]
     version_task_id = task_id or prompt_id
@@ -1220,6 +1283,13 @@ def record_segment_result(
     if isinstance(assembly, dict) and assembly.get("output"):
         assembly.update(status="stale", notes="分镜已更新，需要重新装配当前版本。")
     write_plan_version(target_plan, document)
+    if previous_candidate != segment_candidate_identity(segment):
+        owner = candidate_plan_owner(target_plan, (payload or {}).get('project_id'))
+        if owner:
+            stale_candidate_reviews(owner['id'], asset_id, ('sample', 'finish'), '当前分镜候选已变化，需要重新审核')
+            if isinstance(assembly, dict) and assembly.get('output'):
+                stale_candidate_reviews(owner['id'], str(owner.get('assembly_asset_id') or 'MASTER'),
+                                        ('final',), '分镜候选已变化，需要重新装配并审核成片')
 
 
 def write_recipe_snapshot(payload: dict[str, Any], *, project_id: str | None = None) -> str:
@@ -1741,6 +1811,7 @@ class ProjectCreativeSettingsRequest(CreativeSettingsRequest):
 
 class ReviewRecordRequest(BaseModel):
     expected_revision: int | None = Field(default=None, ge=0)
+    expected_plan_revision: StrictInt | None = Field(default=None, ge=0)
     asset_id: str = Field(min_length=1, max_length=160)
     stage: Literal['sample', 'finish', 'final'] = 'sample'
     status: Literal['pending_review', 'approved', 'changes_requested', 'stale'] = 'pending_review'
@@ -1887,6 +1958,7 @@ def current_project() -> dict[str, Any]:
     return public_project()
 
 
+@plan_transaction
 def build_project_state(project_id: str | None = None) -> dict[str, Any]:
     target_project = project_id or CURRENT_PROJECT_ID
     records = project_records(target_project)
@@ -1906,6 +1978,22 @@ def build_project_state(project_id: str | None = None) -> dict[str, Any]:
             checkpoints[f"{asset_id}:{stage_id}" if asset_id else stage_id] = data
         elif record_type.startswith("artifact:"):
             artifacts.append({"kind": record_type.split(":", 1)[1], "asset_id": asset_id, **data})
+    if reviews:
+        document, _ = load_project_plan(target_project)
+        for segment in document.get('segments', []):
+            if not isinstance(segment, dict):
+                continue
+            for stage in ('sample', 'finish'):
+                review = reviews.get(str(segment.get('id')), {}).get(stage)
+                if not review or review.get('status') != 'approved':
+                    continue
+                try:
+                    binding = segment_review_binding(segment, str(review.get('candidate_ref') or ''))
+                    valid = bool(review.get('candidate_binding')) and review['candidate_binding'] == binding
+                except (HTTPException, ValueError, OSError):
+                    valid = False
+                if not valid:
+                    review.update(status='stale', stale_reason='审核未绑定当前候选版本，请重新查看并确认；原审核保留在历史中')
     return {
         "schema_version": 1,
         "project_id": target_project,
@@ -2147,6 +2235,17 @@ def persist_review(request: ReviewRecordRequest, project_id: str | None = None) 
         "adopted_variant": request.adopted_variant,
         "candidate_ref": request.candidate_ref,
     }
+    owner_id = project_id or CURRENT_PROJECT_ID
+    document, _ = load_project_plan(owner_id)
+    check_plan_revision(document, request.expected_plan_revision)
+    segment = next((item for item in document.get('segments', [])
+                    if isinstance(item, dict) and item.get('id') == request.asset_id), None)
+    if segment is not None and request.stage in ('sample', 'finish') and request.status == 'approved':
+        if request.expected_plan_revision is None or not request.candidate_ref:
+            data.update(status='stale', requested_status='approved',
+                        stale_reason='缺少明确候选引用或计划版本，请重新读取候选后确认审核')
+        else:
+            data['candidate_binding'] = segment_review_binding(segment, request.candidate_ref)
     record = append_project_record(f"review:{request.stage}", data, asset_id=request.asset_id, source=request.source, project_id=project_id, expected_revision=request.expected_revision)
     return {**data, "asset_id": request.asset_id, "revision": record["revision"], "source": record["source"], "created_at": record["created_at_iso"]}
 
@@ -2241,6 +2340,7 @@ def adopt_project_candidate(project_id: str, request: AdoptionRequest) -> dict[s
         asset_id=request.asset_id, stage=request.stage, status='approved',
         candidate_ref=request.candidate_ref, adopted_variant=adopted_variant, note=request.note,
         expected_revision=request.expected_review_revision, source='explicit-adoption',
+        expected_plan_revision=request.expected_plan_revision,
     ), project_id)
 
 
@@ -2709,6 +2809,7 @@ def restore_project_segment_version(
     segment = next((item for item in document["segments"] if isinstance(item, dict) and item.get("id") == segment_id), None)
     if segment is None:
         raise HTTPException(404, "分镜不存在")
+    previous_candidate = segment_candidate_identity(segment)
     task = get_task(task_id)
     if not task or task.get("project_id") != project_id or task.get("asset_id") != segment_id or task.get("status") != "succeeded":
         raise HTTPException(404, "该分镜没有对应的成功生成版本")
@@ -2745,6 +2846,8 @@ def restore_project_segment_version(
         notes="已从历史记录恢复为当前版本。",
     )
     persist_plan_edit(project_id, document, plan_path)
+    if previous_candidate != segment_candidate_identity(segment):
+        stale_candidate_reviews(project_id, segment_id, ('sample', 'finish'), '已切换当前分镜版本，需要重新审核')
     return {"revision": document["revision"], "segment": segment, "restored_at": system_time_iso(timestamp)}
 
 
