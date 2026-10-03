@@ -429,6 +429,121 @@ def test_identity_repair_refuses_uncertain_sources_or_edits(preset_client, tampe
     assert client.get('/api/projects/preset-test/plan').json() == before
 
 
+@pytest.mark.parametrize('tamper', ['source_fps', 'both_fps', 'source_fixed_parameter', 'source_connection'])
+def test_identity_repair_rejects_drift_even_with_the_same_node_classes(preset_client, tamper):
+    client, project = preset_client
+    automatic(client)
+    create(client)
+    task = client.post('/api/projects/preset-test/tasks', json={'asset_id': 'S01', 'idempotency_key': 'drift'}).json()
+    complete_frozen_task(task, project)
+    before = overwrite_recipe_like_old_release(client, task)
+    source = Path(task['payload']['execution_snapshot']['source_workflow'])
+    frozen = Path(task['payload']['workflow'])
+    graph = json.loads(source.read_text(encoding='utf-8'))
+    if tamper in ('source_fps', 'both_fps'):
+        graph['105:91']['inputs']['fps'] = 13
+    elif tamper == 'source_fixed_parameter':
+        graph['105:17']['inputs']['sampler_name'] = 'euler'
+    else:
+        graph['105:16']['inputs']['conditioning'] = ['105:104', 1]
+    source.write_text(json.dumps(graph), encoding='utf-8')
+    if tamper == 'both_fps':
+        frozen_graph = json.loads(frozen.read_text(encoding='utf-8'))
+        frozen_graph['105:91']['inputs']['fps'] = 13
+        frozen.write_text(json.dumps(frozen_graph), encoding='utf-8')
+    before_tasks = client.get('/api/projects/preset-test/tasks').json()
+    before_source, before_frozen = source.read_bytes(), frozen.read_bytes()
+    endpoint = '/api/projects/preset-test/segments/S01/recipe-identity/repair'
+    for dry_run in (True, False):
+        refused = client.post(endpoint, json={'task_id': task['id'], 'expected_revision': before['revision'], 'dry_run': dry_run})
+        assert refused.status_code == 409, refused.text
+        assert client.get('/api/projects/preset-test/plan').json() == before
+        assert client.get('/api/projects/preset-test/tasks').json() == before_tasks
+        assert source.read_bytes() == before_source and frozen.read_bytes() == before_frozen
+
+
+@pytest.mark.parametrize('controls', ['text', 'first', 'frames', 'guide', 'locked'])
+def test_identity_repair_accepts_recorded_freeze_changes_and_preserves_all_history(preset_client, controls):
+    client, project = preset_client
+    automatic(client)
+    first = project / 'workspaces/preset-test/assets/first.png'
+    guide_audio = project / 'workspaces/preset-test/assets/guide.wav'
+    first.write_bytes(b'isolated image fixture')
+    guide_audio.write_bytes(b'isolated audio fixture')
+    saved = create(client, duration_seconds=7.3,
+                   first_frame=str(first) if controls != 'text' else None,
+                   last_frame=str(first) if controls == 'frames' else None,
+                   audio_guide=str(guide_audio) if controls in ('guide', 'locked') else None,
+                   generation={'aspect_ratio': '9:16', 'seed': 123,
+                               'sound_mode': 'locked_dialogue' if controls == 'locked' else 'performance_reference'})
+    assert saved.status_code == 200, saved.text
+    original = saved.json()['segment']['workflow']
+    submitted = client.post('/api/projects/preset-test/tasks', json={'asset_id': 'S01', 'idempotency_key': 'valid-repair'})
+    assert submitted.status_code == 200, submitted.text
+    task = submitted.json()
+    complete_frozen_task(task, project)
+    before = overwrite_recipe_like_old_release(client, task)
+    before_tasks = client.get('/api/projects/preset-test/tasks').json()
+    source = Path(task['payload']['execution_snapshot']['source_workflow'])
+    frozen = Path(task['payload']['workflow'])
+    graph = json.loads(source.read_text(encoding='utf-8'))
+    # Editable defaults and display metadata are not fixed execution inputs.
+    graph['105:104']['inputs']['prompt'] = 'New default prompt'
+    graph['105:15']['inputs']['noise_seed'] = 999
+    graph['92'].setdefault('_meta', {})['title'] = 'Updated display title'
+    source.write_text(json.dumps(graph), encoding='utf-8')
+    before_source, before_frozen = source.read_bytes(), frozen.read_bytes()
+    endpoint = '/api/projects/preset-test/segments/S01/recipe-identity/repair'
+    body = {'task_id': task['id'], 'expected_revision': before['revision']}
+    dry = client.post(endpoint, json=body)
+    assert dry.status_code == 200, dry.text
+    assert dry.json()['repair_needed'] and not dry.json()['changed']
+    assert client.get('/api/projects/preset-test/plan').json() == before
+    applied = client.post(endpoint, json={**body, 'dry_run': False})
+    assert applied.status_code == 200, applied.text
+    assert applied.json()['changed']
+    repaired = client.get('/api/projects/preset-test/plan').json()
+    checked = client.post('/api/projects/preset-test/pipeline/auto/validate', json={'asset_id': 'S01', 'values': {}})
+    assert checked.status_code == 200, checked.text
+    assert checked.json()['valid']
+    assert client.get('/api/projects/preset-test/plan').json() == repaired
+    expected = json.loads(json.dumps(before))
+    expected['segments'][0]['workflow'] = original
+    for key in ('revision', 'updated_at', 'recipe_identity_repairs'):
+        repaired.pop(key, None)
+        expected.pop(key, None)
+    assert repaired == expected
+    assert client.get('/api/projects/preset-test/tasks').json() == before_tasks
+    assert source.read_bytes() == before_source and frozen.read_bytes() == before_frozen
+
+
+@pytest.mark.parametrize('unavailable', ['models', 'material'])
+def test_identity_repair_reuses_saved_input_and_resource_validation(preset_client, monkeypatch, unavailable):
+    from fastapi import HTTPException
+    client, project = preset_client
+    automatic(client)
+    first = project / 'workspaces/preset-test/assets/first.png'
+    first.write_bytes(b'isolated image fixture')
+    create(client, first_frame=str(first))
+    task = client.post('/api/projects/preset-test/tasks', json={'asset_id': 'S01', 'idempotency_key': 'unavailable'}).json()
+    complete_frozen_task(task, project)
+    before = overwrite_recipe_like_old_release(client, task)
+    if unavailable == 'models':
+        monkeypatch.setattr(production_presets, 'catalog', lambda *args: {'available': True, 'missing_models': ['fixture-only-model']})
+    else:
+        resolve = backend.resolve_pipeline_material
+        def unavailable_material(value, kind, manifest=None):
+            if kind == '图片':
+                raise HTTPException(422, 'isolated unavailable material')
+            return resolve(value, kind, manifest)
+        monkeypatch.setattr(backend, 'resolve_pipeline_material', unavailable_material)
+    for dry_run in (True, False):
+        refused = client.post('/api/projects/preset-test/segments/S01/recipe-identity/repair', json={
+            'task_id': task['id'], 'expected_revision': before['revision'], 'dry_run': dry_run})
+        assert refused.status_code == 409, refused.text
+        assert client.get('/api/projects/preset-test/plan').json() == before
+
+
 def test_private_identity_repair_authorizes_actual_owner_only(private_workbench, monkeypatch):
     from backend.private_auth import Principal, current_principal
     from backend.user_context import SessionIdentity
