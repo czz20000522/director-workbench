@@ -1,0 +1,22 @@
+name: Bug 反馈
+description: 提供可复现的脱敏反馈
+body:
+  - type: markdown
+    attributes:
+      value: "请勿上传密钥、Cookie、私人网络地址、账号或作品素材。先搜索重复问题。"
+  - type: textarea
+    id: behavior
+    attributes:
+      label: 问题或需求、预期与实际行为
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 操作步骤与验收条件
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 客户端系统、浏览器、版本与脱敏证据

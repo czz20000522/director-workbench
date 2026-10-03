@@ -1,0 +1,18 @@
+.first-use-guide { margin: 12px 24px; padding: 14px 18px; border: 1px solid var(--border, #dce0e7); border-radius: 12px; background: var(--panel, #fff); }
+.first-use-guide-heading, .first-use-guide-heading > button, .first-use-guide-route, .first-use-guide-actions { display: flex; align-items: center; gap: 12px; }
+.first-use-guide-heading { justify-content: space-between; }
+.first-use-guide-heading span, .first-use-guide small { color: #667085; font-size: 12px; }
+.first-use-guide-route { margin: 14px 0; }
+.first-use-guide-route button[aria-pressed="true"] { border-color: #596b9b; }
+.first-use-guide-content { display: grid; grid-template-columns: minmax(150px, 210px) minmax(0, 1fr); gap: 20px; }
+.first-use-guide-content nav { display: flex; flex-direction: column; gap: 3px; max-height: 210px; overflow: auto; }
+.first-use-guide-content nav button { display: flex; gap: 8px; padding: 7px 10px; background: transparent; border: 0; border-radius: 6px; text-align: left; font: inherit; cursor: pointer; }
+.first-use-guide-content nav button[aria-current] { background: #edf0f6; color: #30456b; }
+.first-use-guide-content h3 { margin: 0 0 6px; }
+.first-use-guide-content p { margin: 0 0 10px; }
+.first-use-guide-content dl { margin: 0 0 14px; }
+.first-use-guide-content dl > div { display: flex; gap: 12px; margin: 6px 0; }
+.first-use-guide-content dt { flex: 0 0 52px; color: #667085; }
+.first-use-guide-content dd { margin: 0; }
+.first-use-guide-actions { margin-bottom: 10px; flex-wrap: wrap; }
+@media (max-width: 850px) { .first-use-guide { margin: 10px; } .first-use-guide-content { grid-template-columns: 1fr; gap: 10px; } .first-use-guide-content nav { flex-direction: row; max-height: none; } .first-use-guide-content nav button { white-space: nowrap; } .first-use-guide-heading span { display: none; } }

@@ -1,0 +1,248 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schema_version": 1,
+  "description": "导演台对脚本和 ComfyUI 步骤的输入契约。只声明审核者可以填写的参数，执行适配器负责把 values/args 转成真实命令。",
+  "stages": {
+    "audio-master": {
+      "mode": "replace",
+      "inputs": [
+        {
+          "id": "lyrics",
+          "label": "歌词 / 演唱参考",
+          "kind": "音频",
+          "required": true,
+          "control": "asset",
+          "flag": "--lyrics",
+          "description": "用于确定旋律、咬字和节拍。"
+        },
+        {
+          "id": "voice",
+          "label": "音色参考",
+          "kind": "音频",
+          "required": true,
+          "control": "asset",
+          "flag": "--voice-reference",
+          "description": "噜妹公共声纹或可替换的目标音色。"
+        },
+        {
+          "id": "instrumental",
+          "label": "伴奏素材",
+          "kind": "音频",
+          "required": true,
+          "control": "asset",
+          "flag": "--instrumental",
+          "description": "与人声保持同一时间轴。"
+        },
+        {
+          "id": "voice-version",
+          "label": "声音版本",
+          "kind": "参数",
+          "required": true,
+          "control": "select",
+          "options": ["v3-A", "v3-B", "A+B"],
+          "flag": "--voice-version",
+          "description": "脚本只允许登记的声音版本。"
+        },
+        {
+          "id": "extra-args",
+          "label": "其它脚本参数",
+          "kind": "参数",
+          "required": false,
+          "control": "freeform",
+          "allowEmpty": true,
+          "serialize": "raw-args",
+          "description": "可留空；填写 -A -B 或 --tempo 1.05 这类额外参数。"
+        },
+        {
+          "id": "fast-preview",
+          "label": "快速预览",
+          "kind": "参数",
+          "required": false,
+          "control": "boolean",
+          "allowEmpty": true,
+          "options": ["enable", "disable"],
+          "flag": "--fast",
+          "flagMode": "presence",
+          "description": "选中时只附加 --fast；关闭时不附加这个 flag。"
+        }
+      ]
+    },
+    "voice-swap": {
+      "mode": "replace",
+      "inputs": [
+        {
+          "id": "video",
+          "label": "已生成视频",
+          "kind": "视频",
+          "required": true,
+          "control": "asset",
+          "flag": "--video",
+          "description": "沿用同一画面候选，不重新采样。"
+        },
+        {
+          "id": "voice-b",
+          "label": "v3-B 换声母版",
+          "kind": "音频",
+          "required": true,
+          "control": "asset",
+          "flag": "--voice",
+          "description": "与 A 版保持相同时间轴。"
+        },
+        {
+          "id": "audio-options",
+          "label": "换音处理选项",
+          "kind": "参数",
+          "required": false,
+          "control": "multi-select",
+          "options": ["保持原时长", "响度匹配", "保留原伴奏"],
+          "multiple": true,
+          "allowEmpty": true,
+          "flag": "--option",
+          "description": "可多选；每个选项会重复一次 --option，未选择时不附加参数。"
+        }
+      ]
+    },
+    "motion-generation": {
+      "mode": "replace",
+      "inputs": [
+        {
+          "id": "first-frame",
+          "label": "首帧",
+          "kind": "图片",
+          "required": true,
+          "control": "asset",
+          "description": "决定角色、场景和起始构图。",
+          "binding": {"node_id": "114", "input": "image"}
+        },
+        {
+          "id": "last-frame",
+          "label": "尾帧目标",
+          "kind": "图片",
+          "required": true,
+          "control": "asset",
+          "description": "约束动作终点与片段衔接。",
+          "binding": {"node_id": "ip-video:last-frame:2", "input": "image"}
+        },
+        {
+          "id": "prompt",
+          "label": "画面提示词",
+          "kind": "文本",
+          "required": true,
+          "control": "text",
+          "description": "描述唱歌、表情、动作和镜头。",
+          "binding": {"node_id": "105:104", "input": "prompt"}
+        },
+        {
+          "id": "guide",
+          "label": "表演引导音频",
+          "kind": "音频",
+          "required": true,
+          "control": "asset",
+          "description": "驱动口型、节拍和演唱强弱。",
+          "binding": {"node_id": "aigc:load-audio-guide", "input": "audio"}
+        },
+        {
+          "id": "seed",
+          "label": "随机种子",
+          "kind": "参数",
+          "required": true,
+          "control": "number",
+          "min": 0,
+          "max": 2147483647,
+          "step": 1,
+          "description": "可自由输入的整数；相同输入用于复现候选。",
+          "binding": {"node_id": "105:15", "input": "noise_seed"}
+        },
+        {
+          "id": "duration",
+          "label": "生成时长（秒）",
+          "kind": "参数",
+          "required": true,
+          "control": "number",
+          "min": 1,
+          "max": 10,
+          "step": 0.1,
+          "description": "工作流允许的数值范围。",
+          "binding": {"node_id": "105:111", "input": "value"}
+        },
+        {
+          "id": "turbo-sampling",
+          "label": "Turbo 采样",
+          "kind": "参数",
+          "required": true,
+          "control": "select",
+          "options": ["enable", "disable"],
+          "description": "切换工作流已登记的 8 步 Turbo 与标准采样路径。",
+          "binding": {"node_id": "105:126", "input": "value", "value_map": {"enable": true, "disable": false}}
+        }
+      ]
+    },
+    "picture-finish": {
+      "mode": "replace",
+      "inputs": [
+        {
+          "id": "source-video",
+          "label": "已通过画面审核的视频",
+          "kind": "视频",
+          "required": true,
+          "control": "asset",
+          "flag": "--source",
+          "description": "只处理已由人工标记为采用、且动作、口型和画面内容均已确认的低成本片段。"
+        },
+        {
+          "id": "finish-mode",
+          "label": "处理方案",
+          "kind": "参数",
+          "required": true,
+          "control": "select",
+          "options": ["仅 2x 超分", "2x 超分 + 轻度色彩统一"],
+          "flag": "--finish-mode",
+          "description": "片段采用后再做精细化 A/B；未经采用的样片不会进入批量处理。"
+        },
+        {
+          "id": "upscale-model",
+          "label": "超分模型",
+          "kind": "参数",
+          "required": true,
+          "control": "select",
+          "options": ["RealESRGAN_x2plus.pth"],
+          "flag": "--model",
+          "description": "当前本机已安装并可由 ComfyUI 加载的 2x 模型。"
+        },
+        {
+          "id": "color-reference",
+          "label": "已批准色彩参考",
+          "kind": "图片",
+          "required": false,
+          "control": "asset",
+          "allowEmpty": true,
+          "flag": "--color-reference",
+          "description": "仅在色彩统一方案中使用；不同场景可以选择不同参考。"
+        },
+        {
+          "id": "color-strength",
+          "label": "色彩统一强度",
+          "kind": "参数",
+          "required": false,
+          "control": "number",
+          "allowEmpty": true,
+          "min": 0,
+          "max": 1,
+          "step": 0.05,
+          "flag": "--color-strength",
+          "description": "默认从 0.20 的轻度校正开始，避免抹平不同场景的合理色调。"
+        },
+        {
+          "id": "release-policy",
+          "label": "连续批处理的模型策略",
+          "kind": "参数",
+          "required": true,
+          "control": "select",
+          "options": ["keep_loaded", "offload_after_batch"],
+          "flag": "--release-policy",
+          "description": "连续片段复用已加载模型；整批结束或停止后再回收资源。"
+        }
+      ]
+    }
+  }
+}

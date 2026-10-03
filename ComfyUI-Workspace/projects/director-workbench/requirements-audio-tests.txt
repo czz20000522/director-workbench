@@ -1,0 +1,3 @@
+# Optional, only for running AuK tests with pytest. run_tests.ps1 uses builtin unittest and needs no install.
+# If used, install into ComfyUI-Shared/tools/AuK/.venv, never the API environment.
+pytest==9.1.1
