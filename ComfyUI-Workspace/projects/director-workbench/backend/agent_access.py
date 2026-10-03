@@ -6,6 +6,7 @@ from fastapi.responses import PlainTextResponse
 import httpx
 
 from mcp_server.server import create_server
+from .mcp_access_config import transport_security
 
 VERSION = '2026-10-03.agent-1'
 # One mapping is checked against actual OpenAPI routes and MCP tools. Clients
@@ -44,7 +45,7 @@ START = """# 连接你的 Agent
 5. POST /api/projects/{id}/pipeline/auto/validate {asset_id:"返回分镜ID",values:{}}，读实际帧数／时长／规格和readiness.blockers、allowed_actions、next_actions。预检不生成、不修改计划。GET /openapi.json按需查看完整合法输入。
 6. 仅在用户明确生成授权内，POST原/api/projects/{id}/tasks {asset_id,expected_revision:预检revision,idempotency_key:"先保留的唯一键",pipeline_stage_id:"auto"}。等待不换key重发；未知回执GET /submission-receipt?key=原键。通过原任务／队列读真实进度、候选和媒体；任务成功不代表审核／采用／交付。
 
-MCP：同一URL的 /mcp/，官方SDK Streamable HTTP。首批支持可配置Authorization Bearer的客户端；先按上述账号登录获取自己的会话，过期或换账号重新登录。仅支持OAuth且不能配置现有Bearer的宿主暂未支持；这里没有伪造OAuth流程或公开引擎。服务仍走私人网络／现有用户隧道，不需要SSH管理员凭据给Agent。
+MCP：同一URL的 /mcp/，官方SDK Streamable HTTP。首批支持可配置Authorization Bearer的客户端；先按上述账号登录获取自己的会话，过期或换账号重新登录。仅支持OAuth且不能配置现有Bearer的宿主暂未支持；这里没有伪造OAuth流程或公开引擎。服务仍走私人网络／现有用户隧道，不需要SSH管理员凭据给Agent。外部直连入口须由维护者配置精确Host/Origin允许列表，默认仍限本机；客户端不能自行扩大允许范围。
 
 部分MCP宿主把会话失效的HTTP401显示为“Server returned an error response”；先用同一身份GET /api/auth/me确认，失效就停止写入并重登，不换生成请求键盲目重发。重新登录仍先查询原任务回执。
 
@@ -81,12 +82,12 @@ async def prepare_remote(remote):
         if tool.name not in exposed: remote.remove_tool(tool.name)
 
 
-def install(app, *, http_app_provider, token_provider):
+def install(app, *, http_app_provider, token_provider, environ=None):
     remote = create_server('http://localhost', httpx.ASGITransport(app=http_app_provider()),
                            session_token_provider=token_provider,
                            transport_provider=lambda: httpx.ASGITransport(app=http_app_provider()))
     mcp_app=remote.streamable_http_app(streamable_http_path='/',stateless_http=True,json_response=True,
-                                     max_request_body_size=24*1024*1024)
+                                     max_request_body_size=24*1024*1024,transport_security=transport_security(environ))
     app.mount('/mcp',mcp_app,name='director-mcp')
     app.state.agent_mcp = remote
 

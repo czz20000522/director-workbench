@@ -19,8 +19,15 @@ from test_automatic_creation import seed_test_models
 
 
 @pytest.fixture
-def access(tmp_path_factory, monkeypatch):
+def access(tmp_path_factory, monkeypatch, request):
+    for name in ('DIRECTOR_MCP_ALLOWED_HOSTS', 'DIRECTOR_MCP_ALLOWED_ORIGINS'):
+        monkeypatch.delenv(name, raising=False)
+    environ = getattr(request, 'param', {})
+    for name, value in environ.items():
+        monkeypatch.setenv(name, value)
     a,b,ownership,root=private_workbench.__wrapped__(tmp_path_factory.mktemp('access'),monkeypatch)
+    if 'DIRECTOR_PRIVATE_ORIGINS' in environ:
+        backend.app.user_middleware[0].kwargs['origins'] = tuple(environ['DIRECTOR_PRIVATE_ORIGINS'].split(','))
     seed_test_models(backend.ROOT)
     monkeypatch.setattr(backend,'queue_task',lambda *args:None)
     monkeypatch.setattr(backend,'require_submission_capacity',lambda:{})
@@ -44,11 +51,11 @@ def access(tmp_path_factory, monkeypatch):
 
 
 @asynccontextmanager
-async def remote(token):
+async def remote(token, url='http://localhost:4100/mcp/', headers=None):
     # Use the actual official wire transport, not in-memory MCPServer calls.
     async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=backend.app),
-                                headers={'Authorization':token},timeout=10) as http:
-        async with streamable_http_client('http://localhost:4100/mcp/',http_client=http) as streams:
+                                headers={'Authorization':token, **(headers or {})},timeout=10) as http:
+        async with streamable_http_client(url,http_client=http) as streams:
             async with ClientSession(*streams,read_timeout_seconds=10) as client:
                 await client.initialize()
                 yield client
@@ -325,4 +332,109 @@ def test_remote_unknown_submission_recovers_receipt_and_expired_identity_stops(a
                 assert a.post('/mcp/',json={}).status_code==401
                 assert len(browser.get(f'/api/projects/{pid}/plan').json()['segments'])==1
                 assert len(submissions)==1
+    asyncio.run(verify())
+
+
+@pytest.mark.parametrize('access', [{
+    'DIRECTOR_MCP_ALLOWED_HOSTS': 'workbench.example.invalid:4100',
+    'DIRECTOR_MCP_ALLOWED_ORIGINS': 'http://workbench.example.invalid:4100',
+    'DIRECTOR_PRIVATE_ORIGINS': 'http://testserver,http://workbench.example.invalid:4100',
+}], indirect=True)
+def test_configured_remote_entry_official_wire_retains_account_boundaries(access):
+    a,b,_=access
+    url='http://workbench.example.invalid:4100/mcp/'
+    origin={'Origin':'http://workbench.example.invalid:4100'}
+    for path in ('/.well-known/director-workbench.json', '/agent/start'):
+        assert 'workbench.example.invalid' not in a.get(path).text
+    async def verify():
+        async with backend.app.router.lifespan_context(backend.app):
+            async with remote(a.headers['Authorization'],url,origin) as own, remote(b.headers['Authorization'],url,origin) as other:
+                created=unpack(await own.call_tool('create_project',{'series':'Entry','title':'Isolated'}))
+                assert created['ok'],created
+                pid=created['data']['project']['id']
+                assert [row['id'] for row in unpack(await own.call_tool('list_projects',{}))['data']['projects']]==[pid]
+                assert unpack(await other.call_tool('list_projects',{}))['data']['projects']==[]
+                assert unpack(await other.call_tool('read_project',{'project_id':pid}))['error']['http_status']==404
+                async with remote(a.headers['Authorization'],url) as without_origin:
+                    assert unpack(await without_origin.call_tool('list_projects',{}))['ok']
+                assert a.post('/api/auth/logout').status_code==200
+                with pytest.raises(MCPError):
+                    await own.call_tool('list_projects',{})
+    asyncio.run(verify())
+
+
+@pytest.mark.parametrize('access', [{
+    'DIRECTOR_MCP_ALLOWED_HOSTS': 'workbench.example.invalid:4100',
+    'DIRECTOR_MCP_ALLOWED_ORIGINS': 'http://workbench.example.invalid:4100',
+    'DIRECTOR_PRIVATE_ORIGINS': 'http://testserver,http://workbench.example.invalid:4100',
+}], indirect=True)
+def test_configured_entry_rejects_unknown_headers_and_invalid_identity(access):
+    a,_,browser=access
+    async def verify():
+        async with backend.app.router.lifespan_context(backend.app):
+            request={'jsonrpc':'2.0','id':1,'method':'initialize','params':{
+                'protocolVersion':'2025-11-25','capabilities':{},'clientInfo':{'name':'fixture','version':'1'}}}
+            common={'Accept':'application/json, text/event-stream'}
+            for host in ('', 'other.example.invalid:4100', 'workbench.example.invalid:4101',
+                         'workbench.example.invalid.evil:4100'):
+                response=a.post('/mcp/',json=request,headers={**common,'Host':host,
+                    'Forwarded':'host=workbench.example.invalid:4100',
+                    'X-Forwarded-Host':'workbench.example.invalid:4100'})
+                assert response.status_code==421,response.text
+            # The private API allows testserver but the MCP origin list does not.
+            response=a.post('/mcp/',json=request,headers={**common,'Host':'workbench.example.invalid:4100',
+                                                        'Origin':'http://testserver'})
+            assert response.status_code==403,response.text
+            assert a.post('/mcp/',json=request,headers={**common,'Host':'workbench.example.invalid:4100',
+                'Origin':'http://other.example.invalid:4100'}).status_code==403
+            # A valid browser Cookie cannot rescue an invalid explicit Bearer.
+            assert browser.post('/mcp/',json=request,headers={**common,'Host':'workbench.example.invalid:4100',
+                'Origin':'http://workbench.example.invalid:4100','Authorization':'Bearer invalid'}).status_code==401
+            assert TestClient(backend.app).post('/mcp/',json=request,headers={**common,
+                'Host':'workbench.example.invalid:4100'}).status_code==401
+            async with remote(a.headers['Authorization']) as local:
+                assert unpack(await local.call_tool('list_projects',{}))['ok']
+    asyncio.run(verify())
+
+
+def test_default_entry_cannot_be_expanded_by_request_headers(access):
+    a,_,_=access
+    async def verify():
+        async with backend.app.router.lifespan_context(backend.app):
+            response=a.post('/mcp/',json={},headers={'Host':'workbench.example.invalid:4100',
+                'X-Forwarded-Host':'localhost:4100','Accept':'application/json, text/event-stream'})
+            assert response.status_code==421,response.text
+    asyncio.run(verify())
+
+
+@pytest.mark.parametrize('access', [{
+    'DIRECTOR_MCP_ALLOWED_HOSTS': 'workbench.example.invalid:4100',
+    'DIRECTOR_MCP_ALLOWED_ORIGINS': 'http://workbench.example.invalid:4100',
+    'DIRECTOR_PRIVATE_ORIGINS': 'http://testserver,http://workbench.example.invalid:4100',
+}], indirect=True)
+def test_external_wire_two_pages_takeover_does_not_cancel_other_page(access):
+    a,b,browser=access
+    first='tab_external_first_123'
+    second='tab_external_second_123'
+    p1=browser.post('/api/agent/pages',json={'page_id':first,'enabled':True}).json()
+    p2=browser.post('/api/agent/pages',json={'page_id':second,'enabled':True}).json()
+    async def verify():
+        async with backend.app.router.lifespan_context(backend.app):
+            async with remote(a.headers['Authorization'],'http://workbench.example.invalid:4100/mcp/',
+                              {'Origin':'http://workbench.example.invalid:4100'}) as client:
+                for tab in (first,second):
+                    action=unpack(await client.call_tool('present_page_action',{'page_id':tab,
+                        'action_id':'navigation_once','kind':'navigate','values':{'page':'shots'}}))
+                    assert action['data']['status']=='pending'
+                ack=f'/api/agent/pages/{first}/actions/navigation_once/ack'
+                assert browser.post(ack,json={'status':'presented'},headers={'X-Agent-Page-Key':p2['page_key']}).status_code==403
+                assert browser.post('/api/agent/pages',json={'page_id':first,'enabled':False},
+                    headers={'X-Agent-Page-Key':p1['page_key']}).status_code==200
+                assert browser.post(ack,json={'status':'presented'},headers={'X-Agent-Page-Key':p1['page_key']}).json()['status']=='takeover'
+                rows=unpack(await client.call_tool('read_page_actions',{'page_id':first}))['data']['actions']
+                assert rows[0]['status']=='takeover' and 'acknowledged_at' not in rows[0]
+                rows=unpack(await client.call_tool('read_page_actions',{'page_id':second}))['data']['actions']
+                assert rows[0]['status']=='pending'
+                assert b.get(f'/api/agent/pages/{second}/actions').status_code==404
+                assert a.get('/api/projects').json()['projects']==[]
     asyncio.run(verify())
