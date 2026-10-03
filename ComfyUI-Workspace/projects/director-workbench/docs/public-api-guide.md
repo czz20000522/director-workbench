@@ -85,6 +85,36 @@
 
 用 `/api/agent/pages/{page_id}/actions` 查询实际回执。`pending` 只说明已发送，没有附属页面或呈现失败时不能声称已点击/播放。手工接管、刷新和版本变化不重放旧动作。客户端报告的呈现回执不是用户已听看或审核的证明；不能自行 ACK 伪造呈现。
 
+## 页面创作助手
+
+私人模式登录后，页面右下角提供创作助手。第一版支持解释、原文草稿、保存并预检，以及明确授权后新增一段自动小样。没有选中作品时，草稿只保留在助手会话中；预检或生成指令可通过原创建接口建立独立作品。现有作品中的生成指令新增分镜，不覆盖已有分镜。修改、删除、审核采用及多镜制作仍使用原页面；助手会明确说明支持范围。
+
+“只写草稿”不保存业务计划，“先预检”保存原文并预检但不生成；“生成一个看看”或“生成一段5秒视频”才授权一次任务。否定、未授权、引用与解释教学不会授权生成。默认 5 秒、16:9、seed 42；文字中的明确时长、画幅和 seed 优先，合法范围仍由原业务服务校验。页面有未保存输入或被手动接管时保留输入，停止后续助手准备。
+
+配置由服务器从源码根下 `.config/director-workbench/cloud-agent.json` 读取，可用服务器环境变量 `DIRECTOR_CLOUD_ASSISTANT_CONFIG` 指定其他私人文件。每次云端请求重读配置。兼容 Chat Completions 的配置格式如下，文件和实际凭据不能提交：
+
+```json
+{"schema_version":1,"provider":"openai-compatible","base_url":"https://provider.example/v1","model":"本人选择的模型","api_key":"本人凭据","api_mode":"chat_completions","request_headers":{},"timeout_seconds":35}
+```
+
+云端只收到本轮文字、必要状态投影和可用动作说明，不收到业务 token、配置 key、媒体、设备路径或整份素材库。模型回复是文字建议；业务动作由服务器绑定的用户指令控制，不执行模型返回的任意工具调用。配置缺失、云端失败或取消时保留输入和已取得的业务回执，不自动重试付费请求。
+
+认证 HTTP 入口：
+
+| 操作 | 路径 |
+| --- | --- |
+| 读取/创建本人会话 | `GET/POST /api/assistant/sessions` |
+| 开始请求 | `POST /api/assistant/sessions/{session_id}/requests` |
+| 读取原请求回执 | `GET /api/assistant/sessions/{session_id}/requests/{request_id}` |
+| 取消助手后续准备 | `POST /api/assistant/sessions/{session_id}/requests/{request_id}/cancel` |
+| 发起标签页呈现回执 | `POST /api/assistant/sessions/{session_id}/requests/{request_id}/presentation` |
+
+创建会话接受可选 `project_id`。开始请求需唯一 `request_id` 和原文 `text`，可指定本人 `project_id`；可选 `controls` 仅接受该作品中的 `first_frame/last_frame/audio_guide` 素材 ID。网页额外绑定 `presentation_target`，先等待原编辑器、保存结果和准备度的真实呈现回执再继续；纯 HTTP 调用可以不请求页面呈现。完整字段以认证 OpenAPI 为准。
+
+请求编号绑定文字、作品、素材和标签页，相同编号不重复执行，变更参数返回 409。任务提交使用由原请求编号派生的同键回执，未知提交只查原任务；尚未找到时保持 `needs_reconcile`，不能换编号重发。刷新或服务重启保留步骤、已保存输入和原任务，不重放云端请求、页面动作或业务步骤。取消助手不会停止已经提交的 GPU 任务，原任务继续从原队列查询或显式停止。候选读取复用原版本与媒体入口，不自动审核采用。
+
+本机集成回归使用假云端提供方、隔离鉴权 HTTP 和 CPU 视频；生产云端配置、受控发布及跨设备真实小样仍需分别验收。
+
 ## MCP 和验证边界
 
 远程 MCP 使用同一私人 URL 的 `/mcp/`，要求可配置 Bearer 的 Streamable HTTP 客户端。目前远程端只开放能力发现中的创作/页面子集及读取指南；完整适配工具可通过本机 stdio 使用，其他业务使用认证 HTTP。没有 OAuth 登录发现；只能 OAuth 且不能配置现有 Bearer 的宿主尚未支持。

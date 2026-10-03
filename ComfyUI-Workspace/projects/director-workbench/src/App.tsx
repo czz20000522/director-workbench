@@ -25,6 +25,7 @@ import FirstUseGuide from './FirstUseGuide';
 import TaskQueueStatus from './TaskQueueStatus';
 import ConnectAgent from './components/ConnectAgent';
 import AgentPageBridge, { type AgentPageAction, type AgentPageActionReceipt } from './components/AgentPageBridge';
+import CreationAssistant, { type AssistantPresentationEvent } from './components/CreationAssistant';
 import { blockerMessage, readinessStateLabel, type ProjectReadiness, type ReadinessItem } from './readiness';
 import { assetLabel, assetTitle, type TreeKind } from './shotLabels';
 
@@ -175,7 +176,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   useEffect(() => {
     const interacted = (event: Event) => {
       const target = event.target as HTMLElement | null;
-      if (!event.isTrusted || target?.closest('[aria-label="Agent 标签页引导"], [aria-label="连接你的Agent"], [data-agent-connect]')) return;
+      if (!event.isTrusted || target?.closest('[aria-label="创作助手"], [aria-label="Agent 标签页引导"], [aria-label="连接你的Agent"], [data-agent-connect]')) return;
       pageInteraction.current += 1;
     };
     document.addEventListener('input', interacted);
@@ -1202,6 +1203,30 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
     }
   }
 
+  async function presentAssistantEvent(event: AssistantPresentationEvent): Promise<AgentPageActionReceipt> {
+    const kinds: Record<string, string> = { saved: 'locate', preflight: 'show_preflight', submitted: 'show_task', candidate: 'open_candidate' };
+    return presentAgentAction({ id: `assistant-${event.seq}`, seq: event.seq, status: 'pending',
+      kind: kinds[event.kind] ?? event.kind,
+      target: { project_id: event.project_id, asset_id: event.asset_id, task_id: event.task_id },
+      values: { prompt: event.text, duration_seconds: event.duration_seconds, generation: event.generation, page: 'shots' },
+    });
+  }
+
+  async function openAssistantResult(result: { project_id?: string; asset_id?: string; task_id?: string }) {
+    let kind = result.asset_id ? 'locate' : 'navigate';
+    if (result.task_id && result.project_id) {
+      try {
+        const response = await fetch(`/api/projects/${encodeURIComponent(result.project_id)}/tasks/${encodeURIComponent(result.task_id)}`);
+        if (!response.ok) throw new Error('原任务暂不可读取，请重新登录或查询。');
+        const task = await response.json();
+        kind = task.status === 'succeeded' ? 'open_candidate' : 'show_task';
+      } catch (error) { setNotice(error instanceof Error ? error.message : '原任务读取失败。'); return; }
+    }
+    const receipt = await presentAgentAction({ id: 'assistant-result', seq: 0, status: 'pending', kind,
+      target: result, values: { page: 'shots' } });
+    if (receipt.status !== 'presented') setNotice(receipt.message ?? '页面尚未呈现，请保留原输入后继续。');
+  }
+
   async function importWorkspace() {
     if (!importPath.trim()) { setNotice('请输入 D:\\Comfy-Desktop 内的工作目录路径。'); return; }
     try {
@@ -1873,6 +1898,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
       {creativeConflictPanel}
       {batchId && <div className="director-batch-note" role="note">批次参数语义：按每个分镜自己的计划与源工作流冻结；当前片段 Inspector 的修改只影响单段重做。需要批量改参时，请先逐段确认后再提交。</div>}
       <ConnectAgent />
+      {privateMode && <CreationAssistant projectId={project?.id} onPresentation={presentAssistantEvent} onResult={result => void openAssistantResult(result)} />}
       {privateMode && <>{agentStep && <div className="director-readiness" role="status" aria-label="Agent 页面进度">{agentStep}</div>}<AgentPageBridge onAction={presentAgentAction} /></>}
       {notice && <div className="director-toast" role="status"><Check size={16} /><span>{notice}</span></div>}
       {deleteDirectory && <DeleteDirectoryDialog target={deleteDirectory} onClose={() => setDeleteDirectory(null)} onDeleted={() => { void afterDirectoryDeleted(); }} />}

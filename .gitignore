@@ -290,3 +290,6 @@
 !/ComfyUI-Workspace/projects/director-workbench/tools/restore_comfy_engine.py
 !/ComfyUI-Workspace/projects/director-workbench/tests/test_engine_recovery.py
 !/ComfyUI-Workspace/projects/director-workbench/tests/test_candidate_review_invalidation.py
+!/ComfyUI-Workspace/projects/director-workbench/tests/test_creation_assistant.py
+!/ComfyUI-Workspace/projects/director-workbench/tests/creation_assistant_bridge.py
+!/ComfyUI-Workspace/projects/director-workbench/tests/creation_assistant.browser.mjs
