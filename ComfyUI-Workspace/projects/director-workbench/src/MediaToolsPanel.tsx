@@ -141,7 +141,7 @@ function ProjectMediaToolsPanel({ projectId, assets, onComplete, onBrowse }: Pro
         <label><input type="checkbox" checked={draft.word_timestamps} disabled={locked} onChange={e => change('word_timestamps', e.target.checked)} />逐词时间戳</label>
       </>}
     </div>
-    <p className="director-muted">检查报告与转写帮助定位问题，画面、表演和音色仍由导演判断。所有结果保存为本作品独立候选。</p>
+    <p className="director-muted">检查报告与转写帮助定位问题，画面、表演和音色仍由导演判断。所有结果保存为本作品独立结果；质检图仅用于诊断。</p>
     {!available && <p role="status">{capability ? '当前操作不可用：' + (capability[draft.operation]?.missing?.join('、') || '请检查资源与连接') : '正在读取媒体能力…'}</p>}
     {message && <p role="status">{message}</p>}{task?.error && <p role="status">{task.error}</p>}
     <div className="director-form-actions">

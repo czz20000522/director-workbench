@@ -163,8 +163,7 @@ PIPELINE_INPUT_CONTRACTS = load_pipeline_input_contracts()
 
 # The Python module is the platform adapter; all work-specific names, paths,
 # stages and task recipes are loaded from a project manifest. Keeping one
-# sample manifest in this repository makes the workbench immediately usable,
-# while new works can be added without changing this module.
+# manifest is local user data, never a prerequisite of a clean source checkout.
 PROJECTS_ROOT = PROJECT / "projects"
 PROJECT_CATALOG_PATH = PROJECTS_ROOT / "catalog.json"
 DIRECTOR_WORKSPACES_ROOT = STORAGE_ROOTS['workspaces']
@@ -173,6 +172,8 @@ DIRECTOR_WORKSPACES_ROOT = STORAGE_ROOTS['workspaces']
 def load_project_catalog() -> dict[str, Any]:
     try:
         document = json.loads(PROJECT_CATALOG_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"projects": []}
     except (OSError, ValueError) as exc:
         raise RuntimeError(f"无法读取导演台项目目录: {PROJECT_CATALOG_PATH}: {exc}") from exc
     if not isinstance(document, dict) or not isinstance(document.get("projects"), list):
@@ -234,7 +235,15 @@ def shared_path(value: str | Path) -> Path:
     return resolve_registered_path(value)
 
 
-CURRENT_PROJECT = load_project_manifest()
+def initial_project_manifest() -> dict[str, Any]:
+    catalog = load_project_catalog()
+    if catalog.get("default_project_id") or os.environ.get("DIRECTOR_PROJECT_ID"):
+        return load_project_manifest()
+    # No catalog, plan, work directory or sample media is created by importing.
+    return {"id": "", "title": "", "plan_path": str(PROJECT / "runtime/unselected-plan.json")}
+
+
+CURRENT_PROJECT = initial_project_manifest()
 CURRENT_PROJECT_ID = str(CURRENT_PROJECT["id"])
 PLAN_PATH = shared_path(str(CURRENT_PROJECT["plan_path"]))
 ASSEMBLY_CONFIG = dict(CURRENT_PROJECT.get("assembly") or {})
@@ -1718,7 +1727,7 @@ class PlanSegmentCreateRequest(BaseModel):
 class CreativeSettingsRequest(BaseModel):
     expected_revision: int | None = Field(default=None, ge=0)
     values: dict[str, Any] = Field(default_factory=dict)
-    status: str = Field(default="pending_review", max_length=40)
+    status: Literal['draft', 'pending_review', 'approved', 'changes_requested', 'stale'] = 'pending_review'
     source: str = Field(default="director-ui", max_length=80)
 
 
@@ -1729,8 +1738,8 @@ class ProjectCreativeSettingsRequest(CreativeSettingsRequest):
 class ReviewRecordRequest(BaseModel):
     expected_revision: int | None = Field(default=None, ge=0)
     asset_id: str = Field(min_length=1, max_length=160)
-    stage: str = Field(default="sample", max_length=40)
-    status: str = Field(default="pending_review", max_length=40)
+    stage: Literal['sample', 'finish', 'final'] = 'sample'
+    status: Literal['pending_review', 'approved', 'changes_requested', 'stale'] = 'pending_review'
     note: str = Field(default="", max_length=4000)
     adopted_variant: str | None = Field(default=None, max_length=80)
     candidate_ref: str | None = Field(default=None, max_length=1000)
@@ -1740,7 +1749,7 @@ class ReviewRecordRequest(BaseModel):
 class CheckpointRequest(BaseModel):
     expected_revision: int | None = Field(default=None, ge=0)
     stage_id: str = Field(min_length=1, max_length=120)
-    status: str = Field(default="pending_review", max_length=40)
+    status: Literal['draft', 'pending_review', 'approved', 'changes_requested', 'stale'] = 'pending_review'
     asset_id: str = Field(default="", max_length=160)
     note: str = Field(default="", max_length=4000)
     upstream_revisions: dict[str, int] = Field(default_factory=dict)
@@ -1753,7 +1762,7 @@ class ArtifactRequest(BaseModel):
     title: str = Field(default="", max_length=240)
     content: dict[str, Any] = Field(default_factory=dict)
     references: list[str] = Field(default_factory=list, max_length=64)
-    status: str = Field(default="pending_review", max_length=40)
+    status: Literal['draft', 'pending_review', 'approved', 'changes_requested', 'stale'] = 'pending_review'
     asset_id: str = Field(default="", max_length=160)
     source: str = Field(default="director-ui", max_length=80)
 
@@ -3856,12 +3865,22 @@ def reusable_materials(project_id: str) -> dict[str, Any]:
     except RuntimeError as exc:
         raise HTTPException(404, str(exc)) from exc
     materials: dict[str, dict[str, Any]] = {}
+    diagnostic_paths = set()
+    for asset in manifest.get('assets', []):
+        if isinstance(asset, dict) and (asset.get('operation') == 'video_qc' or asset.get('purpose') == 'diagnostic'):
+            for value in asset_record_paths(asset):
+                try:
+                    diagnostic_paths.add(str(resolve_registered_path(value)).casefold())
+                except (ValueError, OSError):
+                    continue
 
     def add(value: Any, title: str) -> None:
         if not isinstance(value, str) or not value:
             return
         try:
             path = resolve_registered_path(value)
+            if str(path).casefold() in diagnostic_paths:
+                return
             kind = material_kind(path)
             if not path.is_file() or kind not in {"image", "audio", "video"}:
                 return
@@ -5364,7 +5383,10 @@ def complete_media_operation_task(task: dict[str, Any], receipt: dict[str, Any])
             first = True
             for index, output in enumerate(receipt['outputs']):
                 output = dict(output)
-                if output['kind'] in {'audio', 'video', 'image'}:
+                diagnostic = task['payload']['operation'] == 'video_qc'
+                if diagnostic:
+                    output['purpose'] = 'diagnostic'
+                if not diagnostic and output['kind'] in {'audio', 'video', 'image'}:
                     asset_id = task['asset_id'] if first else f"{task['asset_id']}-{index:02d}"
                     first = False
                     output['asset_id'] = asset_id

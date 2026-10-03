@@ -208,6 +208,8 @@ def test_installed_node_no_image_branch_without_models_or_gpu():
     # Run the actual installed method body with fake clip/latent I/O only.
     # This proves branch wiring, not sampling or the real tensor latent.
     source = backend.ROOT / 'ComfyUI-Installs/第一个comfyui配置/ComfyUI/comfy_extras/nodes_minimax_h3.py'
+    if not source.is_file():
+        pytest.skip('Host-specific H3 node probe requires the separate ComfyUI desktop installation')
     tree = ast.parse(source.read_text(encoding='utf-8-sig'))
     cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == 'MiniMaxH3ImageToVideo')
     method = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == 'execute')
