@@ -6755,6 +6755,94 @@ class WorkbenchStaticFiles(StaticFiles):
         return response
 
 
+class AssistantSessionRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    project_id: str | None = Field(default=None, min_length=1, max_length=160)
+
+
+class AssistantRequest(AssistantSessionRequest):
+    request_id: str = Field(pattern=r'^[A-Za-z0-9_-]{8,100}$')
+    text: str = Field(min_length=1, max_length=8000)
+    controls: dict[Literal['first_frame', 'last_frame', 'audio_guide'], str] = Field(default_factory=dict)
+    presentation_target: str | None = Field(default=None, pattern=r'^[A-Za-z0-9_-]{16,80}$')
+
+    @field_validator('text')
+    @classmethod
+    def nonempty_text(cls, value):
+        if not value.strip():
+            raise ValueError('请填写创作指令')
+        return value
+
+
+class AssistantPresentationReceipt(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    target: str = Field(pattern=r'^[A-Za-z0-9_-]{16,80}$')
+    seq: StrictInt = Field(ge=1)
+    status: Literal['presented', 'not_presented', 'takeover']
+    message: str = Field(default='', max_length=500)
+
+
+ASSISTANT_SERVICES = {}
+
+
+def assistant_service():
+    from .creation_assistant import AssistantService
+    from .cloud_assistant_provider import CloudAssistantProvider
+    import httpx
+    principal = current_principal.get()
+    if principal is None:
+        raise HTTPException(401, '请登录本人账号')
+    root = RUNTIME / 'assistant'
+    config = Path(os.environ.get('DIRECTOR_CLOUD_ASSISTANT_CONFIG') or
+                  ROOT / '.config/director-workbench/cloud-agent.json')
+    with PLAN_EDIT_LOCK:
+        key = (str(root), str(config))
+        if key not in ASSISTANT_SERVICES:
+            ASSISTANT_SERVICES[key] = AssistantService(root, lambda: httpx.ASGITransport(app=app),
+                                                       CloudAssistantProvider(config))
+    return ASSISTANT_SERVICES[key], principal
+
+
+@app.get('/api/assistant/sessions')
+def assistant_sessions():
+    service, principal = assistant_service()
+    return service.sessions(principal.identity.username)
+
+
+@app.post('/api/assistant/sessions')
+def create_assistant_session(request: AssistantSessionRequest):
+    service, principal = assistant_service()
+    if request.project_id:
+        require_project_manifest(request.project_id)
+    return service.create_session(principal.identity.username, request.project_id)
+
+
+@app.post('/api/assistant/sessions/{session_id}/requests')
+def start_assistant_request(session_id: str, request: AssistantRequest):
+    service, principal = assistant_service()
+    if request.project_id:
+        require_project_manifest(request.project_id)
+    return service.start(principal.identity.username, principal.token, session_id, request.model_dump())
+
+
+@app.get('/api/assistant/sessions/{session_id}/requests/{request_id}')
+def read_assistant_request(session_id: str, request_id: str):
+    service, principal = assistant_service()
+    return service.get(principal.identity.username, session_id, request_id)
+
+
+@app.post('/api/assistant/sessions/{session_id}/requests/{request_id}/cancel')
+def cancel_assistant_request(session_id: str, request_id: str):
+    service, principal = assistant_service()
+    return service.cancel(principal.identity.username, session_id, request_id)
+
+
+@app.post('/api/assistant/sessions/{session_id}/requests/{request_id}/presentation')
+def acknowledge_assistant_presentation(session_id: str, request_id: str, request: AssistantPresentationReceipt):
+    service, principal = assistant_service()
+    return service.acknowledge(principal.identity.username, session_id, request_id, request.model_dump())
+
+
 class AgentPageRegistration(BaseModel):
     model_config = ConfigDict(extra='forbid')
     page_id: str = Field(pattern=r'^[A-Za-z0-9_-]{16,80}$')

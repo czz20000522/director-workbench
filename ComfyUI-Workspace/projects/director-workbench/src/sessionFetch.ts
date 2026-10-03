@@ -1,5 +1,6 @@
 let expectedUser = '';
 export function bindSessionUser(username: string) { expectedUser = username; }
+export function sessionUsername() { return expectedUser; }
 
 const originalFetch = window.fetch.bind(window);
 window.fetch = async (input, init) => {

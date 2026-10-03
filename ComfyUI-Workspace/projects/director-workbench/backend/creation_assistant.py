@@ -15,18 +15,25 @@ from urllib.parse import quote
 import httpx
 from fastapi import HTTPException
 
+from .atomic_files import replace_prepared
+
 TERMINAL = {'succeeded', 'failed', 'cancelled', 'needs_reconcile'}
 
 
 def intent(text):
     # Only the human message grants writes. Provider output and tool receipts
     # cannot promote explanation/draft/preflight into generation.
-    if re.search(r'不要生成|不生成|仅解释|只解释|怎么|为什么|任务在哪|如何', text): return 'explain'
+    # Quoted prompt material is content, never an imperative from its author.
+    text = re.sub(r'```[\s\S]*?```|`[^`]*`|“[^”]*”|「[^」]*」|『[^』]*』|"[^"]*"|\'[^\']*\'', '', text)
+    denied = re.search(r'未授权|未经授权|没有授权|不授权|无需授权|(?:不要|不允许|不准|禁止|别|不)\s*[^，。；\n]*生成|教学|示例|引用', text)
     if re.search(r'只.*草稿|仅.*草稿|先.*草稿|只填|仅填', text): return 'draft'
     if re.search(r'只.*预检|仅.*预检|先.*预检', text): return 'preflight'
-    if re.search(r'重做|重新生成|覆盖|删除|采用|批准', text): return 'clarify'
-    if re.search(r'生成.*(?:看看|小样|视频|一段)|跑.*(?:看看|一段)|按这段跑', text): return 'generate'
-    if re.search(r'播放|暂停|跳转|打开候选', text): return 'presentation'
+    if denied: return 'explain'
+    if re.search(r'解释|怎么|为什么|任务在哪|如何|能否|可否|能不能|是否|[？?]', text): return 'explain'
+    if re.search(r'重做|重新生成|修改|改写|覆盖|删除|采用|批准|全片|多镜|(?:[2-9]\d*|1\d+|[二三四五六七八九十两]+)\s*(?:段|个小样|镜头)', text): return 'clarify'
+    clauses = re.split(r'[，。；;\n]', text)
+    if any(re.match(r'^\s*(?:(?:请|麻烦|帮我|给我|现在|直接|立即)\s*)*(?:授权生成|生成.*(?:看看|小样|视频|一段)|跑.*(?:看看|一段)|按这段跑)', clause) for clause in clauses): return 'generate'
+    if re.search(r'播放|暂停|跳转|打开候选', text): return 'explain'
     return 'draft'
 
 
@@ -41,7 +48,7 @@ def sample_parameters(text):
 class BusinessError(Exception):
     def __init__(self, status, detail):
         self.status = status
-        self.message = detail.get('message') if isinstance(detail, dict) else str(detail)
+        self.message = (detail.get('message') or '工作台请求未通过') if isinstance(detail, dict) else str(detail)
         if isinstance(detail, dict) and detail.get('blockers'):
             self.message += ' · ' + ' · '.join(str(row.get('message') or row.get('code')) for row in detail['blockers'])
 
@@ -71,7 +78,7 @@ class AssistantService:
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(uuid.uuid4().hex + '.tmp')
         temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
-        temporary.replace(path)
+        replace_prepared(temporary, path)
 
     def _session(self, data, sid):
         row = next((row for row in data['sessions'] if row['id'] == sid), None)
@@ -131,6 +138,7 @@ class AssistantService:
             rid = body['request_id']
             row = {'id':rid, 'scope':scope, 'text':body['text'], 'status':'queued', 'message':'已收到指令，正在准备。',
                    'project_id':scope['project_id'], 'steps':[], 'events':[], 'presentations':[], 'result':{},
+                   'presentation_target':scope['presentation_target'],
                    'cancel_requested':False, 'run_id':self.run_id, 'created_at':time.time(), 'updated_at':time.time()}
             session['requests'].append(row); session['messages'].append({'role':'user', 'content':body['text'], 'request_id':rid})
             self._save(owner,data)
@@ -188,12 +196,12 @@ class AssistantService:
         steps = [*row['steps'], {'name':name,'status':'running','message':name}]
         self._patch(owner,sid,rid,status='running',steps=steps,message=name)
         try:
-            response = await client.request(method,path,**({'json':body} if body is not None else {}))
-        except httpx.RequestError:
+            response = await asyncio.wait_for(client.request(method,path,**({'json':body} if body is not None else {})), timeout=30)
+            data = response.json()
+        except (httpx.RequestError, TimeoutError, ValueError):
             steps[-1]['status']='unknown'; self._patch(owner,sid,rid,steps=steps)
             if method != 'GET': raise Uncertain()
             raise BusinessError(503,'无法读取工作台，请检查连接后继续。')
-        data = response.json()
         if not response.is_success:
             steps[-1]['status']='failed'; self._patch(owner,sid,rid,steps=steps)
             raise BusinessError(response.status_code,data.get('detail') or '工作台请求未通过')
@@ -207,7 +215,10 @@ class AssistantService:
             row=self.get(owner,sid,rid)
             self._patch(owner,sid,rid,status='cancelled',message='助手准备已取消；已保存内容和原任务回执保留，未声称停止已提交生成。', result=row['result'])
         except Uncertain:
-            self._patch(owner,sid,rid,status='needs_reconcile',message='该步骤返回未知；保留输入和步骤，不盲目重发。',next_action='核对原作品或同键任务回执。')
+            row = self.get(owner, sid, rid)
+            self._patch(owner,sid,rid,status='needs_reconcile',message='该步骤返回未知；保留输入和步骤，不盲目重发。',
+                        result={**row['result'], 'submitted':None, 'submission_unknown':True},
+                        next_action='核对原作品或同键任务回执。')
         except BusinessError as exc:
             self._patch(owner,sid,rid,status='failed',error={'code':str(exc.status),'message':exc.message},message=exc.message,
                         next_action='重新登录。' if exc.status==401 else '查看当前步骤和已保存输入，修正后再继续。')
@@ -240,18 +251,12 @@ class AssistantService:
             if cancel.is_set(): raise Cancelled()
             self._patch(owner,sid,rid,usage=response.get('usage'))
             if mode in ('explain','clarify'):
-                message='请明确要新建一段小样还是修改哪个现有分镜；当前未修改或提交。' if mode=='clarify' else (response['message'].get('content') or '请在原页面查看准备度和任务；本次未提交生成。')
+                message='当前助手支持新增一段小样；已有分镜修改、多镜制作及审核采用请使用原页面。当前未修改或提交。' if mode=='clarify' else '助手建议（本次未修改或提交）：' + (response['message'].get('content') or '请在原页面查看准备度和任务。')
                 self._patch(owner,sid,rid,status='succeeded',message=message,result={'intent':mode,'project_id':pid,'submitted':False})
-                return
-            if mode=='presentation':
-                kind='pause' if '暂停' in text else 'play' if '播放' in text else 'navigate'
-                await self._present(owner,sid,rid,cancel,kind,project_id=pid,page='shots')
-                self._patch(owner,sid,rid,status='succeeded',message='页面操作已请求；实际显示或播放以页面回执为准。',result={'intent':mode,'project_id':pid,'submitted':False})
                 return
             params=sample_parameters(text)
             controls=scope.get('controls') or {}
             if not pid and mode=='draft':
-                await self._present(owner,sid,rid,cancel,'show_draft',text=text,**params)
                 self._patch(owner,sid,rid,status='succeeded',message='原文草稿已保留，尚未保存或生成。',result={'intent':mode,'draft':{'prompt':text,**params},'submitted':False})
                 return
             if not pid:
@@ -275,13 +280,14 @@ class AssistantService:
                 for field,asset_id in controls.items():
                     entry=next((a for a in current.get('assets',[]) if a.get('id')==asset_id),None)
                     kind='audio' if field=='audio_guide' else 'image'
-                    if not entry or entry.get('kind')!=kind: raise BusinessError(422,'开始／结束画面及表演音频须明确选择当前作品对应素材。')
-                    media[field]=(entry.get('sources') or {}).get('A')
+                    if (not entry or entry.get('kind')!=kind or entry.get('operation') == 'video_qc' or entry.get('purpose') == 'diagnostic'):
+                        raise BusinessError(422,'开始／结束画面及表演音频须明确选择当前作品的创作素材。')
+                    media[field]=(entry.get('image_path') if kind == 'image' else None) or (entry.get('sources') or {}).get('A')
                     if not media[field]: raise BusinessError(422,'已选素材没有可用文件，请重新选择。')
             saved=await call('保存原文和创作参数','POST',prefix+'/plan/segments',{'segment_id':asset,'prompt':text,**params,**media,'expected_revision':plan.get('revision',0)})
-            await self._present(owner,sid,rid,cancel,'saved',project_id=pid,asset_id=asset,data={'revision':saved['plan']['revision']})
+            await self._present(owner,sid,rid,cancel,'saved',wait=True,project_id=pid,asset_id=asset,data={'revision':saved['plan']['revision']})
             checked=await call('预检实际制作输入','POST',prefix+'/pipeline/auto/validate',{'asset_id':asset,'values':{}})
-            await self._present(owner,sid,rid,cancel,'preflight',project_id=pid,asset_id=asset,data=checked)
+            await self._present(owner,sid,rid,cancel,'preflight',wait=True,project_id=pid,asset_id=asset,data=checked)
             if not checked.get('valid'): raise BusinessError(422,'预检仍有阻塞，请查看原页面准备度；未提交生成。')
             if mode=='preflight':
                 self._patch(owner,sid,rid,status='succeeded',message='已保存原文并通过预检；按指令未提交生成。',result={'project_id':pid,'asset_id':asset,'preflight':checked,'submitted':False})
@@ -291,7 +297,11 @@ class AssistantService:
             try:
                 task=await call('提交一次小样，等待原队列','POST',prefix+'/tasks',{'asset_id':asset,'expected_revision':checked['revision'],'idempotency_key':key,'pipeline_stage_id':'auto'})
             except Uncertain:
-                receipt=await call('核对同键原任务回执','GET',prefix+'/submission-receipt?key='+quote(key,safe=''))
+                try:
+                    receipt=await call('核对同键原任务回执','GET',prefix+'/submission-receipt?key='+quote(key,safe=''))
+                except BusinessError as exc:
+                    if exc.status in (404, 503): raise Uncertain() from None
+                    raise
                 task=receipt.get('task') or receipt
                 if not task.get('id'): raise Uncertain()
             result={'project_id':pid,'asset_id':asset,'task_id':task['id'],'submitted':True,'preflight':checked}

@@ -1,23 +1,36 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { sessionUsername } from '../sessionFetch';
 
 type AssistantResult = { project_id?: string; task_id?: string; asset_id?: string };
 export type AssistantPresentationEvent = {
   seq: number; kind: 'show_draft' | 'saved' | 'preflight' | 'submitted' | 'candidate' | 'navigate' | 'play' | 'pause';
   project_id?: string; asset_id?: string; task_id?: string; text?: string;
-  duration_seconds?: number; aspect_ratio?: string; data?: Record<string, unknown>;
+  duration_seconds?: number; generation?: Record<string, unknown>; data?: Record<string, unknown>;
 };
 type PresentationReceipt = { status: 'presented' | 'not_presented' | 'takeover'; message?: string };
 type PresentationJob = { owner: string; requestId: string; event: AssistantPresentationEvent; receipt?: PresentationReceipt };
 type AssistantRequest = {
   id: string; status: string; text?: string; message?: string; project_id?: string | null;
   asset_id?: string; task_id?: string; steps?: { name: string; status: string; message?: string }[];
-  error?: unknown; next_action?: unknown; result?: AssistantResult & { message?: string; answer?: string };
+  error?: unknown; next_action?: unknown; result?: AssistantResult & { message?: string; answer?: string; draft?: { prompt: string } };
   presentation_target?: string; events?: AssistantPresentationEvent[];
 };
 type AssistantSession = {
   id: string; updated_at?: string | number; project_id?: string | null;
   messages?: { role: 'user' | 'assistant'; content: string }[]; requests?: AssistantRequest[];
 };
+type UnconfirmedRequest = { owner: string; request: AssistantRequest };
+function unconfirmed(key: string): UnconfirmedRequest[] {
+  if (!key) return [];
+  try {
+    const rows = JSON.parse(sessionStorage.getItem(key) || '[]');
+    return Array.isArray(rows) ? rows.filter(row => typeof row?.owner === 'string' && typeof row?.request?.id === 'string' && typeof row?.request?.text === 'string') : [];
+  } catch { return []; }
+}
+function storeUnconfirmed(key: string, rows: UnconfirmedRequest[]) {
+  if (!key) return;
+  try { sessionStorage.setItem(key, JSON.stringify(rows)); } catch { /* In-memory input and receipts remain visible if browser storage is unavailable. */ }
+}
 const activeStatuses = new Set(['queued', 'preparing', 'running']);
 const terminalStatuses = new Set(['succeeded', 'failed', 'cancelled', 'needs_reconcile']);
 const statusLabels: Record<string, string> = {
@@ -61,6 +74,8 @@ export default function CreationAssistant({ projectId, onResult, onPresentation 
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [cancelling, setCancelling] = useState('');
+  const username = sessionUsername();
+  const unconfirmedKey = username ? `director-workbench:assistant:${encodeURIComponent(username)}:unconfirmed:v1` : '';
   const sendingRef = useRef(false);
   const onResultRef = useRef(onResult);
   onResultRef.current = onResult;
@@ -87,7 +102,8 @@ export default function CreationAssistant({ projectId, onResult, onPresentation 
     return () => { mounted.current = false; window.clearTimeout(presentationTimer.current); };
   }, []);
 
-  const rememberRequest = useCallback((ownerId: string, request: AssistantRequest) => {
+  const rememberRequest = useCallback((ownerId: string, request: AssistantRequest, confirmed = true) => {
+    if (confirmed) storeUnconfirmed(unconfirmedKey, unconfirmed(unconfirmedKey).filter(row => row.owner !== ownerId || row.request.id !== request.id));
     setSessions(previous => previous.map(session => {
       if (session.id !== ownerId) return session;
       const records = session.requests ?? [];
@@ -97,7 +113,7 @@ export default function CreationAssistant({ projectId, onResult, onPresentation 
       const merged = { ...older, ...request };
       return { ...session, requests: older ? records.map(record => record.id === request.id ? merged : record) : [...records, merged] };
     }));
-  }, []);
+  }, [unconfirmedKey]);
 
   const restore = useCallback(async () => {
     const version = ++restoreVersion.current;
@@ -107,6 +123,15 @@ export default function CreationAssistant({ projectId, onResult, onPresentation 
       if (version !== restoreVersion.current || !mounted.current) return;
       if (!Array.isArray(data.sessions)) throw new Error('助手会话记录格式不完整，请重新读取。');
       const records: AssistantSession[] = data.sessions.filter((session: AssistantSession) => typeof session.id === 'string');
+      const unresolved = [];
+      for (const saved of unconfirmed(unconfirmedKey)) {
+        let owner = records.find(session => session.id === saved.owner);
+        if (owner?.requests?.some(request => request.id === saved.request.id)) continue;
+        unresolved.push(saved);
+        if (!owner) { owner = { id: saved.owner, requests: [] }; records.push(owner); }
+        owner.requests = [...(owner.requests ?? []), { ...saved.request, status: 'queued', message: '提交结果尚未确认，正在查询原请求；请勿重复发送。' }];
+      }
+      storeUnconfirmed(unconfirmedKey, unresolved);
       // Restored events are history: a refresh never repeats navigation, draft replacement or playback.
       for (const session of records) for (const request of session.requests ?? []) {
         seenEvents.current.set(`${session.id}/${request.id}`, Math.max(0, ...(request.events ?? []).map(event => event.seq)));
@@ -117,7 +142,7 @@ export default function CreationAssistant({ projectId, onResult, onPresentation 
       setSessionId(previous => records.some(session => session.id === previous) ? previous : records[0]?.id ?? '');
     } catch (reason) { if (version === restoreVersion.current && mounted.current) setError(reason instanceof Error ? reason.message : '助手会话读取失败。'); }
     finally { if (version === restoreVersion.current && mounted.current) setLoading(false); }
-  }, []);
+  }, [unconfirmedKey]);
 
   useEffect(() => { void restore(); }, [restore]);
 
@@ -179,6 +204,26 @@ export default function CreationAssistant({ projectId, onResult, onPresentation 
   const pending = sessions.flatMap(session => (session.requests ?? []).filter(request => activeStatuses.has(request.status)).map(request => ({ owner: session.id, id: request.id })));
   const pendingKey = pending.map(request => `${request.owner}/${request.id}`).join('|');
   useEffect(() => {
+    const takeover = (event: Event) => {
+      if (!event.isTrusted || !(event.target instanceof Element) || event.target.closest('[aria-label="创作助手"]')) return;
+      const editing = ['input', 'change'].includes(event.type) && event.target.closest('input, textarea, select, [contenteditable="true"]');
+      const control = event.target.closest('button, a[href], summary, [role="button"], [role="tab"], video, audio');
+      if (!editing && !(control && (event.type === 'click' || event instanceof KeyboardEvent && ['Enter', ' '].includes(event.key)))) return;
+      for (const request of pending) {
+        const key = `${request.owner}/${request.id}`;
+        if (takeovers.current.has(key)) continue;
+        takeovers.current.add(key);
+        void readJson(`${requestPath(request.owner, request.id)}/cancel`, { method: 'POST' })
+          .then(data => rememberRequest(request.owner, data))
+          .catch(() => setError('手动接管已停止后续页面动作；取消回执尚未确认，请查询原请求。'));
+      }
+    };
+    for (const name of ['click', 'input', 'change', 'keydown']) document.addEventListener(name, takeover, true);
+    return () => { for (const name of ['click', 'input', 'change', 'keydown']) document.removeEventListener(name, takeover, true); };
+    // Request identities remain stable while individual receipts update.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingKey, rememberRequest]);
+  useEffect(() => {
     if (!pendingKey) return;
     let disposed = false;
     let timer: number;
@@ -222,7 +267,9 @@ export default function CreationAssistant({ projectId, onResult, onPresentation 
         setSessions(previous => [...previous, session]); setSessionId(owner);
       }
       const requestId = crypto.randomUUID();
-      rememberRequest(owner, { id: requestId, status: 'queued', text, project_id: contextProject, message: '正在确认助手请求…' });
+      const local: AssistantRequest = { id: requestId, status: 'queued', text, project_id: contextProject, presentation_target: presentationTarget, message: '正在确认助手请求…' };
+      rememberRequest(owner, local, false);
+      storeUnconfirmed(unconfirmedKey, [...unconfirmed(unconfirmedKey), { owner, request: local }]);
       setDraft(previous => previous === text ? '' : previous);
       try {
         const request = await readJson(`/api/assistant/sessions/${encodeURIComponent(owner)}/requests`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ request_id: requestId, text, project_id: contextProject, presentation_target: presentationTarget }) });
@@ -236,7 +283,8 @@ export default function CreationAssistant({ projectId, onResult, onPresentation 
           rememberRequest(owner, { ...request, text });
         } catch {
           const rejected = reason instanceof HttpResponseError && reason.status >= 400 && reason.status < 500 && reason.status !== 408 && reason.status !== 409;
-          rememberRequest(owner, { id: requestId, status: rejected ? 'failed' : 'queued', text, project_id: contextProject, message: rejected ? '服务器拒绝了这次请求，可以修改后继续。' : '提交结果尚未确认，正在查询原请求；请勿重复发送。' });
+          rememberRequest(owner, { id: requestId, status: rejected ? 'failed' : 'queued', text, project_id: contextProject, message: rejected ? '服务器拒绝了这次请求，可以修改后继续。' : '提交结果尚未确认，正在查询原请求；请勿重复发送。' }, rejected);
+          if (rejected) setDraft(previous => previous || text);
         }
       }
     } catch (reason) { setError(reason instanceof Error ? reason.message : '助手请求失败，原文仍保留，可继续。'); }
@@ -259,7 +307,7 @@ export default function CreationAssistant({ projectId, onResult, onPresentation 
   return <aside className="director-operation-panel" aria-label="创作助手" style={{ position: 'fixed', right: 16, bottom: 16, zIndex: 60, width: expanded ? 'min(420px, calc(100vw - 32px))' : 'auto', maxHeight: 'calc(100dvh - 32px)', overflow: 'auto', boxShadow: 'var(--shadow)' }}>
     <button type="button" className="text-button" aria-expanded={expanded} aria-controls="creation-assistant-content" onClick={() => setExpanded(value => !value)}><strong>创作助手</strong> {expanded ? '收起' : '聊聊想法'}{pending.length > 0 ? ` · ${pending.length} 条处理中` : error ? ' · 有提示' : ''}</button>
     {expanded && <div id="creation-assistant-content">
-      <p className="director-muted">说说你想拍什么，默认先做一段 5 秒横屏。可以说“先解释”“只写草稿”“先预检”，或明确说“授权生成”。</p>
+      <p className="director-muted">说说你想拍什么。默认保留文字草稿；明确说“生成一个看看”才提交一段小样，默认 5 秒横屏。也可以说“先解释”“只写草稿”“先预检”。</p>
       <small className="director-muted">云端只处理输入文字和必要创作事实，不传密钥、token 或音视频。</small>
       {sessions.length > 1 && <label className="director-review-note">历史对话<select aria-label="历史对话" value={sessionId} onChange={event => setSessionId(event.target.value)}>{sessions.map((session, index) => <option key={session.id} value={session.id}>{session.messages?.find(message => message.role === 'user')?.content.slice(0, 28) || `对话 ${index + 1}`}</option>)}</select></label>}
       <section aria-label="助手对话记录" style={{ maxHeight: '38dvh', overflow: 'auto', overflowWrap: 'anywhere' }}>
@@ -276,8 +324,9 @@ export default function CreationAssistant({ projectId, onResult, onPresentation 
             {readable(request.next_action) && <p>下一步：{readable(request.next_action)}</p>}
             {request.result?.answer && <p style={{ whiteSpace: 'pre-wrap' }}>{request.result.answer}</p>}
             {request.result?.message && request.result.message !== request.message && <p style={{ whiteSpace: 'pre-wrap' }}>{request.result.message}</p>}
+            {request.result?.draft && <p aria-label="未保存助手草稿" style={{ whiteSpace: 'pre-wrap' }}>{request.result.draft.prompt}</p>}
             {result.task_id && <p>任务编号：<code>{result.task_id}</code><br /><small>任务已提交；取消助手准备不会停止这个 GPU 任务，请在任务队列中操作。</small></p>}
-            {(result.task_id || result.asset_id || request.result?.project_id) && <button type="button" className="button secondary compact" onClick={() => onResultRef.current?.(result)}>{result.asset_id ? `查看候选 ${result.asset_id}` : result.task_id ? '查看任务' : '打开作品'}</button>}
+            {!request.result?.draft && (result.task_id || result.asset_id || request.result?.project_id) && <button type="button" className="button secondary compact" onClick={() => onResultRef.current?.(result)}>{result.task_id ? '查看任务或候选' : result.asset_id ? `查看分镜 ${result.asset_id}` : '打开作品'}</button>}
             {activeStatuses.has(request.status) && !result.task_id && <button type="button" className="button secondary compact" disabled={Boolean(cancelling)} onClick={() => void cancel(selected!.id, request)}>{cancelling === request.id ? '正在取消…' : '取消助手准备'}</button>}
           </article>;
         })}
