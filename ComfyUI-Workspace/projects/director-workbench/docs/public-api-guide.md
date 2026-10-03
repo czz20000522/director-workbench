@@ -89,6 +89,16 @@
 
 远程 MCP 使用同一私人 URL 的 `/mcp/`，要求可配置 Bearer 的 Streamable HTTP 客户端。目前远程端只开放能力发现中的创作/页面子集及读取指南；完整适配工具可通过本机 stdio 使用，其他业务使用认证 HTTP。没有 OAuth 登录发现；只能 OAuth 且不能配置现有 Bearer 的宿主尚未支持。
 
+MCP 默认保留官方 SDK 的 loopback Host/Origin 限制和 DNS rebinding 防护。经本机 SSH 隧道可使用原 loopback 入口；私人网络直接访问须由服务器维护者在进程启动前配置允许列表，不能由客户端请求或 `Forwarded`/`X-Forwarded-Host` 决定：
+
+| 服务器环境变量 | 格式与作用 |
+| --- | --- |
+| `DIRECTOR_MCP_ALLOWED_HOSTS` | 逗号分隔的精确 Host，可含端口；脱敏示例 `workbench.example.invalid:4100` |
+| `DIRECTOR_MCP_ALLOWED_ORIGINS` | 逗号分隔的完整 HTTP(S) Origin；脱敏示例 `http://workbench.example.invalid:4100`，不带路径或末尾斜杠 |
+| `DIRECTOR_PRIVATE_ORIGINS` / 启动参数 `-Origins` | 私人业务层的浏览器允许列表；客户端发送 Origin 时也须通过这一层 |
+
+外部配置不接受通配符、URL 凭据、路径、查询参数或片段；默认 loopback 入口仍保留。客户端不发送 Origin 时仍检查 Host 与本人会话；发送 Origin 时须同时符合 MCP 和私人业务允许列表。未知 Host 返回 421，未知 Origin 返回 403，失效会话返回 401。允许入口不授予账号或作品权限。真实地址与配置只保存在服务器，不写入公开发现、Issue 或 Git；配置变更的部署另按授权处理。
+
 接入验证先完成发现、登录、本人作品列表、权限拒绝和无生成预检。MCP schema/HTTP 回归、服务部署、干净跨设备接入与真实 GPU 输出分别验收。只读连通测试不授权生成，已实现的接口也不证明其对应制作方案全部通过。反馈采用[GitHub 协作约定](github-collaboration.md)，公开记录仅保留脱敏步骤和结论。
 
 ## 审核可写值与诊断结果

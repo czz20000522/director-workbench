@@ -69,6 +69,7 @@
 # Retired local issue ledger is excluded
 !/ComfyUI-Workspace/projects/director-workbench/backend/__init__.py
 !/ComfyUI-Workspace/projects/director-workbench/backend/agent_access.py
+!/ComfyUI-Workspace/projects/director-workbench/backend/mcp_access_config.py
 !/ComfyUI-Workspace/projects/director-workbench/backend/agent_pages.py
 !/ComfyUI-Workspace/projects/director-workbench/backend/app.py
 !/ComfyUI-Workspace/projects/director-workbench/backend/assembly_edit.py
@@ -155,6 +156,7 @@
 !/ComfyUI-Workspace/projects/director-workbench/tests/agent_access_bridge.py
 !/ComfyUI-Workspace/projects/director-workbench/tests/automatic_creation_bridge.py
 !/ComfyUI-Workspace/projects/director-workbench/tests/test_agent_access.py
+!/ComfyUI-Workspace/projects/director-workbench/tests/test_mcp_access_config.py
 !/ComfyUI-Workspace/projects/director-workbench/tests/test_analysis_recovery.py
 !/ComfyUI-Workspace/projects/director-workbench/tests/test_artifact_review_history.py
 !/ComfyUI-Workspace/projects/director-workbench/tests/test_assembly_builder.py
