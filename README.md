@@ -4,11 +4,9 @@
 
 ## 使用与开发
 
-仓库保留 Comfy-Desktop 目录布局。Windows 上将本仓库检出到安装根目录；ComfyUI、模型和工具由用户另行安装到 ComfyUI-Shared / ComfyUI-Installs，不随仓库分发。
+工作台代码位于 `ComfyUI-Workspace/projects/director-workbench`。从[公开开发指南](ComfyUI-Workspace/projects/director-workbench/docs/public-development-guide.md)了解架构、Windows 环境、构建、账号、启动和测试；客户端接入见 [HTTP API 指南](ComfyUI-Workspace/projects/director-workbench/docs/public-api-guide.md)与 [MCP 连接说明](ComfyUI-Workspace/projects/director-workbench/mcp_server/README.md)。这些入口只链接公开源文件，私人制作记录不作为开发前置。
 
-工作台代码位于 `ComfyUI-Workspace/projects/director-workbench`。在该目录运行 `npm ci`、`npm run build`；创建项目专用 Python .venv，并安装 requirements.txt。账号通过 tools/private_accounts.py 本机交互创建，密码不放入命令行。用 start_workbench.ps1 启动，默认地址 http://127.0.0.1:4100。
-
-GPU、AuK 与 ComfyUI 环境需要另行配置；run_tests.ps1 -Check 检查环境，run_tests.ps1 运行完整回归。首次公开的是筛选的开发源代码，尚未验证从空白设备部署；代码存在不表示所有制作方案均已验收。默认应使用私人账号入口，不将服务直接暴露到公网。
+普通设备使用维护者提供的私人工作台 URL 和本人账号；服务端保留 Comfy-Desktop 目录布局。ComfyUI、模型、媒体工具及其专用环境需另行安装，不随仓库分发。运行与开发环境位于 D 盘，输入、输出及作品资产位于配置的 E 盘目录，`ComfyUI-Shared` 保持 D 盘真实目录。空白设备部署与 GPU 制作方案仍须实际验收，不能以构建或离线测试通过代替。
 
 ## 多设备协作
 

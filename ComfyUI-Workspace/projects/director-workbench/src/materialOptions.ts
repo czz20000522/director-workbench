@@ -7,12 +7,26 @@ type SegmentMaterials = {
   audio?: { guide?: string; delivery_master?: string }; video?: { path?: string };
 };
 
+export function isCreativeMaterial(asset: Record<string, unknown>): boolean {
+  return asset.operation !== 'video_qc' && asset.purpose !== 'diagnostic';
+}
+
+export const materialPathKey = (path: string) => path.replace(/\\/g, '/').toLowerCase();
+
+export function diagnosticMaterialPaths(project: { assets?: Array<Record<string, unknown>> } | null): string[] {
+  return (project?.assets ?? []).filter(asset => !isCreativeMaterial(asset)).flatMap(asset =>
+    [asset.image_path, ...Object.values((asset.sources ?? {}) as Record<string, unknown>)]
+      .filter((path): path is string => typeof path === 'string'));
+}
+
 export function projectMaterialOptions(project: {
   media?: Record<string, string>; assets?: Array<Record<string, unknown>>;
 } | null, segments: SegmentMaterials[]): MaterialOption[] {
   const options = new Map<string, MaterialOption>();
+  const excludedPaths = new Set(diagnosticMaterialPaths(project).map(materialPathKey));
   function add(path: unknown, label: string, kind?: MaterialOption['kind']) {
     if (typeof path !== 'string' || !path || /^(https?:|blob:|data:|\/media)/i.test(path)) return;
+    if (excludedPaths.has(materialPathKey(path))) return;
     const extension = path.split('.').pop()?.toLowerCase() ?? '';
     const inferred = /^(png|jpe?g|webp|gif|bmp)$/.test(extension) ? 'image'
       : /^(wav|mp3|flac|m4a|aac|ogg)$/.test(extension) ? 'audio'
@@ -22,6 +36,7 @@ export function projectMaterialOptions(project: {
     if (!options.has(key)) options.set(key, { value: path, label, kind: kind ?? inferred! });
   }
   for (const asset of project?.assets ?? []) {
+    if (!isCreativeMaterial(asset)) continue;
     const kind = asset.kind === 'audio' || asset.kind === 'image' ? asset.kind as TreeKind : 'video';
     const label = assetTitle(String(asset.id ?? ''), String(asset.title ?? asset.id ?? '项目素材'), kind);
     add(asset.image_path, `${label} · 图片`, 'image');

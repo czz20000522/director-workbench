@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory = $true)][string]$AdminUsers,
     [string]$Origins = '',
     [string]$AccountsFile = 'D:\Comfy-Desktop\ComfyUI-Workspace\runtime\director-private\accounts-hashed.json',
-    [string]$WorkspaceRoot = 'E:\DirectorWorkspaces'
+    [string]$WorkspaceRoot = ''
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -14,7 +14,7 @@ if ($HostAddress -notin @('127.0.0.1', 'localhost', '::1') -and -not $Origins) {
 }
 if (-not $Origins) { $Origins = "http://127.0.0.1:$Port,http://localhost:$Port" }
 $env:DIRECTOR_ACCOUNTS_FILE = $AccountsFile
-$env:DIRECTOR_PRIVATE_ROOT = $WorkspaceRoot
+if ($WorkspaceRoot) { $env:DIRECTOR_PRIVATE_ROOT = $WorkspaceRoot }
 $env:DIRECTOR_PRIVATE_ORIGINS = $Origins
 $env:DIRECTOR_ADMIN_USERS = $AdminUsers
 & $python -m uvicorn backend.private_app:app --host $HostAddress --port $Port --workers 1 --app-dir $projectRoot
