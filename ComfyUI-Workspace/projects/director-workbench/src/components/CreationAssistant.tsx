@@ -201,7 +201,7 @@ export default function CreationAssistant({ projectId, onResult, onPresentation 
     void presentQueued();
   }, [sessions, presentationTarget, presentQueued]);
 
-  const pending = sessions.flatMap(session => (session.requests ?? []).filter(request => activeStatuses.has(request.status)).map(request => ({ owner: session.id, id: request.id })));
+  const pending = sessions.flatMap(session => (session.requests ?? []).filter(request => activeStatuses.has(request.status)).map(request => ({ owner: session.id, id: request.id, target: request.presentation_target })));
   const pendingKey = pending.map(request => `${request.owner}/${request.id}`).join('|');
   useEffect(() => {
     const takeover = (event: Event) => {
@@ -210,6 +210,7 @@ export default function CreationAssistant({ projectId, onResult, onPresentation 
       const control = event.target.closest('button, a[href], summary, [role="button"], [role="tab"], video, audio');
       if (!editing && !(control && (event.type === 'click' || event instanceof KeyboardEvent && ['Enter', ' '].includes(event.key)))) return;
       for (const request of pending) {
+        if (request.target !== presentationTarget) continue;
         const key = `${request.owner}/${request.id}`;
         if (takeovers.current.has(key)) continue;
         takeovers.current.add(key);
@@ -222,7 +223,7 @@ export default function CreationAssistant({ projectId, onResult, onPresentation 
     return () => { for (const name of ['click', 'input', 'change', 'keydown']) document.removeEventListener(name, takeover, true); };
     // Request identities remain stable while individual receipts update.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingKey, rememberRequest]);
+  }, [pendingKey, presentationTarget, rememberRequest]);
   useEffect(() => {
     if (!pendingKey) return;
     let disposed = false;

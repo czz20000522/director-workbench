@@ -25,7 +25,11 @@ def intent(text):
     # cannot promote explanation/draft/preflight into generation.
     # Quoted prompt material is content, never an imperative from its author.
     text = re.sub(r'```[\s\S]*?```|`[^`]*`|“[^”]*”|「[^」]*」|『[^』]*』|"[^"]*"|\'[^\']*\'', '', text)
-    denied = re.search(r'未授权|未经授权|没有授权|不授权|无需授权|(?:不要|不允许|不准|禁止|别|不)\s*[^，。；\n]*生成|教学|示例|引用', text)
+    if re.search(r'教学|示例|引用|假设|假如|(?:人物对白|角色对白|对白|台词|按钮文案|字幕|提示词)\s*[:：]', text):
+        return 'explain'
+    denied = re.search(r'未授权|未经授权|没有授权|不授权|无需授权|'
+                       r'(?:不要|不允许|不准|禁止|别|不|无需|不用|未允许|没有确认|未确认)\s*[^，。；\n]*(?:生成|执行|开始|提交|运行)|'
+                       r'(?:^|[，。；\n])\s*(?:先|暂时|现在)?(?:暂停|暂缓|推迟)', text)
     if re.search(r'只.*草稿|仅.*草稿|先.*草稿|只填|仅填', text): return 'draft'
     if re.search(r'只.*预检|仅.*预检|先.*预检', text): return 'preflight'
     if denied: return 'explain'
@@ -190,8 +194,10 @@ class AssistantService:
                 await asyncio.sleep(.05)
             raise BusinessError(409,'页面尚未确认草稿已呈现；未继续保存／生成，请回到发起页后重试。')
 
-    async def _business(self, client, owner,sid,rid,cancel,name,method,path,body=None):
-        if cancel.is_set(): raise Cancelled()
+    async def _business(self, client, owner,sid,rid,cancel,name,method,path,body=None, *, reconcile_submission=False):
+        # Cancellation stops future actions, but cannot erase a POST's unknown
+        # outcome. Only the original-key GET may run after that cancellation.
+        if cancel.is_set() and not (reconcile_submission and method == 'GET'): raise Cancelled()
         row = self.get(owner,sid,rid)
         steps = [*row['steps'], {'name':name,'status':'running','message':name}]
         self._patch(owner,sid,rid,status='running',steps=steps,message=name)
@@ -203,6 +209,9 @@ class AssistantService:
             if method != 'GET': raise Uncertain()
             raise BusinessError(503,'无法读取工作台，请检查连接后继续。')
         if not response.is_success:
+            if method != 'GET' and response.status_code >= 500:
+                steps[-1]['status']='unknown'; self._patch(owner,sid,rid,steps=steps)
+                raise Uncertain()
             steps[-1]['status']='failed'; self._patch(owner,sid,rid,steps=steps)
             raise BusinessError(response.status_code,data.get('detail') or '工作台请求未通过')
         steps[-1].update(status='succeeded', receipt=data)
@@ -213,7 +222,10 @@ class AssistantService:
         try: asyncio.run(self._run(owner,token,sid,rid,cancel))
         except Cancelled:
             row=self.get(owner,sid,rid)
-            self._patch(owner,sid,rid,status='cancelled',message='助手准备已取消；已保存内容和原任务回执保留，未声称停止已提交生成。', result=row['result'])
+            message = ('助手准备已取消；已提交任务仍按原队列执行，请在任务队列中操作停止。'
+                       if row['result'].get('submitted') else
+                       '助手准备已取消；已保存内容和原任务回执保留，未声称停止已提交生成。')
+            self._patch(owner,sid,rid,status='cancelled',message=message, result=row['result'])
         except Uncertain:
             row = self.get(owner, sid, rid)
             self._patch(owner,sid,rid,status='needs_reconcile',message='该步骤返回未知；保留输入和步骤，不盲目重发。',
@@ -234,8 +246,9 @@ class AssistantService:
         row=self.get(owner,sid,rid); scope=row['scope']; text=scope['text']; mode=intent(text)
         headers={'Authorization':'Bearer '+token}
         async with httpx.AsyncClient(transport=self.transport_factory(),base_url='http://localhost',headers=headers,timeout=30) as client:
-            async def call(name,method,path,body=None):
-                return await self._business(client,owner,sid,rid,cancel,name,method,path,body)
+            async def call(name,method,path,body=None, *, reconcile_submission=False):
+                return await self._business(client,owner,sid,rid,cancel,name,method,path,body,
+                                            reconcile_submission=reconcile_submission)
             await call('核对当前登录状态','GET','/api/queue')
             pid=scope.get('project_id')
             project=None; plan=None
@@ -293,18 +306,28 @@ class AssistantService:
                 self._patch(owner,sid,rid,status='succeeded',message='已保存原文并通过预检；按指令未提交生成。',result={'project_id':pid,'asset_id':asset,'preflight':checked,'submitted':False})
                 return
             key='assistant-'+rid
-            self._patch(owner,sid,rid,idempotency_key=key)
+            if cancel.is_set(): raise Cancelled()
+            self._patch(owner,sid,rid,idempotency_key=key,
+                        result={'project_id':pid,'asset_id':asset,'submitted':None,'submission_unknown':True})
             try:
                 task=await call('提交一次小样，等待原队列','POST',prefix+'/tasks',{'asset_id':asset,'expected_revision':checked['revision'],'idempotency_key':key,'pipeline_stage_id':'auto'})
+                if not isinstance(task, dict) or not task.get('id'): raise Uncertain()
+            except (Cancelled, BusinessError):
+                # The pre-send cancellation guard or a definite rejection proves
+                # that this submission did not create a task.
+                self._patch(owner,sid,rid,result={'project_id':pid,'asset_id':asset,'submitted':False})
+                raise
             except Uncertain:
                 try:
-                    receipt=await call('核对同键原任务回执','GET',prefix+'/submission-receipt?key='+quote(key,safe=''))
-                except BusinessError as exc:
-                    if exc.status in (404, 503): raise Uncertain() from None
-                    raise
+                    receipt=await call('核对同键原任务回执','GET',prefix+'/submission-receipt?key='+quote(key,safe=''),
+                                       reconcile_submission=True)
+                except BusinessError:
+                    raise Uncertain() from None
+                if not isinstance(receipt, dict): raise Uncertain()
                 task=receipt.get('task') or receipt
-                if not task.get('id'): raise Uncertain()
+                if not isinstance(task, dict) or not task.get('id'): raise Uncertain()
             result={'project_id':pid,'asset_id':asset,'task_id':task['id'],'submitted':True,'preflight':checked}
             self._patch(owner,sid,rid,task_id=task['id'],result=result)
+            if cancel.is_set(): raise Cancelled()
             await self._present(owner,sid,rid,cancel,'submitted',project_id=pid,asset_id=asset,task_id=task['id'])
             self._patch(owner,sid,rid,status='succeeded',message='已收到一次生成任务回执；原队列继续执行，候选完成不代表已审核或采用。',result=result)

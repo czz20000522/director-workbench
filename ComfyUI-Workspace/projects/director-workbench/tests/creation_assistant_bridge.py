@@ -1,12 +1,15 @@
 """Complete authenticated App fixture; only CPU synthetic video and fake provider."""
 import base64
+import asyncio
 import json
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
+import httpx
 from fastapi.testclient import TestClient
 
 from backend import app as backend
@@ -22,6 +25,8 @@ agent, other, queued = assistant.__wrapped__(clients, patch)
 backend.app.user_middleware[0].kwargs['origins'] = ('http://testserver', 'http://localhost:4197')
 backend.app.middleware_stack = None
 browser = TestClient(backend.app)
+submit_release = threading.Event()
+submission = {'posts': 0, 'lookups': 0, 'stops': 0, 'keys': []}
 video = root / 'synthetic.mp4'
 ffmpeg = sys.argv[2] if len(sys.argv) > 2 else shutil.which('ffmpeg')
 assert ffmpeg, 'Pass a local ffmpeg executable for the CPU video fixture'
@@ -31,6 +36,32 @@ subprocess.run([ffmpeg, '-nostdin', '-v', 'error', '-n', '-f', 'lavfi', '-i',
 print(json.dumps({'ready': True}), flush=True)
 for line in sys.stdin:
     request = json.loads(line)
+    if request.get('operation') == 'submission_stats':
+        print(json.dumps({'status': 200, 'data': submission}), flush=True)
+        continue
+    if request.get('operation') in ('hold_lost_task_response', 'release_lost_task_response'):
+        if request['operation'] == 'hold_lost_task_response':
+            submit_release.clear()
+            class LoseTaskResponse(httpx.AsyncBaseTransport):
+                async def handle_async_request(self, incoming):
+                    if incoming.method == 'POST' and incoming.url.path.endswith('/tasks'):
+                        submission['posts'] += 1
+                        reply = await httpx.ASGITransport(app=backend.app).handle_async_request(incoming)
+                        assert reply.is_success
+                        while not submit_release.is_set():
+                            await asyncio.sleep(.01)
+                        raise httpx.ReadTimeout('isolated response loss after real task accepted')
+                    if incoming.url.path.endswith('/submission-receipt'):
+                        submission['lookups'] += 1
+                        submission['keys'].append(incoming.url.params['key'])
+                    if incoming.url.path.endswith('/stop'):
+                        submission['stops'] += 1
+                    return await httpx.ASGITransport(app=backend.app).handle_async_request(incoming)
+            next(iter(backend.ASSISTANT_SERVICES.values())).transport_factory = LoseTaskResponse
+        else:
+            submit_release.set()
+        print(json.dumps({'status': 200, 'data': {'controlled': True}}), flush=True)
+        continue
     if request.get('operation') == 'stats':
         provider = next(iter(backend.ASSISTANT_SERVICES.values())).provider
         print(json.dumps({'status': 200, 'data': {'provider_calls': len(provider.calls), 'queued': len(queued)}}), flush=True)

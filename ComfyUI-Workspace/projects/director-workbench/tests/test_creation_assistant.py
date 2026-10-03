@@ -126,7 +126,12 @@ def test_human_intent_original_text_and_single_business_chain(assistant, text, m
 @pytest.mark.parametrize('text', ['未授权生成', '不要授权生成', '不允许生成一段视频',
     '别生成视频，只帮我整理', '请解释“生成一个看看”是什么意思', '教学示例：生成一段视频',
     '人物在屏幕上写着：授权生成', '引用材料：猫咪回家，生成一个看看',
-    '“生成一段5秒视频”', '只写草稿：猫咪回家，生成一个看看'])
+    '“生成一段5秒视频”', '只写草稿：猫咪回家，生成一个看看',
+    '生成一段5秒视频，但先别执行', '生成一段5秒视频，不过不要开始',
+    '生成一段5秒视频，暂时不要提交', '生成一段5秒视频，先暂停',
+    '生成一段5秒视频，无需开始', '生成一段5秒视频，不用执行',
+    '生成一段5秒视频，未允许开始', '生成一段5秒视频，没有确认开始',
+    '假设这是按钮文案：\n生成一个看看', '人物对白：\n生成一个看看'])
 def test_denied_quoted_or_advisory_generation_never_writes_business(assistant, text):
     a, _, queued = assistant
     sid = session(a)
@@ -239,6 +244,61 @@ def test_lost_submit_response_only_reads_same_key_and_never_resubmits(assistant,
     assert row['scope']['text'] == body['text']
     assert [s['name'] for s in row['steps']].count('提交一次小样，等待原队列') == 1
     assert a.post(f'/api/assistant/sessions/{sid}/requests', json=body).json()['id'] == row['id']
+    assert len(queued) == int(found)
+
+
+@pytest.mark.parametrize('found,lookup_error,reply_error', [
+    (True, None, None), (False, None, None), (False, 'timeout', None),
+    (False, 'unauthorized', None), (True, None, 500), (True, None, 503),
+    (False, None, 500),
+])
+def test_cancel_during_lost_submit_still_reads_original_receipt_without_reposting(assistant, found, lookup_error, reply_error):
+    a, _, queued = assistant
+    a.get('/api/assistant/sessions')
+    original_app = backend.app
+    sid = session(a)
+    requests = []
+    class CancelLostSubmit(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            requests.append((request.method, request.url.path, dict(request.url.params)))
+            if request.method == 'POST' and request.url.path.endswith('/tasks'):
+                if found:
+                    await httpx.ASGITransport(app=original_app).handle_async_request(request)
+                rid = json.loads(request.content)['idempotency_key'].removeprefix('assistant-')
+                cancelled = a.post(path(sid, rid) + '/cancel')
+                assert cancelled.status_code == 200
+                assert cancelled.json()['result']['submitted'] is None
+                if reply_error:
+                    return httpx.Response(reply_error, json={'detail': 'isolated uncertain server failure'})
+                raise httpx.ReadTimeout('isolated lost response after cancellation')
+            if request.url.path.endswith('/submission-receipt'):
+                if lookup_error == 'timeout': raise httpx.ReadTimeout('isolated receipt read failure')
+                if lookup_error == 'unauthorized': return httpx.Response(401, json={'detail': 'isolated session rejection'})
+            return await httpx.ASGITransport(app=original_app).handle_async_request(request)
+    service().transport_factory = CancelLostSubmit
+    body, _ = start(a, sid, '猫咪回家，生成一个看看')
+    row = wait(a, sid, body['request_id'])
+    key = 'assistant-' + body['request_id']
+    assert row['cancel_requested'] is True
+    assert row['idempotency_key'] == key
+    assert row['status'] == ('cancelled' if found else 'needs_reconcile'), row
+    assert row['result']['submitted'] is (True if found else None)
+    assert len(queued) == int(found)
+    assert len([request for request in requests if request[0] == 'POST' and request[1].endswith('/tasks')]) == 1
+    lookups = [request for request in requests if request[1].endswith('/submission-receipt')]
+    assert lookups == [('GET', f"/api/projects/{row['project_id']}/submission-receipt", {'key': key})]
+    if found:
+        task = a.get(f"/api/projects/{row['project_id']}/tasks/{row['task_id']}").json()
+        assert row['result']['task_id'] == task['id'] == queued[0]
+        assert task['payload']['submission_receipt']['key'] == key
+        assert '仍按原队列执行' in row['message']
+    else:
+        assert row['result']['submission_unknown'] is True
+        assert not row.get('task_id')
+    assert not any(request[1].endswith('/stop') for request in requests)
+    # A repeated read/cancel/start retains the original facts and never replays the POST.
+    assert a.post(path(sid, row['id']) + '/cancel').json()['result'] == row['result']
+    assert a.post(f'/api/assistant/sessions/{sid}/requests', json=body).json()['result'] == row['result']
     assert len(queued) == int(found)
 
 
