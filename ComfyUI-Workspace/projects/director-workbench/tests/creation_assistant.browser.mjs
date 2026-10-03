@@ -33,6 +33,11 @@ async function pollPage(page, predicate, argument) {
   }
   assert.fail('Authenticated HTTP state did not reach the expected condition');
 }
+async function reloadSelectedWork(page, panel) {
+  await page.reload();
+  await page.locator('.director-breadcrumb strong').filter({ hasText: '助手小样' }).waitFor();
+  await panel.getByRole('button', { name: /创作助手/ }).click();
+}
 const bundler = await build({ entryPoints: ['src/main.tsx'], absWorkingDir: process.cwd(), bundle: true,
   outfile: 'bundle.js', write: false, jsx: 'automatic', nodePaths: [process.env.DIRECTOR_TEST_NODE_MODULES || resolve('node_modules')] });
 const js = bundler.outputFiles.find(file => file.path.endsWith('.js')).text;
@@ -100,7 +105,7 @@ try {
   await call({ operation: 'complete', project_id: pid, task_id: taskId });
   await panel.getByRole('button', { name: '查看任务或候选' }).click();
   await page.waitForFunction(() => [...document.querySelectorAll('video')].some(video => video.readyState >= 2 && video.videoWidth === 64));
-  await page.reload(); await panel.getByRole('button', { name: /创作助手/ }).click();
+  await reloadSelectedWork(page, panel);
   const restored = await page.evaluate(async () => (await fetch('/api/assistant/sessions')).json());
   assert.equal(restored.sessions.flatMap(session => session.requests).find(row => row.result.submitted).task_id, taskId);
   const tasks = await page.evaluate(async pid => (await fetch(`/api/projects/${pid}/tasks`)).json(), pid);
@@ -123,6 +128,7 @@ try {
   });
   assert.equal(owned.request.presentation_target, targets[0]);
   await otherTab.reload();
+  await otherTab.locator('.director-breadcrumb strong').filter({ hasText: '助手小样' }).waitFor();
   const otherPanel = otherTab.getByRole('complementary', { name: '创作助手' });
   await otherPanel.getByRole('button', { name: /创作助手/ }).click();
   await otherPanel.getByRole('button', { name: '等待当前请求回执', exact: true }).waitFor();
@@ -144,7 +150,7 @@ try {
   assert.equal((await call({ operation: 'stats' })).data.queued, 1);
   await otherTab.close();
   await page.locator('[aria-label="添加分镜"] textarea').first().fill('');
-  await page.reload(); await panel.getByRole('button', { name: /创作助手/ }).click();
+  await reloadSelectedWork(page, panel);
   await panel.getByLabel('你的想法').fill('只写草稿：绿色猫咪回家');
   await panel.getByRole('button', { name: '发送', exact: true }).click();
   const editor = page.locator('[aria-label="添加分镜"] textarea').first();
@@ -178,7 +184,7 @@ try {
   assert.equal(cached[0].request.id, lostRequest);
   assert.equal(cached[0].request.text, '只写草稿：未知网络回执仍保留原文');
   loseReply = false;
-  await page.reload(); await panel.getByRole('button', { name: /创作助手/ }).click();
+  await reloadSelectedWork(page, panel);
   await panel.getByLabel('未保存助手草稿').filter({ hasText: '只写草稿：未知网络回执仍保留原文' }).waitFor();
   const afterLost = (await call({ operation: 'stats' })).data;
   assert.equal(afterLost.provider_calls, beforeLost.provider_calls + 1);
@@ -189,7 +195,7 @@ try {
   await page.getByRole('navigation', { name: '工作台功能' }).getByRole('button', { name: '分镜制作', exact: true }).click();
   if (await page.locator('[aria-label="添加分镜"] textarea').count() === 0) await page.getByRole('button', { name: '+ 添加分镜', exact: true }).click();
   await page.locator('[aria-label="添加分镜"] textarea').first().fill('');
-  await page.reload(); await panel.getByRole('button', { name: /创作助手/ }).click();
+  await reloadSelectedWork(page, panel);
   await call({ operation: 'hold_lost_task_response' });
   await panel.getByLabel('你的想法').fill('丢失任务回执的猫咪，生成一个看看');
   await panel.getByRole('button', { name: '发送', exact: true }).click();
