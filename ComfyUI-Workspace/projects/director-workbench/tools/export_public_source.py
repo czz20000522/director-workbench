@@ -8,7 +8,7 @@ import subprocess
 
 PROJECT = Path(__file__).resolve().parents[1]
 ROOT = PROJECT.parents[2]
-SUFFIXES = {'.py', '.ts', '.tsx', '.json', '.md', '.ps1', '.html', '.css', '.svg', '.txt', '.yml', '.mjs'}
+SUFFIXES = {'.py', '.ts', '.tsx', '.json', '.md', '.ps1', '.cmd', '.html', '.css', '.svg', '.txt', '.yml', '.mjs'}
 PRIVATE_PARTS = {'.git', '.config', 'config', '.venv', 'node_modules', 'runtime', 'input', 'output',
                  'workspaces', 'private-workspaces', 'reviews', 'logs', 'dist', '__pycache__'}
 SENSITIVE = re.compile(r'sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|'
