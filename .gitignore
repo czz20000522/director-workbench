@@ -322,3 +322,6 @@
 !/ComfyUI-Workspace/projects/director-workbench/tests/test_enhancement.py
 !/ComfyUI-Workspace/projects/director-workbench/tests/enhancement.browser.mjs
 !/ComfyUI-Workspace/projects/director-workbench/docs/media-enhancement.md
+
+# Adult creative partition (recipe selection is pinned by tests)
+!/ComfyUI-Workspace/projects/director-workbench/tests/test_adult_profiles.py

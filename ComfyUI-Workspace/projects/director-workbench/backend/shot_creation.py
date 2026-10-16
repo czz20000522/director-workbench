@@ -2,6 +2,16 @@
 from . import production_presets as presets
 from mcp_server.creation_inputs import GenerationSettings
 
+# Both adult LoRAs (Qwen Anything2Real Characters and Qwen Anime Consistency)
+# are loaded on the keyframe image path only, see backend/keyframes.py. The
+# video path has a single adult recipe family and it covers just one
+# combination, so the remaining requests must be reported instead of silently
+# echoing the requested profile back as if it had been applied.
+FALLBACK_NOTES = {
+    'adult-anime': '动漫质感目前只在关键帧图像加载 Qwen Anime Consistency；视频生成没有对应的成人向配方，本次使用 H3 原生模型。',
+    'adult-realism': '真人质感视频配方目前只在 16:9、标准步数且未绑定表演声音时可用；本次组合使用该画幅的原生配方。',
+}
+
 
 def resolve(settings, *, first=None, last=None, guide=None):
     aspect = settings['aspect_ratio']
@@ -39,10 +49,16 @@ def resolve(settings, *, first=None, last=None, guide=None):
             recipe = presets.END_PRESET_IDS[shapes.index(aspect)]
         else:
             recipe = presets.NATIVE_LANDSCAPE_PRESET_ID if aspect == '16:9' else presets.NATIVE_SQUARE_PRESET_ID if aspect == '1:1' else presets.NATIVE_PORTRAIT_PRESET_ID
+    if creative == 'general' or recipe in presets.ADULT_PRESET_IDS:
+        applied, note = True, ''
+    else:
+        applied, note = False, FALLBACK_NOTES[creative]
     return {'preset_id': recipe, 'generation_mode': 'image_to_video' if first else 'text_to_video',
             'aspect_ratio': aspect, 'megapixels': presets.megapixels(recipe),
             'turbo_sampling': 'enable' if presets.turbo_default(recipe) else 'disable',
             'speed_profile': speed,
             'creative_profile': creative,
+            'creative_profile_applied': applied,
+            'creative_profile_note': note,
             'sound_mode': sound if guide else 'native',
             'selection_basis': {'first_frame_bound': bool(first), 'last_frame_bound': bool(last), 'performance_audio_bound': bool(guide)}}
