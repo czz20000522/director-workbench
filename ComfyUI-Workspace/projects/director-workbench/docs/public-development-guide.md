@@ -84,7 +84,7 @@ npm run build
 .\start_private_workbench.ps1 -AdminUsers user001
 ```
 
-账号工具不回显密码；账号摘要留在本机 `ComfyUI-Workspace/runtime/director-private`。启动脚本要求显式指定已存在的管理员，使用 `backend.private_app:app`、单 worker，默认监听 `127.0.0.1:4100` 并服务已构建的页面。不要以不带认证的 `backend.app:app` 对外提供服务。
+账号工具不回显密码；账号摘要留在本机 `ComfyUI-Workspace/runtime/director-private`。启动脚本使用 `backend.private_app:app`、单 worker，默认监听 `0.0.0.0:4100` 并服务已构建的页面；启动时自动生成 loopback、局域网、Tailscale IPv4 和主机名的精确 Origin 白名单。只需本机访问时显式传 `-HostAddress 127.0.0.1`。不要以不带认证的 `backend.app:app` 对外提供服务。
 
 首次启动允许没有 `projects/catalog.json` 或默认作品：服务以空作品状态启动，不在导入时创建示例作品、计划或私人 manifest；本人作品列表为空，通过 UI/API 创建实际作品后才登记数据。仍须先安装依赖、构建页面、创建账号、指定管理员并配置资产根，不能从已有生产环境复制私人目录作为部署模板。
 
@@ -97,7 +97,7 @@ npm run build
 | `-AccountsFile` / `DIRECTOR_ACCOUNTS_FILE` | 哈希账号文件，须在允许的服务器根内 |
 | `-WorkspaceRoot` / `DIRECTOR_PRIVATE_ROOT` | 私人作品根，须通过服务端允许列表与无链接校验 |
 | `-AdminUsers` / `DIRECTOR_ADMIN_USERS` | 已创建管理员，逗号分隔 |
-| `-HostAddress`、`-Port`、`-Origins` | 监听地址/端口和允许的完整浏览器 Origin |
+| `-HostAddress`、`-Port`、`-Origins` | 监听地址/端口和允许的完整浏览器 Origin；未传 `-Origins` 时自动生成精确列表 |
 | `DIRECTOR_COMFY_URL` | 内部 ComfyUI 地址，默认 `http://127.0.0.1:8188` |
 | `DIRECTOR_COOKIE_SECURE=1` | HTTPS 部署使用 Secure Cookie |
 
@@ -107,7 +107,9 @@ npm run build
 
 ComfyUI 引擎恢复使用正式入口 `tools/restore_comfy_engine.py`。先用工作台解释器执行该文件（默认只检查安装、配置和端口，不启动）；仅在已授权的维护窗口加 `--launch`。它读取本机资产配置，使用桌面版 `.venv`、D 盘共享模型/temp 和配置的 E 盘 input/output，监听本机 8188。引擎端口被占用或上一启动仍存活时拒绝重复启动；健康等待超时须核对已有进程和日志，不能盲目重发。入口使用 Windows 隐藏进程启动，日志与启动回执保存在隔离 runtime，不提交；不停止现有引擎、不提交生成。完整引擎启动后的窗口、唯一监听和模型加载仍需实际验收。
 
-现有私人网络可通过客户机 SSH 隧道访问服务器 `127.0.0.1:4100`，或由维护者配置指定监听地址及精确 Origin。浏览器 Origin 包含协议、主机和端口，不带末尾斜杠；非 loopback 启动必须提供 `-Origins`。客户端接入工作台服务，不直接公开 ComfyUI 端口。尾网、SSH 用户/密钥与地址由维护者通过私人渠道提供。
+现有私人网络可通过客户机 SSH 隧道访问服务器 `127.0.0.1:4100`，例如 `ssh -N -L 4100:127.0.0.1:4100 czh@<服务器地址>`，也可由维护者配置指定监听地址及精确 Origin。浏览器 Origin 包含协议、主机和端口，不带末尾斜杠；脚本会自动收集本机可用 IPv4，固定域名或反向代理则显式传 `-Origins`。客户端接入工作台服务，不直接公开 ComfyUI 端口。尾网、SSH 用户/密钥与地址由维护者通过私人渠道提供。
+
+跨设备验收至少检查两条链路：远端浏览器打开与页面完全相同的工作台地址（协议、主机、端口必须一致），登录后上传一个素材，再打开一个已有图片或视频；同时从服务器本机重复一次。若上传只显示 `Failed to fetch`，先看浏览器请求是否命中工作台端口，而不是只打开了 Vite 原型端口；再确认启动脚本的 `-Origins` 包含浏览器地址的完整 Origin。认证层会对允许的 Origin 回应上传所需的 `OPTIONS` 预检，未列入白名单的来源仍会被拒绝。媒体地址由工作台返回为同源 `/media-file?...`，不要把 `127.0.0.1` 或服务器磁盘路径复制到另一台设备的地址栏。
 
 上线前先检查登录、`/api/auth/me`、`/api/health`、本人作品列表与未授权访问拒绝。`health.ok=true` 只说明工作台处理了请求，还需读取 `comfy.online`；声音、图片与媒体工具各自查看 `/api/speech-capability`、`/api/keyframe-capability`、`/api/media-capability`。模型/节点缺失应由能力检查及预检返回，不能盲目提交生成。
 

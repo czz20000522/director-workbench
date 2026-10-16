@@ -9,7 +9,7 @@ import json
 from typing import Callable
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 
 from .private_sessions import AuthenticationError, SessionManager
 from .user_context import SessionIdentity
@@ -71,14 +71,43 @@ class PrivateAuth:
         if not protected:
             return await self.app(scope, receive, send)
 
+        def response_headers(extra=None):
+            headers = dict(extra or {})
+            headers.setdefault('Cache-Control', 'no-store')
+            if origin is not None and origin in self.origins:
+                headers.update({
+                    'Access-Control-Allow-Origin': origin,
+                    'Access-Control-Allow-Credentials': 'true',
+                    'Vary': 'Origin',
+                })
+            return headers
+
         async def respond(status, detail):
-            await JSONResponse({'detail': detail}, status_code=status, headers={'Cache-Control': 'no-store'})(scope, receive, send)
+            headers = response_headers()
+            await JSONResponse({'detail': detail}, status_code=status, headers=headers)(scope, receive, send)
 
         origin = request.headers.get('origin')
         if origin is not None and origin not in self.origins:
             return await respond(403, '请求来源未获允许')
+        # A browser sends this unauthenticated preflight when the UI is
+        # reached through a dev proxy, reverse proxy, or another approved
+        # origin and the session binding header is present.  It must be
+        # answered before cookie authentication; otherwise the browser only
+        # reports a generic "Failed to fetch" and never sends the upload.
+        if method == 'OPTIONS' and origin is not None:
+            requested_headers = request.headers.get('access-control-request-headers', '')
+            headers = {
+                'Access-Control-Allow-Origin': origin,
+                'Access-Control-Allow-Credentials': 'true',
+                'Access-Control-Allow-Methods': 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS',
+                'Access-Control-Allow-Headers': requested_headers or 'Content-Type, X-Workspace-User, Authorization',
+                'Access-Control-Max-Age': '600',
+                'Cache-Control': 'no-store',
+                'Vary': 'Origin, Access-Control-Request-Headers',
+            }
+            return await Response(status_code=204, headers=headers)(scope, receive, send)
         if path == '/api/auth/config' and method == 'GET':
-            return await JSONResponse({'enabled': True}, headers={'Cache-Control': 'no-store'})(scope, receive, send)
+            return await JSONResponse({'enabled': True}, headers=response_headers())(scope, receive, send)
         if path == '/api/auth/login' and method == 'POST':
             if request.headers.get('content-type', '').split(';')[0].strip() != 'application/json':
                 return await respond(415, '登录请求需要 JSON')
@@ -99,7 +128,7 @@ class PrivateAuth:
                 self.sessions.logout(old_token)
             identity = self.sessions.lookup(token)
             principal = Principal(identity, token, identity.username in self.administrators)
-            response = JSONResponse(self.public_identity(principal), headers={'Cache-Control': 'no-store'})
+            response = JSONResponse(self.public_identity(principal), headers=response_headers())
             response.set_cookie(COOKIE, token, httponly=True, secure=self.secure_cookie,
                                 samesite='strict', path='/', max_age=int(self.sessions.ttl_seconds))
             return await response(scope, receive, send)
@@ -117,10 +146,10 @@ class PrivateAuth:
             if origin is None:
                 return await respond(403, '浏览器写入需要同源请求')
         if path == '/api/auth/me' and method == 'GET':
-            return await JSONResponse(self.public_identity(principal), headers={'Cache-Control': 'no-store'})(scope, receive, send)
+            return await JSONResponse(self.public_identity(principal), headers=response_headers())(scope, receive, send)
         if path == '/api/auth/logout' and method == 'POST':
             self.sessions.logout(principal.token)
-            response = JSONResponse({'logged_out': True}, headers={'Cache-Control': 'no-store'})
+            response = JSONResponse({'logged_out': True}, headers=response_headers())
             response.delete_cookie(COOKIE, path='/', httponly=True, secure=self.secure_cookie, samesite='strict')
             return await response(scope, receive, send)
         if path.startswith('/api/auth/'):
@@ -139,7 +168,15 @@ class PrivateAuth:
                     return
                 if message['type'] == 'http.response.start':
                     message = dict(message)
-                    message['headers'] = [(k, v) for k, v in message.get('headers', []) if k.lower() != b'cache-control'] + [(b'cache-control', b'no-store')]
+                    existing = [(k, v) for k, v in message.get('headers', []) if k.lower() not in {b'cache-control', b'access-control-allow-origin', b'access-control-allow-credentials', b'vary'}]
+                    existing.append((b'cache-control', b'no-store'))
+                    if origin is not None and origin in self.origins:
+                        existing.extend([
+                            (b'access-control-allow-origin', origin.encode()),
+                            (b'access-control-allow-credentials', b'true'),
+                            (b'vary', b'Origin'),
+                        ])
+                    message['headers'] = existing
                 elif message['type'] == 'http.response.body' and self.sessions.lookup(principal.token) is None:
                     # Covers long-lived SSE and streaming downloads after logout.
                     ended = True

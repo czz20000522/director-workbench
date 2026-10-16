@@ -73,7 +73,14 @@ def extract_materials(source: Path, output: Path, facts: dict[str, Any], frame_c
 
 
 def rel(path: Path) -> str:
-    return path.resolve().relative_to(ROOT.resolve()).as_posix()
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(ROOT.resolve()).as_posix()
+    except ValueError:
+        # Private works and derived frames live under the configured E: storage
+        # root. Keep the authorized absolute reference so media-file can enforce
+        # ownership; never fabricate a D: relative path.
+        return resolved.as_posix()
 
 
 def recommended_frame_count(duration_seconds: float) -> int:

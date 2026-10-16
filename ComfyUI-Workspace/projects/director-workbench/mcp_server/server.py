@@ -487,11 +487,12 @@ def create_server(base_url: str, transport: httpx.AsyncBaseTransport | None = No
     @server.tool(annotations=write_record)
     async def submit_keyframe(project_id: str, prompt: str, idempotency_key: str, reference_image: str | None = None,
                               seed: int = 340921, mode: Literal['reference', 'text'] = 'reference',
-                              width: int = 768, height: int = 1344) -> dict[str, Any]:
-        """生成独立图片候选。reference 需参考图片；text 不传图片、可设画幅。断线保留原键查回执，不自动采用首尾帧。"""
+                              width: int = 768, height: int = 1344,
+                              creative_profile: Literal['general', 'adult-realism', 'adult-anime'] = 'general') -> dict[str, Any]:
+        """生成独立图片候选。reference 需参考图片；text 不传图片、可设画幅。成人向配置仅支持虚构成年人和非露骨内容；断线保留原键查回执，不自动采用首尾帧。"""
         return await request('POST', project_path(project_id) + '/keyframe-tasks', json={
             'prompt': prompt, 'reference_image': reference_image, 'idempotency_key': idempotency_key,
-            'seed': seed, 'mode': mode, 'width': width, 'height': height})
+            'seed': seed, 'mode': mode, 'width': width, 'height': height, 'creative_profile': creative_profile})
 
     @server.tool(annotations=read_only)
     async def get_speech_capability() -> dict[str, Any]:

@@ -76,6 +76,41 @@ def test_cross_origin_missing_tab_and_stale_tab(private_client):
     assert client.get('/api/probe', headers={'authorization': 'Bearer ' + first}).status_code == 401
 
 
+def test_allowed_origin_preflight_is_answered_before_auth(private_client):
+    client, _, _ = private_client
+    response = client.options('/api/projects/demo/upload', headers={
+        'Origin': 'http://testserver',
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'content-type,x-workspace-user',
+    })
+    assert response.status_code == 204
+    assert response.headers['access-control-allow-origin'] == 'http://testserver'
+    assert response.headers['access-control-allow-credentials'] == 'true'
+    assert 'x-workspace-user' in response.headers['access-control-allow-headers']
+
+
+def test_auth_bootstrap_responses_expose_allowed_origin(private_client):
+    client, _, _ = private_client
+    config = client.get('/api/auth/config', headers={'Origin': 'http://testserver'})
+    assert config.status_code == 200
+    assert config.headers['access-control-allow-origin'] == 'http://testserver'
+    login_response = login(client)
+    assert login_response.headers['access-control-allow-origin'] == 'http://testserver'
+    me = client.get('/api/auth/me', headers={'Origin': 'http://testserver'})
+    assert me.status_code == 200
+    assert me.headers['access-control-allow-origin'] == 'http://testserver'
+
+
+def test_disallowed_origin_preflight_is_rejected(private_client):
+    client, _, _ = private_client
+    response = client.options('/api/projects/demo/upload', headers={
+        'Origin': 'http://evil.test',
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'content-type',
+    })
+    assert response.status_code == 403
+
+
 def test_bearer_and_password_revocation(private_client):
     client, sessions, accounts = private_client
     token = sessions.login('user002', 'test-two')

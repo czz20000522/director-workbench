@@ -19,6 +19,7 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[4]
 PORT = 8188
+DEFAULT_HEALTH_TIMEOUT = 240
 
 
 def launch_plan(root):
@@ -103,7 +104,7 @@ def launch_lock(runtime):
             msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
 
 
-def restore(plan, timeout=120):
+def restore(plan, timeout=DEFAULT_HEALTH_TIMEOUT):
     options = hidden_options()
     runtime = plan['runtime']
     with launch_lock(runtime):
@@ -155,9 +156,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, default=ROOT)
     parser.add_argument('--launch', action='store_true', help='Start one engine only if the port is free')
+    parser.add_argument('--health-timeout', type=int, default=DEFAULT_HEALTH_TIMEOUT,
+                        help=f'Wait this many seconds for /system_stats after launch (default: {DEFAULT_HEALTH_TIMEOUT})')
     options = parser.parse_args(argv)
     plan = launch_plan(options.root)
-    result = restore(plan) if options.launch else {**plan, 'port_occupied': port_occupied(), 'submitted_gpu': False}
+    result = restore(plan, timeout=options.health_timeout) if options.launch else {**plan, 'port_occupied': port_occupied(), 'submitted_gpu': False}
     print(json.dumps(result, ensure_ascii=False, default=str))
 
 

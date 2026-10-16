@@ -63,7 +63,7 @@ def test_mcp_text_image_without_reference(preset_client, monkeypatch):
             async def call(name, args):
                 return (await client.call_tool(name, args)).structured_content
             capability = await call('get_keyframe_capability', {'mode': 'text'})
-            assert capability['data']['engine'] == 'Krea 2 Turbo'
+            assert capability['data']['engine'] == 'Qwen Image 2.1'
             assert not capability['data']['requires_reference_image']
             args = {'project_id': 'preset-test', 'mode': 'text', 'prompt': '新的角色', 'idempotency_key': 'text-mcp'}
             first = await call('submit_keyframe', args)

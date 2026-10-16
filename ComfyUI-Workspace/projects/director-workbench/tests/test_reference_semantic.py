@@ -189,3 +189,11 @@ def test_run_analysis_reuses_complete_visual_checkpoint(tmp_path: Path, monkeypa
 
     assert result["received"] == observations
     assert result["analysis_route"]["frames_analyzed"] == 2
+
+
+def test_resolve_root_path_accepts_authorized_absolute_media_path(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(reference_semantic, "ROOT", tmp_path / "workspace-root")
+    media = tmp_path / "private" / "frames" / "frame.jpg"
+    media.parent.mkdir(parents=True)
+    media.write_bytes(b"frame")
+    assert reference_semantic.resolve_root_path(str(media)) == media.resolve()

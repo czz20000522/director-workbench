@@ -10,7 +10,7 @@ MIN_SECONDS = 4
 MAX_SECONDS = 15
 
 
-def plan(requested_seconds: Any, aspect_ratio: str = '1:1') -> dict[str, Any]:
+def plan(requested_seconds: Any, aspect_ratio: str = '1:1', megapixels: float = 0.4) -> dict[str, Any]:
     """Mirror this installation's ComfyMathExpression and H3 17k+5 grid."""
     if isinstance(requested_seconds, bool):
         raise ValueError('H3 请求时长必须是 4–15 秒的有限数字')
@@ -24,13 +24,22 @@ def plan(requested_seconds: Any, aspect_ratio: str = '1:1') -> dict[str, Any]:
         raise ValueError('H3 画幅未登记')
     requested_frames = max(5, round(seconds * FPS))
     aligned_frames = requested_frames + (5 - requested_frames % 17) % 17
-    dimensions = {'1:1': (640, 640), '16:9': (864, 480), '9:16': (480, 864)}
-    width, height = dimensions[aspect_ratio]
+    try:
+        target_pixels = float(megapixels) * 1024 * 1024
+    except (TypeError, ValueError) as exc:
+        raise ValueError('H3 目标画布必须是有效的像素档位') from exc
+    if not math.isfinite(target_pixels) or target_pixels <= 0:
+        raise ValueError('H3 目标画布必须是有效的像素档位')
+    ratios = {'1:1': (1, 1), '16:9': (16, 9), '9:16': (9, 16)}
+    w_ratio, h_ratio = ratios[aspect_ratio]
+    scale = math.sqrt(target_pixels / (w_ratio * h_ratio))
+    width = round(w_ratio * scale / 32) * 32
+    height = round(h_ratio * scale / 32) * 32
     return {
         'requested_seconds': seconds, 'requested_frames': requested_frames,
         'frame_count': aligned_frames, 'playback_seconds': round(aligned_frames / FPS, 3),
         'fps': FPS, 'width': width, 'height': height,
-        'aspect_ratio': aspect_ratio, 'megapixels': 0.4,
+        'aspect_ratio': aspect_ratio, 'megapixels': float(megapixels),
     }
 
 
