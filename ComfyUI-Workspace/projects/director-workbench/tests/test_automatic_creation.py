@@ -47,7 +47,7 @@ def create(client, **changes):
         'segment_id': 'S01', 'duration_seconds': 4, 'prompt': 'A quiet antique shop, a clock ticks.', **changes})
 
 
-@pytest.mark.parametrize('aspect,size', [('16:9', (864, 480)), ('1:1', (640, 640)), ('9:16', (480, 864))])
+@pytest.mark.parametrize('aspect,size', [('16:9', (1344, 768)), ('1:1', (1024, 1024)), ('9:16', (768, 1344))])
 @pytest.mark.parametrize('duration,frames', [(4,107), (7.3,175), (15,362)])
 def test_text_only_from_saved_intent_without_install_or_stage(preset_client, aspect, size, duration, frames):
     client, _ = preset_client

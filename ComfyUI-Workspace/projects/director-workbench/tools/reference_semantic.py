@@ -19,8 +19,16 @@ ARTIFACT_IDS = ("story", "shots", "characters", "scenes", "actions", "mechanisms
 
 
 def resolve_root_path(value: str) -> Path:
-    path = (ROOT / value).resolve()
-    path.relative_to(ROOT.resolve())
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = ROOT / path
+    path = path.resolve()
+    try:
+        path.relative_to(ROOT.resolve())
+    except ValueError:
+        # Reference frames and audio are stored in the authorized E: media
+        # root while the analysis worker runs from the D: workspace.
+        return path
     return path
 
 

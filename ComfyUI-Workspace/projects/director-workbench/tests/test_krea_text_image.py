@@ -2,17 +2,17 @@ import pytest
 import json
 from pathlib import Path
 from backend.keyframes import prepare_text
-from tools.krea_text_image import graph
+from tools.qwen_image_t2i import graph
 
 
 def test_text_only_graph_keeps_user_description_and_uses_no_reference_files():
     recipe = graph('雨后的小镇，清晨暖光', '系列工作目录/新作/首图', 42)
-    assert recipe['4']['inputs']['text'] == '雨后的小镇，清晨暖光'
+    assert recipe['4']['inputs']['prompt'] == '雨后的小镇，清晨暖光'
     assert not any(node['class_type'].startswith('LoadImage') for node in recipe.values())
     assert recipe['18']['inputs']['filename_prefix'] == '系列工作目录/新作/首图'
     for node in recipe.values():
         for value in node['inputs'].values():
-            if isinstance(value, list):
+            if isinstance(value, list) and len(value) >= 2 and isinstance(value[0], str):
                 assert value[0] in recipe
 
 

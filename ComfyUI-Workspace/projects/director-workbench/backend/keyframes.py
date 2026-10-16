@@ -8,27 +8,38 @@ from pathlib import Path, PurePosixPath
 import av
 
 from tools.qwen_image_edit import graph
-from tools.krea_text_image import graph as text_graph
+from tools.qwen_image_t2i import graph as text_graph
+
+
+def _image_lora(profile: str | None) -> str | None:
+    return {
+        'adult-realism': r'adult-safe\Qwen2.1_Anything2RealCharacters.safetensors',
+        'adult-anime': r'adult-safe\Qwen2.1_Anime_consistency.safetensors',
+    }.get(profile or 'general')
 
 
 def prepare_text(task_id: str, prompt: str, snapshot_root: Path, output_prefix: str,
-                 seed: int, width: int = 768, height: int = 1344) -> dict:
+                 seed: int, width: int = 768, height: int = 1344,
+                 creative_profile: str = 'general') -> dict:
     if not task_id or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for c in task_id):
         raise ValueError('关键帧任务 ID 无效')
-    recipe = text_graph(prompt, output_prefix, seed, width, height)
+    recipe = text_graph(prompt, output_prefix, seed, width, height, _image_lora(creative_profile))
     directory = snapshot_root / task_id
     directory.mkdir(parents=True, exist_ok=False)
     workflow = directory / 'workflow.json'
     workflow.write_text(json.dumps(recipe, ensure_ascii=False, indent=2), encoding='utf-8')
-    request = {'task_id': task_id, 'mode': 'text', 'engine': 'Krea 2 Turbo', 'prompt': prompt,
+    request = {'task_id': task_id, 'mode': 'text', 'engine': 'Qwen Image 2.1', 'creative_profile': creative_profile, 'prompt': prompt,
                'seed': seed, 'output_prefix': output_prefix, 'width': width, 'height': height}
     (directory / 'request.json').write_text(json.dumps(request, ensure_ascii=False, indent=2), encoding='utf-8')
     return {'kind': 'keyframe', 'workflow': str(workflow.resolve()), 'request': request}
 
 
-def capability(object_info: dict, mode: str = 'reference') -> dict:
+def capability(object_info: dict, mode: str = 'reference', creative_profile: str = 'general') -> dict:
     """Use the running ComfyUI registry, including its actual model choices."""
-    recipe = text_graph('能力检查', 'keyframe', 0) if mode == 'text' else graph(Path('reference.png'), '', 'keyframe', 0)
+    if creative_profile not in {'general', 'adult-realism', 'adult-anime'}:
+        raise ValueError('创作分区无效')
+    image_lora = _image_lora(creative_profile) if mode == 'text' else None
+    recipe = text_graph('能力检查', 'keyframe', 0, lora_name=image_lora) if mode == 'text' else graph(Path('reference.png'), '', 'keyframe', 0)
     missing_nodes, missing_models = set(), set()
     for node in recipe.values():
         name = node['class_type']
@@ -37,16 +48,17 @@ def capability(object_info: dict, mode: str = 'reference') -> dict:
             missing_nodes.add(name)
             continue
         required = definition.get('input', {}).get('required', {})
-        for field in ('clip_name', 'unet_name', 'vae_name'):
+        for field in ('clip_name', 'unet_name', 'vae_name', 'lora_name'):
             if field not in node['inputs']:
                 continue
             specification = required.get(field, [])
             choices = specification[0] if specification and isinstance(specification[0], list) else []
             if node['inputs'][field] not in choices:
                 missing_models.add(node['inputs'][field])
-    return {'available': not missing_nodes and not missing_models, 'engine': 'Krea 2 Turbo' if mode == 'text' else 'Qwen Image Edit 2511',
-            'requires_reference_image': mode != 'text', 'missing_nodes': sorted(missing_nodes),
-            'missing_models': sorted(missing_models), 'note': '节点与模型登记就绪不代表显存充足或画面质量已确认'}
+    return {'available': not missing_nodes and not missing_models, 'engine': 'Qwen Image 2.1' if mode == 'text' else 'Qwen Image Edit 2511',
+            'requires_reference_image': mode != 'text', 'creative_profile': creative_profile,
+            'missing_nodes': sorted(missing_nodes), 'missing_models': sorted(missing_models),
+            'note': '节点与模型登记就绪不代表显存充足或画面质量已确认'}
 
 
 def read_result(history: dict, prompt_id: str, payload: dict, output_root: Path) -> dict | None:
@@ -70,7 +82,7 @@ def read_result(history: dict, prompt_id: str, payload: dict, output_root: Path)
 
 
 def prepare(task_id: str, prompt: str, reference: Path, snapshot_root: Path,
-            output_prefix: str, seed: int) -> dict:
+            output_prefix: str, seed: int, creative_profile: str = 'general') -> dict:
     """Build an isolated recipe, without submitting or changing a shot's selection.
 
     The API caller must resolve reference and snapshot_root within the project's
@@ -101,10 +113,13 @@ def prepare(task_id: str, prompt: str, reference: Path, snapshot_root: Path,
     directory.mkdir(parents=True, exist_ok=False)
     frozen = directory / ('reference' + reference.suffix.lower())
     shutil.copy2(reference, frozen)
+    # The adult image adapters were trained for Qwen Image 2.1 T2I; keep
+    # reference-edit mode on its native graph until a matching edit adapter is
+    # installed and verified.
     recipe = graph(frozen.resolve(), prompt, output_prefix, seed, (width, height))
     workflow = directory / 'workflow.json'
     workflow.write_text(json.dumps(recipe, ensure_ascii=False, indent=2), encoding='utf-8')
-    request = {'task_id': task_id, 'prompt': prompt, 'reference_image': str(frozen.resolve()),
+    request = {'task_id': task_id, 'creative_profile': creative_profile, 'prompt': prompt, 'reference_image': str(frozen.resolve()),
                'seed': seed, 'output_prefix': output_prefix,
                'reference_width': width, 'reference_height': height,
                'width': recipe['16']['inputs']['width'], 'height': recipe['16']['inputs']['height']}

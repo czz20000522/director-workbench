@@ -191,6 +191,48 @@ def test_native_landscape_preset_freezes_first_frame_without_audio_guide(preset_
     assert frozen['115']['inputs']['aspect_ratio'] == '16:9 (Widescreen)'
 
 
+def test_text_video_preset_uses_quality_canvas_and_standard_sampling(preset_client):
+    client, _ = preset_client
+    preset_id = production_presets.TEXT_LANDSCAPE_PRESET_ID
+    response = client.post(f'/api/projects/preset-test/production-presets/{preset_id}')
+    assert response.status_code == 200, response.text
+    manifest = response.json()['project']
+    graph = json.loads(backend.resolve_registered_path(manifest['production_preset']['workflow']).read_text(encoding='utf-8'))
+    assert graph['115']['inputs'] == {'aspect_ratio': '16:9 (Widescreen)', 'megapixels': 0.98, 'multiple': 32}
+    assert graph['105:126']['inputs']['value'] is False
+    assert '114' not in graph and 'aigc:load-audio-guide' not in graph
+
+
+def test_validated_fast_profiles_are_explicit_and_keep_standard_recipe(preset_client):
+    client, _ = preset_client
+    from backend import shot_creation
+    text_id = production_presets.FAST_TEXT_LANDSCAPE_PRESET_ID
+    image_id = production_presets.FAST_IMAGE_LANDSCAPE_PRESET_ID
+    text_graph = production_presets.load_recipe(text_id)
+    image_graph = production_presets.load_recipe(image_id)
+    assert text_graph['115']['inputs'] == {'aspect_ratio': '16:9 (Widescreen)', 'megapixels': 0.98, 'multiple': 32}
+    assert text_graph['105:121']['inputs']['lora_name'] == 'minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors'
+    assert text_graph['105:17']['inputs']['sampler_name'] == 'euler'
+    assert text_graph['105:9']['inputs']['scheduler'] == 'beta'
+    assert text_graph['105:9']['inputs']['steps'] == 8
+    assert text_graph['h3-fast-sigma-shift']['inputs']['shift_video'] == 12.0
+    assert text_graph['h3-fast-kitchen']['inputs']['attention'] == 'comfy kitchen attention'
+    assert image_graph['115']['inputs']['megapixels'] == 0.4
+    assert image_graph['105:9']['inputs']['steps'] == 8
+    assert '114' in image_graph and 'aigc:add-audio-guide' not in image_graph
+    assert shot_creation.resolve({'aspect_ratio': '16:9', 'sound_mode': 'performance_reference', 'speed_profile': 'fast'})['preset_id'] == text_id
+    assert shot_creation.resolve({'aspect_ratio': '16:9', 'sound_mode': 'performance_reference', 'speed_profile': 'fast'}, first='frame.png')['preset_id'] == image_id
+    with pytest.raises(ValueError, match='仅支持 16:9'):
+        shot_creation.resolve({'aspect_ratio': '1:1', 'sound_mode': 'performance_reference', 'speed_profile': 'fast'})
+    fast = client.post(f'/api/projects/preset-test/production-presets/{text_id}')
+    assert fast.status_code == 200, fast.text
+    manifest = fast.json()['project']
+    assert manifest['production_preset']['id'] == text_id
+    assert any(stage['id'] == production_presets.stage_id(text_id) for stage in manifest['pipeline'])
+    standard = production_presets.load_recipe(production_presets.TEXT_LANDSCAPE_PRESET_ID)
+    assert standard['105:9']['inputs']['steps'] == ['105:123', 0]
+
+
 def test_native_square_preset_is_independent_and_freezes_640_square_graph(preset_client):
     client, project = preset_client
     landscape_id = production_presets.NATIVE_LANDSCAPE_PRESET_ID

@@ -18,7 +18,7 @@ type Edit = {
   target_duration_seconds: number;
   timing_summary?: { playback_seconds: number; frame_count: number; precision: string; segments: { segment_id: string; start_seconds: number; duration_seconds: number; frame_count: number; playback_seconds: number }[] } | null;
 };
-type Props = { projectId: string; planRevision: number; assemblyPath?: string; onPlanChanged: () => void; onBrowse: () => void; onOpenShot: (shotId: string) => void };
+type Props = { projectId: string; planRevision: number; assemblyPath?: string; onPlanChanged: () => void | Promise<void>; onBrowse: () => void; onOpenShot: (shotId: string) => void };
 const mediaUrl = (path?: string | null) => path ? `/media-file?path=${encodeURIComponent(path)}` : undefined;
 const statusLabel: Record<Join['status'], string> = {
   pending: '待检查', approved: '已通过', redo_left: '重做前段', redo_right: '重做后段', stale: '版本已变化',
@@ -34,28 +34,37 @@ export default function AssemblyEditPanel({ projectId, planRevision, assemblyPat
   const [error, setError] = useState('');
   const [preflight, setPreflight] = useState('');
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const loadSequence = useRef(0);
   const leftRef = useRef<HTMLVideoElement>(null);
   const rightRef = useRef<HTMLVideoElement>(null);
   const fullRef = useRef<HTMLVideoElement>(null);
 
   async function load() {
-    const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/assembly/edit`);
-    if (response.status === 404) { setSupported(false); return; }
-    const data = await response.json();
-    if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '接点计划读取失败');
-    setEdit(data as Edit);
-    setSupported(true);
-    setDrafts(Object.fromEntries((data as Edit).joins.map(join => [join.key, { constraint: join.constraint, note: join.note }])));
-    setPolicy(['complete_master', 'mute'].includes(data.sound.policy) ? data.sound.policy : 'segment_native');
-    setAudioAssetId(data.sound.audio_asset_id ?? '');
-    setError('');
-    setPreflight('');
+    const sequence = ++loadSequence.current;
+    setLoading(true); setPreflight('');
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/assembly/edit`);
+      if (sequence !== loadSequence.current) return;
+      if (response.status === 404) { setSupported(false); return; }
+      const data = await response.json();
+      if (sequence !== loadSequence.current) return;
+      if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '接点计划读取失败');
+      setEdit(data as Edit);
+      setSupported(true);
+      setDrafts(Object.fromEntries((data as Edit).joins.map(join => [join.key, { constraint: join.constraint, note: join.note }])));
+      setPolicy(['complete_master', 'mute'].includes(data.sound.policy) ? data.sound.policy : 'segment_native');
+      setAudioAssetId(data.sound.audio_asset_id ?? '');
+      setError('');
+    } finally { if (sequence === loadSequence.current) setLoading(false); }
   }
 
   async function checkPreflight() {
+    const sequence = loadSequence.current;
     try {
       const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/assembly/preflight`);
       const data = await response.json();
+      if (sequence !== loadSequence.current) return;
       if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '装配预检失败');
       const missing = (data.missing_videos as string[]).join('、');
       const joins = (data.blocking_joins as string[]).join('、');
@@ -63,10 +72,10 @@ export default function AssemblyEditPanel({ projectId, planRevision, assemblyPat
     } catch (cause) { setPreflight(cause instanceof Error ? cause.message : '装配预检失败'); }
   }
 
-  useEffect(() => { setEdit(null); setOpenKey(''); void load().catch(cause => { setSupported(true); setError(cause instanceof Error ? cause.message : '接点计划读取失败'); }); }, [projectId, planRevision]);
+  useEffect(() => { setEdit(null); setOpenKey(''); void load().catch(cause => { setSupported(true); setError(cause instanceof Error ? cause.message : '接点计划读取失败'); }); return () => { loadSequence.current++; }; }, [projectId, planRevision]);
 
   async function save(path: string, body: Record<string, unknown>) {
-    if (!edit || busy) return;
+    if (!edit || busy || loading) return;
     setBusy(true); setError('');
     try {
       const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/assembly/${path}`, {
@@ -76,7 +85,7 @@ export default function AssemblyEditPanel({ projectId, planRevision, assemblyPat
       const data = await response.json();
       if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '保存失败，请刷新计划后重试');
       setEdit(data as Edit);
-      onPlanChanged();
+      await onPlanChanged();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '保存失败，请刷新计划后重试');
       void load().catch(() => {});
@@ -88,7 +97,7 @@ export default function AssemblyEditPanel({ projectId, planRevision, assemblyPat
   return <details className="assembly-edit-panel">
     <summary><strong>接点与全片声音</strong><span>{edit ? `${edit.joins.length} 个接点 · ${(edit.join_review?.remaining_joins ?? edit.blocking_joins).length} 个待处理` : '读取中'}</span></summary>
     {error && <p role="alert" className="assembly-edit-error">{error}</p>}
-    {edit && <div className="assembly-edit-content"><div className="assembly-edit-row"><button type="button" className="button secondary compact" onClick={() => void checkPreflight()}>无 GPU 装配预检</button>{preflight && <small role="status">{preflight}</small>}</div>
+    {edit && <div className="assembly-edit-content"><div className="assembly-edit-row"><button type="button" className="button secondary compact" disabled={busy || loading} onClick={() => void checkPreflight()}>无 GPU 装配预检</button>{preflight && <small role="status">{preflight}</small>}</div>
       <section><h3>全片声音</h3><p>选择已登记的完整音频母版后，装配会用它替换各段原音。母版应已包含需要保留的对白和音效。</p>
         {edit.timing_summary && <details><summary>装配取片：{edit.timing_summary.frame_count}帧／{edit.timing_summary.playback_seconds}秒</summary>
           {edit.timing_summary.segments.map(row => <p key={row.segment_id}>{row.segment_id}：从{row.start_seconds}秒取{row.duration_seconds}秒 → {row.frame_count}帧／{row.playback_seconds}秒</p>)}<p>{edit.timing_summary.precision}</p></details>}

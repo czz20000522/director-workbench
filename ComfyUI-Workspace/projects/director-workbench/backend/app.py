@@ -32,6 +32,8 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictInt, field_validator, model_validator
 from . import production_presets, background_jobs, speech, keyframes, audio_edit_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, guide, readiness, task_scheduler, creative_inspection, shot_creation
+from . import output_resolution, enhancement
+import av
 from .private_auth import current_principal
 from .atomic_files import replace_prepared
 from .storage import storage_roots, relocate_asset, legacy_mappings
@@ -50,6 +52,7 @@ STORAGE_ROOTS = storage_roots(ROOT)
 INPUT_ROOT = STORAGE_ROOTS['input']
 OUTPUT_ROOT = STORAGE_ROOTS['output']
 ASSEMBLY_BUILDER = PROJECT / "tools" / "build_assembly_workflow.py"
+FINISH_BUILDER = PROJECT / "tools" / "build_video_finish_workflow.py"
 DIST = PROJECT / "dist"
 REFERENCE_DECOMPOSER = PROJECT / "tools" / "reference_decompose.py"
 REFERENCE_SEMANTIC_ANALYZER = PROJECT / "tools" / "reference_semantic.py"
@@ -627,10 +630,28 @@ def task_snapshot_root(project_id: str) -> Path:
 
 
 def publish_task_outputs(task: dict[str, Any], done: dict[str, Any]) -> dict[str, Any]:
+    settings = task['payload'].get('output_size')
+    if settings:
+        processing_root = OUTPUT_ROOT
+        if PRIVATE_WORKSPACES is not None and PRIVATE_WORKSPACES.verify_task(task) is not None:
+            processing_root = OUTPUT_ROOT / '导演工作台工作目录' / task['project_id']
+        native = list(done.get('outputs', []))
+        resized, profiles = [], []
+        for value in native:
+            path, profile = output_resolution.resize(OUTPUT_ROOT / str(value), processing_root,
+                settings['resolution'], settings['aspect_ratio'],
+                lambda: bool((get_task(task['id']) or {}).get('stop_requested')))
+            resized.append(str(path.relative_to(OUTPUT_ROOT.resolve())))
+            profiles.append(profile)
+        done = {**done, 'outputs': resized, 'native_outputs': native, 'output_size': profiles}
     if PRIVATE_WORKSPACES is None or PRIVATE_WORKSPACES.verify_task(task) is None:
         return done
     outputs = [PRIVATE_WORKSPACES.publish(task, OUTPUT_ROOT / str(value), OUTPUT_ROOT, index)
                for index, value in enumerate(done.get('outputs', []))]
+    if done.get('native_outputs'):
+        done = {**done, 'published_native_outputs': [root_relative_path(PRIVATE_WORKSPACES.publish(
+            task, OUTPUT_ROOT / str(value), OUTPUT_ROOT, len(outputs) + index))
+            for index, value in enumerate(done['native_outputs'])]}
     return {**done, 'published_outputs': [root_relative_path(path) for path in outputs]}
 
 
@@ -873,7 +894,8 @@ def prepare_pipeline_payload(payload: dict[str, Any], stage_id: str, values: dic
                     'blockers': [{'code': 'creation_resources_missing', 'message': '所需制作资源不可用，请联系管理员补齐后重试。', 'action': 'contact_administrator'}]})
         defaults = {"first-frame": (segment.get("keyframes") or {}).get("first"), "last-frame": (segment.get("keyframes") or {}).get("last"),
                     "guide": (segment.get("audio") or {}).get("guide"), "prompt": segment.get("prompt"),
-                    "duration": segment.get("duration_seconds"), "seed": (segment.get('generation') or {}).get('seed', 42), "turbo-sampling": "enable"}
+                    "duration": segment.get("duration_seconds"), "seed": (segment.get('generation') or {}).get('seed', 42),
+                    "turbo-sampling": "enable" if production_presets.turbo_default(h3_preset_id) else "disable"}
         accepted_inputs = {spec.get('id') for spec in contract.get('input_specs', [])}
         for key, value in defaults.items():
             if key in accepted_inputs and key not in effective and value is not None:
@@ -916,7 +938,7 @@ def prepare_pipeline_payload(payload: dict[str, Any], stage_id: str, values: dic
         raise HTTPException(422, {'code': code, 'message': '请补齐或修正制作输入与素材', 'blockers': input_blockers + material_blockers})
     if h3_preset_id:
         aspect = production_presets.aspect_ratio(h3_preset_id)
-        duration_profile = h3_duration.plan(normalized.get('duration'), aspect)
+        duration_profile = h3_duration.plan(normalized.get('duration'), aspect, production_presets.megapixels(h3_preset_id))
     bindings: list[dict[str, Any]] = []
     parameters: dict[str, Any] = {}
     materials: dict[str, Any] = {}
@@ -953,6 +975,14 @@ def prepare_pipeline_payload(payload: dict[str, Any], stage_id: str, values: dic
     prepared["executed_prompt"] = executed_prompt
     if 'segment' in locals() and segment.get('resolved_generation'):
         prepared['resolved_generation'] = segment['resolved_generation']
+        settings = segment.get('generation') or {}
+        resolution = settings.get('output_resolution', 'native')
+        if resolution != 'native':
+            try:
+                output_resolution.require_available(resolution)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
+            prepared['output_size'] = {'resolution': resolution, 'aspect_ratio': settings['aspect_ratio']}
     prepared["_graph_bindings"] = bindings
     if h3_preset_id:
         prepared['h3_duration'] = {
@@ -1042,6 +1072,7 @@ def freeze_task_payload(payload: dict[str, Any], *, project_id: str) -> dict[str
             "materials": dict(frozen.get("materials") or {}),
             "h3_duration": frozen.get("h3_duration"),
             "resolved_generation": frozen.get("resolved_generation"),
+            "output_size": frozen.get("output_size"),
             "creative_inspection": frozen.get("creative_inspection"),
             "pipeline_stage_id": frozen.get("pipeline_stage_id"),
             "applied_bindings": applied_bindings,
@@ -1067,7 +1098,7 @@ def freeze_task_payload(payload: dict[str, Any], *, project_id: str) -> dict[str
     return frozen
 
 
-def history_done(prompt_id: str) -> dict[str, Any] | None:
+def history_done(prompt_id: str, *, include_images: bool = False) -> dict[str, Any] | None:
     try:
         history = request_json(f"/history/{prompt_id}")
     except (OSError, ValueError, HTTPError, URLError):
@@ -1087,7 +1118,8 @@ def history_done(prompt_id: str) -> dict[str, Any] | None:
             # resulting `assembly_*.mp4`.
             if item.get("type") not in {None, "output"}:
                 continue
-            if str(item.get("filename", "")).lower().endswith((".mp4", ".webm", ".mov", ".mkv")):
+            extensions = (".mp4", ".webm", ".mov", ".mkv", ".png") if include_images else (".mp4", ".webm", ".mov", ".mkv")
+            if str(item.get("filename", "")).lower().endswith(extensions):
                 subfolder = str(item.get("subfolder", "")).strip("/\\")
                 outputs.append(f"{subfolder}/{item['filename']}" if subfolder else item["filename"])
     return {"status": status, "outputs": outputs, "raw_status": entry.get("status", {}),
@@ -1290,6 +1322,71 @@ def record_segment_result(
             if isinstance(assembly, dict) and assembly.get('output'):
                 stale_candidate_reviews(owner['id'], str(owner.get('assembly_asset_id') or 'MASTER'),
                                         ('final',), '分镜候选已变化，需要重新装配并审核成片')
+
+
+@plan_transaction
+def record_finish_result(
+    asset_id: str, prompt_id: str, workflow: str, done: dict[str, Any],
+    plan_path: Path, *, task_id: str, payload: dict[str, Any],
+) -> bool:
+    """Register an AI finish result as the existing segment's B candidate."""
+    if not plan_path.is_file() or not done.get('outputs'):
+        return False
+    document = json.loads(plan_path.read_text(encoding='utf-8-sig'))
+    segment = next((item for item in document.get('segments', [])
+                    if isinstance(item, dict) and item.get('id') == asset_id), None)
+    if segment is None:
+        return False
+    video = segment.get('video') or {}
+    source = payload.get('finish_source') or {}
+    current_source = str(video.get('path') or '')
+    expected_source = str(source.get('path') or '')
+    if not expected_source or not same_registered_media(current_source, expected_source):
+        # The source was replaced while the GPU job was running. Keep the task
+        # and output for audit, but never attach it to the wrong candidate.
+        return False
+    output = str(done['outputs'][0]).replace('\\', '/').lstrip('/')
+    video_path = (done.get('published_outputs') or [f'output/{output}'])[0]
+    observed = authorized_media_facts(video_path)
+    output_size = done.get('output_size')
+    if not isinstance(output_size, dict):
+        output_size = {}
+    if observed.get('known'):
+        output_size = {
+            **output_size,
+            'width': observed.get('width'),
+            'height': observed.get('height'),
+            'duration_seconds': observed.get('duration_seconds'),
+            'fps': observed.get('fps'),
+            'frames': observed.get('frames'),
+            'audio_streams': observed.get('audio_streams'),
+        }
+    processing = {
+        'method': 'ai_upscale',
+        'model': payload.get('finish_model', 'RealESRGAN_x2plus.pth'),
+        'source_path': expected_source,
+        'source_task_id': source.get('task_id'),
+        'source_prompt_id': source.get('prompt_id'),
+        'output_size': output_size or None,
+        'comfy_timing': done.get('comfy_timing'),
+    }
+    segment['video'] = {
+        **video,
+        'finish_review': {
+            'path': video_path,
+            'variant': 'v3-B-finish',
+            'workflow': workflow,
+            'prompt_id': prompt_id,
+            'task_id': task_id,
+            'status': 'pending_review',
+            'specs': 'AI 高清候选 · 2x' + (f" · {output_size.get('width')}×{output_size.get('height')}" if output_size.get('width') else ''),
+            'processing': processing,
+            'source_candidate': source,
+        },
+    }
+    stale_candidate_reviews(str(payload.get('project_id')), asset_id, ('finish',), '新的 AI 高清候选已生成，请重新审核')
+    write_plan_version(plan_path, document)
+    return True
 
 
 def write_recipe_snapshot(payload: dict[str, Any], *, project_id: str | None = None) -> str:
@@ -1657,7 +1754,8 @@ def run_workflow_submission(task_id: str, payload: dict[str, Any]) -> None:
                 continue
             sample_resources(task_id)
             done = (keyframes.read_result(request_json(f'/history/{prompt_id}'), str(prompt_id), payload, OUTPUT_ROOT)
-                     if payload.get('kind') == 'keyframe' else history_done(prompt_id))
+                     if payload.get('kind') == 'keyframe' else
+                     history_done(prompt_id, include_images=True) if payload.get('pipeline_stage_id') == 'media-enhancement' else history_done(prompt_id))
             if done:
                 done = attach_h3_duration_result(done, payload)
                 if done["status"] == "success":
@@ -1666,8 +1764,19 @@ def run_workflow_submission(task_id: str, payload: dict[str, Any]) -> None:
                         return
                     done = publish_task_outputs(current, done)
                     target_plan = Path(str(payload.get("plan_path"))) if payload.get("plan_path") else PLAN_PATH
-                    if payload.get("asset_id") == str(payload.get("assembly_asset_id", CURRENT_PROJECT.get("assembly_asset_id", "MASTER"))):
+                    if payload.get('pipeline_stage_id') == 'media-enhancement':
+                        set_task(task_id, result=json.dumps(done, ensure_ascii=False))
+                        done = describe_enhancement_result(payload, done)
+                    elif payload.get("asset_id") == str(payload.get("assembly_asset_id", CURRENT_PROJECT.get("assembly_asset_id", "MASTER"))):
                         record_assembly_result(prompt_id, str(workflow_path), done, target_plan)
+                    elif payload.get('pipeline_stage_id') == 'picture-finish':
+                        registered = record_finish_result(
+                            str(payload.get('asset_id', '')), prompt_id, str(workflow_path), done,
+                            target_plan, task_id=task_id, payload=payload,
+                        )
+                        if not registered:
+                            done = {**done, 'finish_candidate_registered': False,
+                                    'finish_candidate_error': '源样片在处理期间已变化，高清结果保留在任务回执中但未绑定到当前片段'}
                     else:
                         record_segment_result(
                             str(payload.get("asset_id", "")), prompt_id, str(workflow_path), done,
@@ -1679,6 +1788,8 @@ def run_workflow_submission(task_id: str, payload: dict[str, Any]) -> None:
                 return
             update_comfy_execution_state(task_id, str(prompt_id))
             time.sleep(2)
+    except output_resolution.OutputStopped as exc:
+        set_task(task_id, status='stopped', error=str(exc))
     except HTTPError as exc:
         uncertain = submission_acknowledged or exc.code >= 500
         fields = {} if uncertain else {'prompt_id': None}
@@ -1714,6 +1825,17 @@ class StartRequest(BaseModel):
     seed: int | None = None
     pipeline_stage_id: str | None = Field(default=None, max_length=120)
     pipeline_values: dict[str, Any] = Field(default_factory=dict)
+
+
+class FinishRequest(BaseModel):
+    expected_plan_revision: StrictInt = Field(ge=0)
+    expected_review_revision: StrictInt = Field(ge=0)
+    idempotency_key: str = Field(min_length=1, max_length=160)
+    asset_id: str = Field(min_length=1, max_length=160)
+    model_name: str = Field(default='RealESRGAN_x2plus.pth', min_length=1, max_length=200)
+    color_reference: str | None = Field(default=None, max_length=500)
+    color_method: Literal['uniform', 'per_frame'] = 'uniform'
+    color_strength: float = Field(default=0.2, ge=0, le=1)
 
 
 class BatchRequest(BaseModel):
@@ -2697,6 +2819,13 @@ def public_version_snapshot(snapshot: dict[str, Any], payload: dict[str, Any]) -
     for key, value in (("first_frame", first), ("last_frame", last), ("audio_guide", guide)):
         if value is not None:
             visible[key] = value
+    # Keep output provenance next to the frozen prompt/material snapshot.  The
+    # UI can then explain whether a candidate is native, a bounded size resize,
+    # or an independently processed result without reading private task rows.
+    output_size = visible.get("output_size") or payload.get("output_size")
+    if isinstance(output_size, dict):
+        visible["output_size"] = output_size
+        visible.setdefault("processing_method", output_size.get("method") or "lanczos_resize")
     return visible
 
 
@@ -2736,6 +2865,15 @@ def segment_versions(project_id: str, segment_id: str) -> tuple[dict[str, Any], 
         generated_at = float(recorded.get("generated_at") or task["updated_at"])
         snapshot = recorded.get("snapshot") or payload.get("segment_snapshot") or {}
         snapshot = public_version_snapshot(snapshot if isinstance(snapshot, dict) else {}, payload)
+        result = task.get("result") if isinstance(task.get("result"), dict) else {}
+        output_size = result.get("output_size") or snapshot.get("output_size") or payload.get("output_size")
+        processing = {
+            "resolution": output_size.get("resolution") if isinstance(output_size, dict) else "native",
+            "width": output_size.get("width") if isinstance(output_size, dict) else result.get("width"),
+            "height": output_size.get("height") if isinstance(output_size, dict) else result.get("height"),
+            "method": output_size.get("method") if isinstance(output_size, dict) else "native_generation",
+            "native_output_available": bool(result.get("published_native_output") or result.get("native_output")),
+        }
         current_task_id = segment.get("current_version_task_id")
         current_video = (segment.get("video") or {}).get("path")
         is_current = (current_task_id == task["id"] if current_task_id else
@@ -2745,6 +2883,7 @@ def segment_versions(project_id: str, segment_id: str) -> tuple[dict[str, Any], 
             "task_id": task["id"], "prompt_id": task.get("prompt_id"),
             "generated_at": system_time_iso(generated_at), "video_path": video_path,
             "snapshot": snapshot, "snapshot_complete": bool(recorded.get("snapshot") or payload.get("segment_snapshot")),
+            "processing": processing,
             "is_current": is_current,
             "restored_at": system_time_iso(segment["current_version_restored_at"])
             if is_current and segment.get("current_version_restored_at") else None,
@@ -3000,6 +3139,23 @@ def production_preset_catalog() -> dict[str, Any]:
     return {"presets": [production_presets.catalog(ROOT / "ComfyUI-Shared" / "models", preset_id) for preset_id in production_presets.PRESET_IDS]}
 
 
+@app.get('/api/projects/{project_id}/reusable-templates')
+def reusable_template_catalog(project_id: str) -> dict[str, Any]:
+    """Expose the small, safe template set used by the simplified entry point."""
+    manifest = require_project_manifest(project_id)
+    installed = (manifest.get('production_preset') or {}).get('id')
+    presets = [production_presets.catalog(ROOT / 'ComfyUI-Shared' / 'models', preset_id)
+               for preset_id in production_presets.PRESET_IDS]
+    by_id = {item['id']: item for item in presets}
+    return {'templates': [
+        {'id': 'image', 'kind': 'image', 'title': '文生图', 'description': '只输入提示词，先得到一张可用图片。', 'recommended': True},
+        {'id': 'text-video', 'kind': 'video', 'title': '文生视频', 'description': '只输入提示词，使用纯文本视频制作方案。', 'recommended': True,
+         'preset': by_id.get(production_presets.TEXT_PORTRAIT_PRESET_ID), 'installed': installed in production_presets.TEXT_PRESET_IDS},
+        {'id': 'video', 'kind': 'video', 'title': '图生视频', 'description': '放入开始画面，再描述动作和镜头。', 'recommended': True,
+         'preset': by_id.get(production_presets.NATIVE_PORTRAIT_PRESET_ID), 'installed': installed == production_presets.NATIVE_PORTRAIT_PRESET_ID},
+    ], 'project_id': project_id, 'installed_preset': installed}
+
+
 @app.post("/api/projects/{project_id}/production-presets/{preset_id}")
 @gpu_admission
 def install_production_preset(project_id: str, preset_id: str) -> dict[str, Any]:
@@ -3185,6 +3341,8 @@ def create_plan_segment(project_id: str, request: PlanSegmentCreateRequest) -> d
         except (OSError, ValueError) as exc:
             raise HTTPException(422, f"计划文件无法读取: {plan_path}") from exc
     check_plan_revision(document, request.expected_revision)
+    if request.generation is not None:
+        validate_creative_prompt(request.prompt, request.generation.creative_profile)
     segments = document.get("segments") if isinstance(document.get("segments"), list) else []
     next_start = sum(float(item.get("duration_seconds", 0) or 0) for item in segments if isinstance(item, dict))
     base_id = request.segment_id or f"S{len(segments) + 1:02d}"
@@ -3238,6 +3396,24 @@ def load_project_plan(project_id: str) -> tuple[dict[str, Any], Path]:
         raise HTTPException(422, f"项目计划无法读取: {exc}") from exc
     if not isinstance(document, dict) or not isinstance(document.get("segments"), list):
         raise HTTPException(422, "项目计划缺少 segments 数组")
+    # Older finish receipts predate media-fact persistence. Enrich the public
+    # in-memory plan from the already registered B file so history/export can
+    # show its measured dimensions without rewriting the user's plan on GET.
+    for segment in document.get('segments', []):
+        if not isinstance(segment, dict):
+            continue
+        finish = (segment.get('video') or {}).get('finish_review')
+        if not isinstance(finish, dict):
+            continue
+        processing = finish.get('processing')
+        if not isinstance(processing, dict) or isinstance(processing.get('output_size'), dict):
+            continue
+        facts = authorized_media_facts(finish.get('path'))
+        if facts.get('known'):
+            processing['output_size'] = {key: facts.get(key) for key in (
+                'width', 'height', 'duration_seconds', 'fps', 'frames', 'audio_streams')}
+            if not finish.get('specs') or '×' not in str(finish.get('specs')):
+                finish['specs'] = f"AI 高清候选 · 2x · {facts.get('width')}×{facts.get('height')}"
     return document, plan_path
 
 
@@ -3310,7 +3486,7 @@ def inspect_shot(manifest, document, segment, profile=None):
         if preset_id in production_presets.PRESET_IDS:
             aspect = production_presets.aspect_ratio(preset_id)
             try:
-                profile = h3_duration.plan(segment.get('duration_seconds'), aspect)
+                profile = h3_duration.plan(segment.get('duration_seconds'), aspect, production_presets.megapixels(preset_id))
                 profile['generation_mode'] = 'text_to_video' if preset_id in production_presets.TEXT_PRESET_IDS else 'image_to_video'
             except ValueError:
                 profile = None
@@ -3437,7 +3613,10 @@ def validate_h3_plan_duration(manifest: dict[str, Any], segment: dict[str, Any])
     if selected.get('id') not in {production_presets.stage_id(key) for key in production_presets.PRESET_IDS}:
         return
     try:
-        h3_duration.plan(segment.get('duration_seconds'))
+        preset_id = next((key for key in production_presets.PRESET_IDS
+                          if selected.get('id') == production_presets.stage_id(key)), None)
+        h3_duration.plan(segment.get('duration_seconds'), production_presets.aspect_ratio(preset_id) if preset_id else '1:1',
+                         production_presets.megapixels(preset_id) if preset_id else 0.4)
     except ValueError as exc:
         raise HTTPException(422, f"分镜 {segment.get('id', '')} 时长无效：{exc}") from exc
 
@@ -3566,6 +3745,7 @@ def update_plan_segment(project_id: str, segment_id: str, request: PlanSegmentUp
         segment[key] = value.strip() if isinstance(value, str) else value
     if request.workflow and (segment.get('generation') or {}).get('mode') == 'auto':
         raise HTTPException(422, '自动创作不接受技术工作流，请明确切换高级模式。')
+    validate_creative_prompt(str(segment.get('prompt') or ''), str((segment.get('generation') or {}).get('creative_profile', 'general')))
     resolve_automatic_shot(require_project_manifest(project_id), segment)
     if request.duration_seconds is not None or request.workflow is not None:
         validate_h3_plan_duration(require_project_manifest(project_id), segment)
@@ -4723,11 +4903,9 @@ def export_project(project_id: str) -> dict[str, Any]:
     plan_path = manifest.get("plan_path")
     if plan_path:
         try:
-            resolved_plan = resolve_registered_path(str(plan_path))
-            if resolved_plan.is_file():
-                loaded_plan = json.loads(resolved_plan.read_text(encoding="utf-8-sig"))
-                if isinstance(loaded_plan, dict):
-                    plan_document = loaded_plan
+            loaded_plan, _ = load_project_plan(project_id)
+            if isinstance(loaded_plan, dict):
+                plan_document = loaded_plan
         except (ValueError, OSError, json.JSONDecodeError):
             plan_document = None
 
@@ -4797,6 +4975,43 @@ def export_project(project_id: str) -> dict[str, Any]:
             fallback_rows = connection.execute("SELECT * FROM tasks WHERE project_id IS NULL AND asset_id IN ({}) ORDER BY created_at".format(",".join("?" for _ in (planned_asset_ids | {assembly_asset_id}))), tuple(planned_asset_ids | {assembly_asset_id})).fetchall()
             rows = list(rows) + [row for row in fallback_rows if row["id"] not in {item["id"] for item in rows}]
     task_records = [task_row(row) for row in rows]
+    export_state = build_project_state(project_id)
+    candidate_manifest = []
+    for segment in (plan_document or {}).get('segments', []):
+        if not isinstance(segment, dict):
+            continue
+        video = segment.get('video') or {}
+        finish = video.get('finish_review') or {}
+        review = export_state.get('reviews', {}).get(str(segment.get('id')), {})
+        candidate_manifest.append({
+            'asset_id': segment.get('id'), 'prompt': segment.get('prompt'),
+            'A': {'path': video.get('path'), 'task_id': segment.get('current_version_task_id') or segment.get('comfyui_task_id'), 'review': review.get('sample')},
+            'B': {'path': finish.get('path'), 'task_id': finish.get('task_id') or finish.get('prompt_id'), 'processing': finish.get('processing'), 'review': review.get('finish')},
+        })
+
+    # Keep the export useful when handing one work to the next episode in the
+    # same series.  Reuse the authenticated project catalog so private exports
+    # never reveal works from another account.
+    visible_projects = projects().get('projects', [])
+    series_name = str(manifest.get('series') or '')
+    series_context = {
+        'name': series_name,
+        'current_project_id': project_id,
+        'works': [
+            {'id': item.get('id'), 'title': item.get('title'), 'selected': item.get('id') == project_id}
+            for item in visible_projects
+            if isinstance(item, dict) and str(item.get('series') or '') == series_name
+        ],
+        'handoff': {
+            'last_segment_id': candidate_manifest[-1].get('asset_id') if candidate_manifest else None,
+            'last_prompt': candidate_manifest[-1].get('prompt') if candidate_manifest else None,
+            'adopted_candidates': [
+                item['asset_id'] for item in candidate_manifest
+                if isinstance(item.get('A'), dict) and isinstance(item['A'].get('review'), dict)
+                and item['A']['review'].get('status') == 'approved'
+            ],
+        },
+    }
 
     return {
         "schema_version": 2,
@@ -4805,7 +5020,9 @@ def export_project(project_id: str) -> dict[str, Any]:
         "plan": {"path": str(plan_path).replace("\\", "/") if plan_path else None, "content": plan_document},
         "workflow_files": workflow_files,
         "task_records": task_records,
-        "project_state": build_project_state(project_id),
+        "project_state": export_state,
+        "candidate_manifest": candidate_manifest,
+        "series_context": series_context,
         "resource_manifest": {"files": files, "count": len(files)},
         "workspace_spec": "docs/workspace-spec.md",
     }
@@ -5177,6 +5394,237 @@ def start_project_task(project_id: str, request: StartRequest) -> dict[str, Any]
     return submit_project_task(request, require_project_manifest(project_id))
 
 
+def build_finish_workflow_snapshot(project_id: str, asset_id: str, source: Path, model_name: str,
+                                   color_reference: str | None, color_method: str, color_strength: float) -> Path:
+    """Build and persist the immutable API graph for a finish task."""
+    if not FINISH_BUILDER.is_file():
+        raise FileNotFoundError(f'缺少高清处理工作流构建器: {FINISH_BUILDER}')
+    module_spec = importlib.util.spec_from_file_location('director_finish_builder', FINISH_BUILDER)
+    if module_spec is None or module_spec.loader is None:
+        raise RuntimeError(f'无法加载高清处理工作流构建器: {FINISH_BUILDER}')
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    project_label = ''.join(char if char.isalnum() or char in '-_' else '-' for char in project_id)
+    asset_label = ''.join(char if char.isalnum() or char in '-_' else '-' for char in asset_id)
+    prefix = f'导演工作台工作目录/{project_label}/video/{asset_label}-finish-{uuid.uuid4().hex[:10]}'
+    graph = module.build_graph(str(source), prefix, model_name=model_name,
+                               color_reference=color_reference, color_method=color_method,
+                               color_strength=color_strength)
+    destination = task_snapshot_root(project_id) / f'finish-{uuid.uuid4().hex[:16]}.json'
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(graph, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    return destination
+
+
+@app.post('/api/projects/{project_id}/finish-tasks', status_code=202)
+@gpu_admission
+@plan_transaction
+def start_finish_task(project_id: str, request: FinishRequest) -> dict[str, Any]:
+    manifest = require_project_manifest(project_id)
+    require_submission_capacity()
+    document, plan_path = load_project_plan(project_id)
+    check_plan_revision(document, request.expected_plan_revision)
+    segment = next((item for item in document.get('segments', [])
+                    if isinstance(item, dict) and item.get('id') == request.asset_id), None)
+    if segment is None:
+        raise HTTPException(404, '分镜不存在')
+    state = build_project_state(project_id)
+    sample_review = (state.get('reviews', {}).get(request.asset_id, {}) or {}).get('sample') or {}
+    if sample_review.get('status') != 'approved':
+        raise HTTPException(409, '请先采用样片，再生成 AI 高清候选')
+    if int(sample_review.get('revision', -1)) != request.expected_review_revision:
+        raise HTTPException(409, {'code': 'record_revision_conflict', 'message': '样片审核已更新，请重新读取后再生成高清候选', 'current_revision': sample_review.get('revision')})
+    video = segment.get('video') or {}
+    source_ref = sample_review.get('candidate_ref') or video.get('path')
+    if not source_ref:
+        raise HTTPException(409, '当前样片缺少可处理的视频文件')
+    try:
+        source = adoption_candidate_path(str(source_ref))
+    except HTTPException:
+        raise
+    if not source.is_file() or not same_registered_media(str(video.get('path') or ''), str(source)):
+        raise HTTPException(409, '当前采用样片已变化，请重新审核后再生成高清候选')
+    if request.color_reference:
+        try:
+            color_reference_path = resolve_registered_path(request.color_reference)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(422, f'色彩参考不可访问: {request.color_reference}') from exc
+        if not color_reference_path.is_file():
+            raise HTTPException(422, '色彩参考文件不存在')
+        color_reference_value = str(color_reference_path)
+    else:
+        color_reference_value = None
+    submission_request = request.model_dump(mode='json')
+    existing = find_submission_task(project_id, request.idempotency_key)
+    if existing:
+        if (existing.get('payload') or {}).get('submission_receipt', {}).get('request') != submission_request:
+            raise HTTPException(409, {'code': 'idempotency_key_conflict', 'message': '该请求标识已用于不同高清处理参数', 'task_id': existing['id']})
+        return existing
+    ensure_asset_not_pending(project_id, request.asset_id)
+    workflow = build_finish_workflow_snapshot(project_id, request.asset_id, source, request.model_name,
+                                               color_reference_value, request.color_method, request.color_strength)
+    source_identity = {
+        'path': str(video.get('path') or source_ref),
+        'task_id': segment.get('current_version_task_id'),
+        'prompt_id': segment.get('comfyui_task_id'),
+        'review_revision': request.expected_review_revision,
+    }
+    payload = {
+        'kind': 'workflow', 'pipeline_stage_id': 'picture-finish', 'asset_id': request.asset_id,
+        'project_id': project_id, 'plan_path': str(plan_path),
+        'assembly_asset_id': str(manifest.get('assembly_asset_id', 'MASTER')),
+        'workflow': str(workflow), 'finish_model': request.model_name,
+        'finish_source': source_identity, 'segment_snapshot': segment_generation_snapshot(segment),
+        'finish_options': {'color_method': request.color_method, 'color_strength': request.color_strength,
+                           'color_reference': color_reference_value},
+        'submission_receipt': {'key': request.idempotency_key, 'request': submission_request},
+    }
+    try:
+        payload = freeze_task_payload(payload, project_id=project_id)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(422, f'无法冻结高清处理快照: {exc}') from exc
+    task_id = str(uuid.uuid4())
+    now = time.time()
+    with DB_LOCK, db() as connection:
+        check_queue_limits(connection, settings_owner())
+        connection.execute('INSERT INTO tasks (id, asset_id, status, created_at, updated_at, payload, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                           (task_id, request.asset_id, 'scheduler_waiting', now, now, json.dumps(payload, ensure_ascii=False), project_id))
+        connection.commit()
+    queue_task(task_id)
+    return get_task(task_id) or {'id': task_id, 'status': 'preparing'}
+
+
+def enhancement_sources(project_id: str) -> list[dict[str, str]]:
+    """Only registered creative media and this work's successful task outputs."""
+    manifest = require_project_manifest(project_id)
+    document, _ = load_project_plan(project_id)
+    paths: dict[str, dict[str, str]] = {}
+
+    def add(value, label):
+        if not isinstance(value, str) or not value:
+            return
+        try:
+            path = resolve_registered_path(value)
+            if path.is_file() and path.suffix.lower() in enhancement.IMAGE_EXTENSIONS | enhancement.VIDEO_EXTENSIONS:
+                paths.setdefault(str(path).casefold(), {'value': value, 'label': label,
+                    'kind': 'image' if path.suffix.lower() in enhancement.IMAGE_EXTENSIONS else 'video'})
+        except (ValueError, OSError, HTTPException):
+            pass
+
+    for item in reusable_materials(project_id)['materials']:
+        add(item['path'], item['title'])
+    for segment in document.get('segments', []):
+        label = str(segment.get('id'))
+        add((segment.get('video') or {}).get('path'), f'{label} · 当前视频')
+        add(((segment.get('video') or {}).get('finish_review') or {}).get('path'), f'{label} · 高清候选')
+        for key, value in (segment.get('keyframes') or {}).items():
+            add(value, f'{label} · {key}')
+    add((document.get('assembly') or {}).get('output'), '装配成片候选')
+    with DB_LOCK, db() as connection:
+        rows = connection.execute("SELECT * FROM tasks WHERE project_id=? AND status='succeeded' ORDER BY created_at DESC", (project_id,)).fetchall()
+    for row in rows:
+        task = task_row(row)
+        if (task.get('payload') or {}).get('kind') == 'media_operation':
+            continue
+        result = task.get('result') or {}
+        for value in result.get('published_outputs') or ([result['output']] if result.get('output') else [f'output/{v}' for v in result.get('outputs', []) if isinstance(v, str)]):
+            add(value, f"{task['asset_id']} · 候选 {task['id'][:8]}")
+    return list(paths.values())
+
+
+@app.get('/api/projects/{project_id}/enhancements')
+def project_enhancements(project_id: str, offset: int = Query(0, ge=0)) -> dict[str, Any]:
+    sources = enhancement_sources(project_id)
+    with DB_LOCK, db() as connection:
+        rows = connection.execute("SELECT * FROM tasks WHERE project_id=? AND json_extract(payload, '$.pipeline_stage_id')='media-enhancement' ORDER BY created_at DESC, id DESC LIMIT 21 OFFSET ?", (project_id, offset)).fetchall()
+    tasks = [task_row(row) for row in rows[:20]]
+    for task in tasks:
+        task['queue'] = TASK_SCHEDULER.queue_info(task['id'])
+    return {'sources': sources, 'tasks': tasks, 'next_offset': offset + 20 if len(rows) > 20 else None}
+
+
+@app.get('/api/projects/{project_id}/enhancement-capability')
+def enhancement_capability(project_id: str) -> dict[str, Any]:
+    require_project_manifest(project_id)
+    try:
+        return enhancement.capability(request_json('/object_info'))
+    except (OSError, ValueError, HTTPError, URLError) as exc:
+        raise HTTPException(503, '无法检查 ComfyUI 清晰化能力，请确认引擎在线') from exc
+
+
+@app.post('/api/projects/{project_id}/enhancement-tasks', status_code=202)
+@gpu_admission
+@plan_transaction
+def start_enhancement_task(project_id: str, request: enhancement.EnhancementRequest) -> dict[str, Any]:
+    require_project_manifest(project_id)
+    submission = request.model_dump(mode='json')
+    existing = find_submission_task(project_id, request.idempotency_key)
+    if existing:
+        if (existing.get('payload') or {}).get('submission_receipt', {}).get('request') != submission:
+            raise HTTPException(409, {'code': 'idempotency_key_conflict', 'message': '请求标识已用于其他参数'})
+        return existing
+    require_submission_capacity()
+    try:
+        source = resolve_registered_path(request.source)
+        admitted = {resolve_registered_path(item['value']) for item in enhancement_sources(project_id)}
+        if source not in admitted:
+            raise ValueError('请选择当前作品已登记的图片或视频')
+        stamp = source.stat()
+        facts = enhancement.inspect_source(source)
+    except (ValueError, OSError, av.error.FFmpegError) as exc:
+        raise HTTPException(422, f'无法处理素材: {exc}') from exc
+    capability = enhancement_capability(project_id)
+    if not capability['kinds'][facts['kind']]['available']:
+        raise HTTPException(422, '清晰化环境缺少节点或 RealESRGAN_x2plus.pth 模型')
+    task_id = str(uuid.uuid4())
+    asset_id = f'HD-{task_id[:8]}'
+    prefix = f'导演工作台工作目录/{project_id}/enhancement/{task_id}'
+    if facts['kind'] == 'image':
+        graph = enhancement.image_graph(str(source), prefix)
+        workflow = task_snapshot_root(project_id) / f'enhancement-{task_id}.json'
+        workflow.parent.mkdir(parents=True, exist_ok=True)
+        workflow.write_text(json.dumps(graph, ensure_ascii=False), encoding='utf-8')
+    else:
+        workflow = build_finish_workflow_snapshot(project_id, asset_id, source, enhancement.MODEL, None, 'uniform', 0)
+    payload = {'kind': 'workflow', 'pipeline_stage_id': 'media-enhancement',
+               'project_id': project_id, 'asset_id': asset_id, 'workflow': str(workflow),
+               'enhancement': {'source': request.source, 'source_facts': facts, 'model': enhancement.MODEL, 'scale': 2},
+               'submission_receipt': {'key': request.idempotency_key, 'request': submission}}
+    try:
+        payload = freeze_task_payload(payload, project_id=project_id)
+        after = source.stat()
+        if (after.st_size, after.st_mtime_ns) != (stamp.st_size, stamp.st_mtime_ns):
+            raise ValueError('素材在检查期间发生变化，请重新提交')
+    except (OSError, ValueError) as exc:
+        raise HTTPException(422, f'无法冻结清晰化输入: {exc}') from exc
+    now = time.time()
+    with DB_LOCK, db() as connection:
+        check_queue_limits(connection, settings_owner())
+        connection.execute('INSERT INTO tasks (id, asset_id, status, created_at, updated_at, payload, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                           (task_id, asset_id, 'scheduler_waiting', now, now, json.dumps(payload, ensure_ascii=False), project_id))
+        connection.commit()
+    queue_task(task_id)
+    return get_task(task_id) or {'id': task_id, 'status': 'preparing'}
+
+
+def describe_enhancement_result(payload: dict, done: dict) -> dict:
+    outputs = done.get('published_outputs') or [f'output/{v}' for v in done.get('outputs', [])]
+    if len(outputs) != 1:
+        raise ValueError('清晰化回执没有唯一输出，请核对任务')
+    facts = authorized_media_facts(outputs[0])
+    source = payload['enhancement']['source_facts']
+    if not facts.get('known') or (facts.get('width'), facts.get('height')) != (source['width'] * 2, source['height'] * 2):
+        raise ValueError('清晰化输出尺寸与 2× 目标不符，请核对结果')
+    if source['kind'] == 'video':
+        if (facts.get('frames') != source['frames'] or facts.get('audio_streams') != source['audio_streams']
+                or not facts.get('fps') or abs(facts['fps'] - source['fps']) > 0.1):
+            raise ValueError('清晰化输出帧数、帧率或音轨与原视频不符，请核对结果')
+        if source.get('duration_seconds') and (not facts.get('duration_seconds') or
+                abs(facts['duration_seconds'] - source['duration_seconds']) > 2 / source['fps']):
+            raise ValueError('清晰化输出时长与原视频不符，请核对结果')
+    return {**done, 'enhancement': payload['enhancement'], 'output_facts': facts, 'candidate_status': 'pending_review'}
+
+
 def find_submission_task(project_id: str, key: str) -> dict[str, Any] | None:
     with DB_LOCK, db() as connection:
         row = connection.execute(
@@ -5274,30 +5722,60 @@ def submit_project_task(request: StartRequest, manifest: dict[str, Any] | None =
 
 
 @app.get('/api/keyframe-capability')
-def keyframe_capability(mode: Literal['reference', 'text'] = 'reference') -> dict[str, Any]:
+def keyframe_capability(mode: Literal['reference', 'text'] = 'reference', creative_profile: Literal['general', 'adult-realism', 'adult-anime'] = 'general') -> dict[str, Any]:
     try:
         info = request_json('/object_info')
         if not isinstance(info, dict):
             raise ValueError('节点注册表格式无效')
-        return keyframes.capability(info, mode)
+        return keyframes.capability(info, mode, creative_profile)
     except (OSError, ValueError, HTTPError, URLError) as exc:
-        return {'available': False, 'engine': 'Krea 2 Turbo' if mode == 'text' else 'Qwen Image Edit 2511', 'requires_reference_image': mode != 'text',
+        return {'available': False, 'engine': 'Qwen Image 2.1' if mode == 'text' else 'Qwen Image Edit 2511', 'requires_reference_image': mode != 'text', 'creative_profile': creative_profile,
                 'missing_nodes': [], 'missing_models': [], 'reason': f'无法读取 ComfyUI 节点与模型: {exc}'}
 
 
 class KeyframeRequest(BaseModel):
     mode: Literal['reference', 'text'] = 'reference'
+    creative_profile: Literal['general', 'adult-realism', 'adult-anime'] = 'general'
     prompt: str = Field(min_length=1, max_length=6000)
     reference_image: str | None = Field(default=None, min_length=1, max_length=1000)
     width: int = Field(default=768, ge=512, le=1536)
     height: int = Field(default=1344, ge=512, le=1536)
+    output_resolution: Literal['native', '2k', '4k', '8k'] = 'native'
     seed: int = Field(default=340921, ge=0, le=2**64 - 1)
     idempotency_key: str = Field(min_length=1, max_length=160)
 
 
+def validate_creative_prompt(prompt: str, creative_profile: str) -> None:
+    """Keep the adult entry scoped to fictional adults and non-explicit work."""
+    if creative_profile == 'general':
+        return
+    lowered = prompt.casefold()
+    blocked_groups = {
+        '未成年人内容': ('未成年', '儿童', '小孩', '幼女', '幼男', '萝莉', 'loli', 'minor', 'child', 'teenager', 'teen'),
+        '真人换脸或冒充真人': ('换脸', '换头', '真人脸', '深度伪造', 'deepfake', 'face swap', 'celebrity', '名人'),
+        '露骨性行为或裸露私密部位': ('性交', '做爱', '性行为', '插入', '口交', '手淫', '射精', '裸体', '裸露', '私密部位', '隐私器官', '生殖器', '脱衣', '脱去衣物', '脱光', 'porn', 'explicit sex', 'intercourse', 'penetration', 'blowjob', 'masturbat', 'ejaculat', 'nude', 'naked', 'genital'),
+    }
+    for label, terms in blocked_groups.items():
+        if any(term in lowered for term in terms):
+            raise HTTPException(422, f'成人向创作区仅支持虚构成年人和非露骨内容，当前提示词包含{label}。')
+
+
 def complete_keyframe_task(task: dict[str, Any], receipt: dict[str, Any]) -> dict[str, Any]:
+    settings = task['payload'].get('output_size')
+    if settings:
+        processing_root = OUTPUT_ROOT
+        if PRIVATE_WORKSPACES is not None and PRIVATE_WORKSPACES.verify_task(task) is not None:
+            processing_root = OUTPUT_ROOT / '导演工作台工作目录' / task['project_id']
+        path, profile = output_resolution.resize(receipt['output'], processing_root,
+            settings['resolution'], settings['aspect_ratio'],
+            lambda: bool((get_task(task['id']) or {}).get('stop_requested')))
+        receipt = {**receipt, 'output': str(path), 'native_output': receipt['output'],
+                   'width': profile['width'], 'height': profile['height'], 'output_size': profile}
     if PRIVATE_WORKSPACES is not None:
         published = PRIVATE_WORKSPACES.publish(task, Path(receipt['output']), OUTPUT_ROOT)
+        if receipt.get('native_output'):
+            receipt = {**receipt, 'published_native_output': str(PRIVATE_WORKSPACES.publish(
+                task, Path(receipt['native_output']), OUTPUT_ROOT, 1))}
         receipt = {**receipt, 'engine_output': receipt['output'], 'output': str(published)}
     with MATERIAL_REUSE_LOCK:
         manifest = require_project_manifest(task['project_id'])
@@ -5320,7 +5798,13 @@ def complete_keyframe_task(task: dict[str, Any], receipt: dict[str, Any]) -> dic
 @gpu_admission
 def start_keyframe_task(project_id: str, request: KeyframeRequest) -> dict[str, Any]:
     manifest = require_project_manifest(project_id)
-    submission = {'kind': 'keyframe', 'prompt': request.prompt, 'reference_image': request.reference_image, 'seed': request.seed}
+    validate_creative_prompt(request.prompt, request.creative_profile)
+    submission = {'kind': 'keyframe', 'prompt': request.prompt, 'reference_image': request.reference_image, 'seed': request.seed,
+                  'creative_profile': request.creative_profile}
+    if request.output_resolution != 'native':
+        if request.mode != 'text':
+            raise HTTPException(422, '参考图模式暂时沿用原生尺寸')
+        submission['output_resolution'] = request.output_resolution
     if request.mode == 'text':
         if request.reference_image is not None:
             raise HTTPException(422, '文字生图不接收参考图片，请选择参考图模式')
@@ -5334,6 +5818,10 @@ def start_keyframe_task(project_id: str, request: KeyframeRequest) -> dict[str, 
         if existing['payload']['submission_receipt']['request'] != submission:
             raise HTTPException(409, '请求标识已用于不同参数')
         return existing
+    try:
+        output_resolution.require_available(request.output_resolution)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     require_submission_capacity()
     readiness = keyframe_capability(mode='text') if request.mode == 'text' else keyframe_capability()
     if not readiness['available']:
@@ -5343,10 +5831,14 @@ def start_keyframe_task(project_id: str, request: KeyframeRequest) -> dict[str, 
         workspace = resolve_registered_path(str(manifest['workspace_root']))
         prefix = f'导演工作台工作目录/{project_id}/关键帧/{task_id}'
         if request.mode == 'text':
-            payload = keyframes.prepare_text(task_id, request.prompt, workspace / 'keyframe-tasks', prefix, request.seed, request.width, request.height)
+            payload = keyframes.prepare_text(task_id, request.prompt, workspace / 'keyframe-tasks', prefix, request.seed, request.width, request.height, request.creative_profile)
+            if request.output_resolution != 'native':
+                payload['output_size'] = {'resolution': request.output_resolution,
+                    'aspect_ratio': '1:1' if request.width == request.height else '16:9' if request.width > request.height else '9:16'}
+                payload['request']['output_resolution'] = request.output_resolution
         else:
             reference = resolve_registered_path(request.reference_image)
-            payload = keyframes.prepare(task_id, request.prompt, reference, workspace / 'keyframe-tasks', prefix, request.seed)
+            payload = keyframes.prepare(task_id, request.prompt, reference, workspace / 'keyframe-tasks', prefix, request.seed, request.creative_profile)
         payload = freeze_task_payload(payload, project_id=project_id)
     except (OSError, ValueError) as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -6574,7 +7066,8 @@ def reconcile_task(task: dict[str, Any]) -> dict[str, Any]:
             set_task(task['id'], status='failed', result=json.dumps(done, ensure_ascii=False), error=comfy_execution_error(task['payload'], done))
             return get_task(task['id']) or task
         return complete_keyframe_task(task, done)
-    done = history_done(str(prompt_id))
+    done = (history_done(str(prompt_id), include_images=True)
+            if task['payload'].get('pipeline_stage_id') == 'media-enhancement' else history_done(str(prompt_id)))
     if not done:
         raise HTTPException(409, "尚未找到原任务的完成记录，可能仍在执行或历史已清理；已阻止重复提交")
     done = attach_h3_duration_result(done, task['payload'])
@@ -6591,6 +7084,13 @@ def reconcile_task(task: dict[str, Any]) -> dict[str, Any]:
     payload = task["payload"]
     target_plan = Path(str(payload.get("plan_path"))) if payload.get("plan_path") else PLAN_PATH
     done = publish_task_outputs(task, done)
+    if payload.get('pipeline_stage_id') == 'media-enhancement':
+        try:
+            done = describe_enhancement_result(payload, done)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(409, f'清晰化结果尚未核实，不会重复生成: {exc}') from exc
+        set_task(task['id'], status='succeeded', stop_requested=0, error=None, result=json.dumps(done, ensure_ascii=False))
+        return get_task(task['id']) or task
     with PLAN_EDIT_LOCK:
         if target_plan.is_file():
             document = json.loads(target_plan.read_text(encoding="utf-8-sig"))

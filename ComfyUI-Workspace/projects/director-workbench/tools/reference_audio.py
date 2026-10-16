@@ -15,7 +15,13 @@ FFMPEG_DIR = ROOT / "ComfyUI-Shared" / "tools" / "index-tts"
 
 
 def root_relative(path: Path) -> str:
-    return path.resolve().relative_to(ROOT.resolve()).as_posix()
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(ROOT.resolve()).as_posix()
+    except ValueError:
+        # Workbench media may live under the authorized E: storage root while
+        # the worker itself runs from the D: workspace.
+        return resolved.as_posix()
 
 
 def transcribe(audio: Path, model_root: Path, device: str) -> dict[str, object]:

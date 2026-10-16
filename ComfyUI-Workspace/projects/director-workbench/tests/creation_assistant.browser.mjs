@@ -35,6 +35,7 @@ async function pollPage(page, predicate, argument) {
 }
 async function reloadSelectedWork(page, panel) {
   await page.reload();
+  await page.getByRole('button', { name: '作品、片段与更多功能', exact: true }).click();
   await page.locator('.director-breadcrumb strong').filter({ hasText: '助手小样' }).waitFor();
   await panel.getByRole('button', { name: /创作助手/ }).click();
 }
@@ -128,6 +129,7 @@ try {
   });
   assert.equal(owned.request.presentation_target, targets[0]);
   await otherTab.reload();
+  await otherTab.getByRole('button', { name: '作品、片段与更多功能', exact: true }).click();
   await otherTab.locator('.director-breadcrumb strong').filter({ hasText: '助手小样' }).waitFor();
   const otherPanel = otherTab.getByRole('complementary', { name: '创作助手' });
   await otherPanel.getByRole('button', { name: /创作助手/ }).click();

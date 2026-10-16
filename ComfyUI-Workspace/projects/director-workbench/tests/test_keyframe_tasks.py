@@ -22,13 +22,13 @@ def test_text_mode_needs_no_image_and_preserves_submission_identity(preset_clien
     task = response.json()
     recipe = json.loads(Path(task['payload']['workflow']).read_text(encoding='utf-8'))
     assert not any(node['class_type'] == 'LoadImage' for node in recipe.values())
-    assert recipe['4']['inputs']['text'] == args['prompt']
+    assert recipe['4']['inputs']['prompt'] == args['prompt']
     assert client.post(endpoint, json=args).json()['id'] == task['id']
     assert client.post(endpoint, json={**args, 'width': 1024}).status_code == 409
     output = reference_image(project)
     backend.complete_keyframe_task(task, {'status': 'success', 'output': str(output), 'width': 32, 'height': 48})
     asset = next(a for a in client.get('/api/projects/preset-test').json()['assets'] if a.get('keyframe_task_id') == task['id'])
-    assert asset['origin'] == 'Krea 2 Turbo'
+    assert asset['origin'] == 'Qwen Image 2.1'
 
 
 def test_keyframe_submit_recover_and_register_once(preset_client, monkeypatch):

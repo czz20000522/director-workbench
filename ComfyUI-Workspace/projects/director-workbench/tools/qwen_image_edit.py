@@ -44,10 +44,11 @@ def reference_size(width: int, height: int) -> tuple[int, int]:
 
 
 def graph(image: Path, prompt: str, prefix: str, seed: int,
-          reference_dimensions: tuple[int, int] | None = None) -> dict:
+          reference_dimensions: tuple[int, int] | None = None,
+          lora_name: str | None = None) -> dict:
     # Capability discovery builds a graph without opening a reference file.
     width, height = reference_size(*(reference_dimensions or (1024, 1024)))
-    return {
+    graph = {
         "1": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors", "type": "qwen_image", "device": "default"}},
         "2": {"class_type": "ModelSamplingAuraFlow", "inputs": {"model": ["4", 0], "shift": 3.1}},
         "3": {"class_type": "VAELoader", "inputs": {"vae_name": "qwen_image_vae.safetensors"}},
@@ -64,6 +65,11 @@ def graph(image: Path, prompt: str, prefix: str, seed: int,
         "17": {"class_type": "LoadImage", "inputs": {"image": str(image)}},
         "18": {"class_type": "SaveImage", "inputs": {"images": ["12", 0], "filename_prefix": prefix}},
     }
+    if lora_name:
+        graph['19'] = {'class_type': 'LoraLoaderModelOnly', 'inputs': {'model': ['4', 0], 'lora_name': lora_name, 'strength_model': 0.85}}
+        graph['2']['inputs']['model'] = ['19', 0]
+        graph['7']['inputs']['model'] = ['2', 0]
+    return graph
 
 
 def main() -> None:

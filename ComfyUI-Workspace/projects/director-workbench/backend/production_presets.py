@@ -14,29 +14,64 @@ NATIVE_PORTRAIT_PRESET_ID = 'h3-first-native-portrait'
 TEXT_LANDSCAPE_PRESET_ID = 'h3-text-native-landscape'
 TEXT_SQUARE_PRESET_ID = 'h3-text-native-square'
 TEXT_PORTRAIT_PRESET_ID = 'h3-text-native-portrait'
-TEXT_PRESET_IDS = (TEXT_LANDSCAPE_PRESET_ID, TEXT_SQUARE_PRESET_ID, TEXT_PORTRAIT_PRESET_ID)
+FAST_TEXT_LANDSCAPE_PRESET_ID = 'h3-text-fast-v4-kitchen'
+FAST_IMAGE_LANDSCAPE_PRESET_ID = 'h3-first-fast-kitchen'
+ADULT_REALISM_TEXT_PRESET_ID = 'h3-text-realism-people'
+ADULT_REALISM_IMAGE_PRESET_ID = 'h3-first-realism-people'
+ADULT_PRESET_IDS = (ADULT_REALISM_TEXT_PRESET_ID, ADULT_REALISM_IMAGE_PRESET_ID)
+TEXT_PRESET_IDS = (TEXT_LANDSCAPE_PRESET_ID, TEXT_SQUARE_PRESET_ID, TEXT_PORTRAIT_PRESET_ID, ADULT_REALISM_TEXT_PRESET_ID)
+# H3's local model was trained around the 768p canvas (1344x768 for 16:9).
+# The previous 0.4MP/Turbo combination is useful for quick previews, but is
+# visibly soft for text-to-video because it renders only 864x480. Keep the
+# fast profile for image-guided work and give text-only shots a quality-first
+# default that stays within H3's ~1MP canvas limit.
+TEXT_MEGAPIXELS = 0.98
+TEXT_TURBO_DEFAULT = False
 END_PRESET_IDS = ('h3-frames-native-landscape', 'h3-frames-native-square', 'h3-frames-native-portrait')
 SQUARE_PRESET_IDS = (NATIVE_SQUARE_PRESET_ID, TEXT_SQUARE_PRESET_ID, END_PRESET_IDS[1])
-LANDSCAPE_PRESET_IDS = (NATIVE_LANDSCAPE_PRESET_ID, TEXT_LANDSCAPE_PRESET_ID, END_PRESET_IDS[0])
-NATIVE_PRESET_IDS = (NATIVE_LANDSCAPE_PRESET_ID, NATIVE_SQUARE_PRESET_ID, NATIVE_PORTRAIT_PRESET_ID, *TEXT_PRESET_IDS, *END_PRESET_IDS)
+LANDSCAPE_PRESET_IDS = (NATIVE_LANDSCAPE_PRESET_ID, TEXT_LANDSCAPE_PRESET_ID, ADULT_REALISM_TEXT_PRESET_ID, END_PRESET_IDS[0])
+TEXT_PRESET_IDS = (*TEXT_PRESET_IDS, FAST_TEXT_LANDSCAPE_PRESET_ID)
+NATIVE_PRESET_IDS = (NATIVE_LANDSCAPE_PRESET_ID, NATIVE_SQUARE_PRESET_ID, NATIVE_PORTRAIT_PRESET_ID, FAST_IMAGE_LANDSCAPE_PRESET_ID, ADULT_REALISM_IMAGE_PRESET_ID, *TEXT_PRESET_IDS, *END_PRESET_IDS)
 PRESET_IDS = (PRESET_ID, FIRST_PRESET_ID, LOCKED_PRESET_ID, *NATIVE_PRESET_IDS)
 CONTRACTS = Path(__file__).resolve().parents[1] / 'contracts'
 
 
 def aspect_ratio(preset_id: str) -> str:
     title(preset_id)
-    return '1:1' if preset_id in SQUARE_PRESET_IDS else '16:9' if preset_id in LANDSCAPE_PRESET_IDS else '9:16'
+    return '1:1' if preset_id in SQUARE_PRESET_IDS else '16:9' if preset_id in (*LANDSCAPE_PRESET_IDS, FAST_TEXT_LANDSCAPE_PRESET_ID, FAST_IMAGE_LANDSCAPE_PRESET_ID, ADULT_REALISM_IMAGE_PRESET_ID) else '9:16'
+
+
+def megapixels(preset_id: str) -> float:
+    title(preset_id)
+    return TEXT_MEGAPIXELS if preset_id in TEXT_PRESET_IDS else 0.4
+
+
+def turbo_default(preset_id: str) -> bool:
+    title(preset_id)
+    if preset_id == FAST_TEXT_LANDSCAPE_PRESET_ID:
+        return True
+    if preset_id in ADULT_PRESET_IDS:
+        return False
+    return TEXT_TURBO_DEFAULT if preset_id in TEXT_PRESET_IDS else True
 
 
 def title(preset_id: str = PRESET_ID) -> str:
     if preset_id not in PRESET_IDS:
         raise ValueError('制作方案不存在')
     if preset_id in TEXT_PRESET_IDS:
-        shape = {TEXT_LANDSCAPE_PRESET_ID: '横屏', TEXT_SQUARE_PRESET_ID: '方形', TEXT_PORTRAIT_PRESET_ID: '竖屏'}[preset_id]
+        if preset_id == FAST_TEXT_LANDSCAPE_PRESET_ID:
+            return '快速文生视频 · H3 v4 + Kitchen 横屏'
+        if preset_id == ADULT_REALISM_TEXT_PRESET_ID:
+            return '成人向真人质感 · H3 Realism People 横屏'
+        shape = {TEXT_LANDSCAPE_PRESET_ID: '横屏', TEXT_SQUARE_PRESET_ID: '方形', TEXT_PORTRAIT_PRESET_ID: '竖屏', ADULT_REALISM_TEXT_PRESET_ID: '横屏'}[preset_id]
         return f'纯文本 + H3 原生声音{shape}样片（待小样验证）'
     if preset_id in END_PRESET_IDS:
         shape = ('横屏', '方形', '竖屏')[END_PRESET_IDS.index(preset_id)]
         return f'首尾帧 + H3 原生声音{shape}样片（待小样验证）'
+    if preset_id == FAST_IMAGE_LANDSCAPE_PRESET_ID:
+        return '快速图生视频 · 0.4MP + Kitchen 横屏'
+    if preset_id == ADULT_REALISM_IMAGE_PRESET_ID:
+        return '成人向真人质感图生视频 · H3 Realism People 横屏'
     if preset_id == NATIVE_PORTRAIT_PRESET_ID:
         return '首帧 + H3 原生声音竖屏样片（待小样验证）'
     if preset_id == LOCKED_PRESET_ID:
@@ -58,6 +93,10 @@ def stage_id(preset_id: str = PRESET_ID) -> str:
         return 'motion-first-native-landscape-generation'
     if preset_id == NATIVE_SQUARE_PRESET_ID:
         return 'motion-first-native-square-generation'
+    if preset_id == FAST_IMAGE_LANDSCAPE_PRESET_ID:
+        return 'motion-first-fast-kitchen-generation'
+    if preset_id == ADULT_REALISM_IMAGE_PRESET_ID:
+        return 'motion-first-realism-people-generation'
     return 'motion-first-generation' if preset_id == FIRST_PRESET_ID else 'motion-generation'
 
 
@@ -66,19 +105,29 @@ preset_stage_id = stage_id
 
 def load_recipe(preset_id: str = PRESET_ID) -> dict[str, Any]:
     title(preset_id)
-    graph = json.loads((CONTRACTS / 'h3-guided-api.json').read_text(encoding='utf-8'))
+    if preset_id == FAST_TEXT_LANDSCAPE_PRESET_ID:
+        graph = load_recipe(TEXT_LANDSCAPE_PRESET_ID)
+    elif preset_id == FAST_IMAGE_LANDSCAPE_PRESET_ID:
+        graph = load_recipe(NATIVE_LANDSCAPE_PRESET_ID)
+    elif preset_id == ADULT_REALISM_TEXT_PRESET_ID:
+        graph = load_recipe(TEXT_LANDSCAPE_PRESET_ID)
+    elif preset_id == ADULT_REALISM_IMAGE_PRESET_ID:
+        graph = load_recipe(NATIVE_LANDSCAPE_PRESET_ID)
+    else:
+        graph = json.loads((CONTRACTS / 'h3-guided-api.json').read_text(encoding='utf-8'))
     if preset_id in (FIRST_PRESET_ID, LOCKED_PRESET_ID, *NATIVE_PRESET_IDS) and preset_id not in END_PRESET_IDS:
-        graph.pop('ip-video:last-frame:2')
+        graph.pop('ip-video:last-frame:2', None)
         for node in graph.values():
             node['inputs'].pop('last_frame', None)
     if preset_id in NATIVE_PRESET_IDS:
-        graph.pop('aigc:add-audio-guide')
-        graph.pop('aigc:load-audio-guide')
+        graph.pop('aigc:add-audio-guide', None)
+        graph.pop('aigc:load-audio-guide', None)
         graph['105:16']['inputs']['conditioning'] = ['105:104', 0]
-        graph['115']['inputs'].update(aspect_ratio={'1:1': '1:1 (Square)', '16:9': '16:9 (Widescreen)', '9:16': '9:16 (Portrait Widescreen)'}[aspect_ratio(preset_id)], megapixels=0.4)
+        graph['115']['inputs'].update(aspect_ratio={'1:1': '1:1 (Square)', '16:9': '16:9 (Widescreen)', '9:16': '9:16 (Portrait Widescreen)'}[aspect_ratio(preset_id)], megapixels=megapixels(preset_id))
+        graph['105:126']['inputs']['value'] = turbo_default(preset_id)
     if preset_id in TEXT_PRESET_IDS:
-        graph.pop('114')
-        graph['105:104']['inputs'].pop('first_frame')
+        graph.pop('114', None)
+        graph['105:104']['inputs'].pop('first_frame', None)
     if preset_id == LOCKED_PRESET_ID:
         conditioning = graph['105:104']
         conditioning['class_type'] = 'MiniMaxH3AudioConditioningT8'
@@ -103,6 +152,28 @@ def load_recipe(preset_id: str = PRESET_ID) -> dict[str, Any]:
         }
         graph['105:91']['inputs'].update(
             images=['aigc:trim-locked-output', 0], audio=['aigc:trim-locked-output', 1])
+    if preset_id in (FAST_TEXT_LANDSCAPE_PRESET_ID, FAST_IMAGE_LANDSCAPE_PRESET_ID):
+        # These are the recipes tested in the local H3 acceleration run. Keep
+        # the same input graph and only replace the model path/sampling branch.
+        model = ['105:6', 0]
+        graph['105:121']['inputs'].update(model=model)
+        if preset_id == FAST_TEXT_LANDSCAPE_PRESET_ID:
+            graph['105:121']['inputs']['lora_name'] = 'minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors'
+            graph['105:17']['inputs']['sampler_name'] = 'euler'
+            graph['105:9']['inputs']['scheduler'] = 'beta'
+        graph['105:126']['inputs']['value'] = True
+        graph['105:9']['inputs']['steps'] = 8
+        shifted = 'h3-fast-sigma-shift'
+        graph[shifted] = {'class_type': 'MiniMaxH3SigmaShift',
+                          'inputs': {'model': ['105:121', 0], 'shift_video': 12.0, 'shift_audio': 5.0}}
+        graph['h3-fast-kitchen'] = {'class_type': 'ModelAttentionBackend',
+                                    'inputs': {'model': [shifted, 0], 'attention': 'comfy kitchen attention'}}
+        graph['105:9']['inputs']['model'] = ['h3-fast-kitchen', 0]
+        graph['105:16']['inputs']['model'] = ['h3-fast-kitchen', 0]
+    if preset_id in ADULT_PRESET_IDS:
+        graph['105:121']['inputs']['lora_name'] = r'adult-safe\h3-realism-people-t2v-i2v-r2v.safetensors'
+        graph['105:121']['inputs']['strength_model'] = 1.0
+        graph['105:126']['inputs']['value'] = False
     return graph
 
 
@@ -148,8 +219,14 @@ def catalog(model_root: Path, preset_id: str = PRESET_ID) -> dict[str, Any]:
         'id': preset_id, 'title': label, 'available': True,
         'description': (f'H3 · 首尾帧 · {aspect_ratio(preset_id)} · 0.4MP · 4–15 秒；原生声音待小样验证。'
                         if preset_id in END_PRESET_IDS else
-                        f'H3 · 纯文本 · {aspect_ratio(preset_id)} · 0.4MP · 4–15 秒。只需提示词与参数，不需图片或外部音频；本机音画 latent 路径，原生声音待真实小样验收。'
+                        f'H3 · 纯文本 · {aspect_ratio(preset_id)} · 约1.0MP · 8步 Euler/beta + v4 LoRA + Kitchen attention · 4–15 秒。已在本机 RTX 5070 Ti 实测跨场景速度与可用画质，仍需逐条审核。'
+                        if preset_id == FAST_TEXT_LANDSCAPE_PRESET_ID else
+                        f'H3 · 成人向真人质感 · {aspect_ratio(preset_id)} · Realism People LoRA · 标准20步 · 4–15 秒。仅用于虚构成年人和非露骨内容。'
+                        if preset_id in ADULT_PRESET_IDS else
+                        f'H3 · 纯文本 · {aspect_ratio(preset_id)} · 约1.0MP（768p画布）· 标准20步采样 · 4–15 秒。只需提示词与参数，不需图片或外部音频；本机音画 latent 路径，原生声音待真实小样验收。'
                         if preset_id in TEXT_PRESET_IDS else
+                        'H3 · 横屏 · 0.4MP · 8步 + Kitchen attention；首帧与提示词，已完成本机加速实测，仍需逐条审核。'
+                        if preset_id == FAST_IMAGE_LANDSCAPE_PRESET_ID else
                         'H3 · 竖屏9:16 · 0.4MP · 4–15秒；首帧与提示词，原生声音待小样验证。'
                         if preset_id == NATIVE_PORTRAIT_PRESET_ID else
                         'H3 · 横屏 16:9 · 约 0.4MP · 4–15 秒。首帧、提示词，声音由 H3 原生生成；与官方 1344×768 高分辨率设置不同。'
@@ -161,6 +238,8 @@ def catalog(model_root: Path, preset_id: str = PRESET_ID) -> dict[str, Any]:
                         'H3 · 竖屏 · 约 0.4MP · 4–15 秒。首帧和表演音频引导，不约束结束姿态，适合转身、行走等动作。'
                         if preset_id == FIRST_PRESET_ID else 'H3 · 竖屏 · 约 0.4MP · 4–15 秒。准备首帧、尾帧、表演音频和提示词后生成样片。'),
         'verification': (
+                         '已完成本机 RTX 5070 Ti 多场景实测；保留标准方案作对照，生成后仍需逐条审核。'
+                         if preset_id in (FAST_TEXT_LANDSCAPE_PRESET_ID, FAST_IMAGE_LANDSCAPE_PRESET_ID) else
                          '已验证图结构与输入契约；未提交 GPU 小样，fp16 VAE 的显存与画质需实测。'
                          if preset_id in NATIVE_PRESET_IDS else
                          '已验证连接和输入契约，尚未完成模型小样；不保证口型或无字幕。' if preset_id == LOCKED_PRESET_ID
