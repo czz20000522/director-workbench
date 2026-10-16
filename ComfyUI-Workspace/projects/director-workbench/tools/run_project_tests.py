@@ -5,12 +5,17 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import uuid
 
 
 PROJECT = Path(__file__).resolve().parents[1]
+BROWSER_TESTS = (
+    'agent_page_bridge', 'assembly_edit', 'guide_queue', 'guide_review',
+    'media_tools_panel', 'queued_panels', 'reference_queue', 'speech_panel',
+)
 PROBE = """
 import importlib.util, importlib.metadata, json, os, site, sys
 modules = {}
@@ -45,7 +50,60 @@ def suite_specs(project: Path, run_root: Path) -> dict:
             'modules': ['numpy', 'soundfile', 'torch'],
             'args': ['-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_generate_auk_flash.py', '-v'],
         },
+        # Browser acceptance drives need no Python interpreter argument: they bundle the
+        # front end themselves and intercept their own HTTP. Drivers that take fixtures
+        # (a Python interpreter, an absolute runtime directory, an MP4 or ffmpeg, a
+        # completed fixture root) are not listed yet; see the browser-suite notes in the
+        # project docs before adding one.
+        'browser': {
+            'runner': 'node',
+            'scripts': [f'tests/{name}.browser.mjs' for name in BROWSER_TESTS],
+        },
     }
+
+
+def report_suite(name: str, result: dict) -> None:
+    result['status'] = 'failed' if result['errors'] else 'passed'
+    for warning in result['warnings']:
+        print(f'[{name}] WARNING: {warning}', flush=True)
+    for error in result['errors']:
+        print(f'[{name}] ERROR: {error}', flush=True)
+
+
+def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: bool) -> dict:
+    """Run browser acceptance drivers through node, failing rather than skipping when absent."""
+    temporary = run_root / name
+    temporary.mkdir()
+    result = {'cwd': str(project), 'temporary': str(temporary),
+              'warnings': [], 'errors': [], 'test_exit_code': None}
+    environment = dict(os.environ)
+    environment['PYTHONNOUSERSITE'] = '1'
+    environment.update({key: str(temporary) for key in ('TMP', 'TEMP', 'TMPDIR')})
+    runner = shutil.which('node')
+    if runner is None:
+        result['errors'].append('Required node runner is missing; this suite is failed, not skipped.')
+        return result
+    result['interpreter'] = runner
+    missing = [script for script in spec['scripts'] if not (project / script).is_file()]
+    if missing:
+        result['errors'].append('Missing browser tests: ' + ', '.join(missing))
+    if not check:
+        commands = []
+        for script in spec['scripts']:
+            if script in missing:
+                continue
+            command = [runner, script]
+            commands.append(command)
+            try:
+                completed = subprocess.run(command, cwd=project, env=environment)
+            except OSError as exc:
+                result['errors'].append(f'{script} could not start: {type(exc).__name__}.')
+                continue
+            if completed.returncode:
+                result['errors'].append(f'{script} failed (exit {completed.returncode}).')
+        result['commands'] = commands
+        result['test_exit_code'] = int(bool(result['errors']))
+    return result
 
 
 def run(suite: str = 'all', check: bool = False, report_path: Path | None = None,
@@ -59,6 +117,11 @@ def run(suite: str = 'all', check: bool = False, report_path: Path | None = None
                'run_root': str(run_root), 'suites': {}}
     for name in names:
         spec = specs[name]
+        if spec.get('runner') == 'node':
+            print(f'[{name}] Runner: node', flush=True)
+            receipt['suites'][name] = browser_suite(spec, project, run_root, name, check)
+            report_suite(name, receipt['suites'][name])
+            continue
         interpreter = spec['python']
         temporary = run_root / name
         temporary.mkdir()
@@ -100,11 +163,7 @@ def run(suite: str = 'all', check: bool = False, report_path: Path | None = None
                         result['errors'].append(f'Test suite failed (exit {completed.returncode}).')
                 except OSError as exc:
                     result['errors'].append(f'Test suite could not start: {type(exc).__name__}.')
-        result['status'] = 'failed' if result['errors'] else 'passed'
-        for warning in result['warnings']:
-            print(f'[{name}] WARNING: {warning}', flush=True)
-        for error in result['errors']:
-            print(f'[{name}] ERROR: {error}', flush=True)
+        report_suite(name, result)
     failed = [name for name, result in receipt['suites'].items() if result['status'] == 'failed']
     receipt['exit_code'] = int(bool(failed))
     destination = report_path.resolve() if report_path else run_root / 'report.json'
@@ -117,7 +176,7 @@ def run(suite: str = 'all', check: bool = False, report_path: Path | None = None
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--suite', choices=('all', 'core', 'auk'), default='all')
+    parser.add_argument('--suite', choices=('all', 'core', 'auk', 'browser'), default='all')
     parser.add_argument('--check', action='store_true', help='Probe interpreters and package metadata without importing models or running tests.')
     parser.add_argument('--report', type=Path, help='Optional JSON receipt path; default: unique workspace runtime directory.')
     args = parser.parse_args()

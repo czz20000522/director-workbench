@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('all', 'core', 'auk')][string]$Suite = 'all',
+    [ValidateSet('all', 'core', 'auk', 'browser')][string]$Suite = 'all',
     [switch]$Check
 )
 $ErrorActionPreference = 'Stop'

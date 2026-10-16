@@ -325,3 +325,16 @@
 
 # Adult creative partition (recipe selection is pinned by tests)
 !/ComfyUI-Workspace/projects/director-workbench/tests/test_adult_profiles.py
+
+# Browser acceptance driven by tools/run_project_tests.py --suite browser.
+# Every listed driver bundles the front end, intercepts its own HTTP and uses
+# isolated synthetic media; none reads a private path, account or work asset.
+!/ComfyUI-Workspace/projects/director-workbench/tests/agent_page_bridge.browser.mjs
+!/ComfyUI-Workspace/projects/director-workbench/tests/assembly_edit.browser.mjs
+!/ComfyUI-Workspace/projects/director-workbench/tests/guide_queue.browser.mjs
+!/ComfyUI-Workspace/projects/director-workbench/tests/guide_review.browser.mjs
+!/ComfyUI-Workspace/projects/director-workbench/tests/media_tools_panel.browser.mjs
+!/ComfyUI-Workspace/projects/director-workbench/tests/queued_panels.browser.mjs
+!/ComfyUI-Workspace/projects/director-workbench/tests/reference_queue.browser.mjs
+!/ComfyUI-Workspace/projects/director-workbench/tests/speech_panel.browser.mjs
+!/ComfyUI-Workspace/projects/director-workbench/tests/test_finish_tasks.py
