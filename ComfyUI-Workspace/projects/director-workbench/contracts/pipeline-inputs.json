@@ -159,10 +159,10 @@
           "kind": "参数",
           "required": true,
           "control": "number",
-          "min": 1,
-          "max": 10,
+          "min": 4,
+          "max": 15,
           "step": 0.1,
-          "description": "工作流允许的数值范围。",
+          "description": "H3 支持 4–15 秒；实际帧数按 24 fps 和 17k+5 网格对齐。分镜时长需一致。",
           "binding": {"node_id": "105:111", "input": "value"}
         },
         {

@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend import app as backend
+from backend import production_presets
 from test_private_workbench import private_workbench, create as create_private
 
 
@@ -525,3 +526,19 @@ def test_tasks_table_keeps_same_asset_id_separate_between_projects(client: TestC
             "SELECT project_id, asset_id FROM tasks WHERE asset_id = 'S01' ORDER BY project_id"
         ).fetchall()
     assert rows == [("project-a", "S01"), ("project-b", "S01")]
+
+
+def test_published_motion_duration_contract_matches_the_h3_range() -> None:
+    """The declared contract must agree with what the server serves for every recipe.
+
+    The H3 recipes enforce 4-15s; when the contract still advertised 1-10s a client
+    reading it directly would offer a range the engine cannot render.
+    """
+    document = json.loads((backend.PROJECT / "contracts" / "pipeline-inputs.json").read_text(encoding="utf-8"))
+    declared = next(spec for spec in document["stages"]["motion-generation"]["inputs"] if spec["id"] == "duration")
+    assert (declared["min"], declared["max"]) == (4, 15)
+    assert "4–15 秒" in declared["description"]
+    for preset_id in production_presets.PRESET_IDS:
+        served = next(spec for spec in production_presets.input_specs(preset_id) if spec["id"] == "duration")
+        assert (served["min"], served["max"]) == (declared["min"], declared["max"]), preset_id
+        assert served["description"] == declared["description"], preset_id
