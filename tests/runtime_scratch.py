@@ -30,7 +30,11 @@ from tools.remove_tree import remove_tree
 # pytest suite, where the scratch directories are a subset of that run's artifacts.
 OVERRIDE = 'DIRECTOR_TEST_RUNTIME'
 KEEP = 4
-MIN_AGE_SECONDS = 900.0
+# Long enough to outlive one case rather than one session: this only has to protect a
+# directory another run created seconds ago, and every minute it covers is another run's
+# worth of artifacts that a hand-run pytest leaves stacked below the count bound.  One
+# audio case is ~88 MB, so the window is what the operator actually sees.
+MIN_AGE_SECONDS = 60.0
 
 
 def base_root() -> Path:
