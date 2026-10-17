@@ -16,9 +16,12 @@ import paths
 PROJECT = paths.PROJECT_ROOT
 BROWSER_TESTS = (
     'agent_access', 'agent_page_bridge', 'assembly_edit', 'automatic_creation',
-    'generation_stage', 'guide_queue', 'guide_review', 'media_tools_panel',
-    'queued_panels', 'reference_queue', 'speech_panel',
+    'enhancement', 'generation_stage', 'guide_queue', 'guide_review',
+    'media_tools_panel', 'queued_panels', 'reference_queue', 'speech_panel',
 )
+# These drivers additionally need the project interpreter and a fresh absolute runtime
+# directory (relative or pre-existing roots raise AccessDenied in backend/user_context.py).
+BROWSER_FIXTURE_TESTS = ('enhancement',)
 PROBE = """
 import importlib.util, importlib.metadata, json, os, site, sys
 modules = {}
@@ -56,11 +59,10 @@ def suite_specs(project: Path, run_root: Path, desktop: Path | None = None) -> d
             'modules': ['numpy', 'soundfile', 'torch'],
             'args': ['-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_generate_auk_flash.py', '-v'],
         },
-        # Browser acceptance drives need no Python interpreter argument: they bundle the
-        # front end themselves and intercept their own HTTP. Drivers that take fixtures
-        # (a Python interpreter, an absolute runtime directory, an MP4 or ffmpeg, a
-        # completed fixture root) are not listed yet; see the browser-suite notes in the
-        # project docs before adding one.
+        # Browser acceptance drivers bundle the front end themselves and intercept their
+        # own HTTP. Those listed in BROWSER_FIXTURE_TESTS also take the project Python and
+        # a fresh absolute runtime directory. Drivers needing an MP4, ffmpeg or a completed
+        # fixture root are not listed yet; see the browser-suite notes in the project docs.
         'browser': {
             'runner': 'node',
             'scripts': [f'tests/{name}.browser.mjs' for name in BROWSER_TESTS],
@@ -95,10 +97,24 @@ def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: b
         result['errors'].append('Missing browser tests: ' + ', '.join(missing))
     if not check:
         commands = []
+        fixtures = {}
+        interpreter = project / '.venv/Scripts/python.exe'
         for script in spec['scripts']:
             if script in missing:
                 continue
             command = [runner, script]
+            name = Path(script).name.removesuffix('.browser.mjs')
+            if name in BROWSER_FIXTURE_TESTS:
+                if not interpreter.is_file():
+                    result['errors'].append(f'{script} needs the project interpreter; this suite is failed, not skipped.')
+                    continue
+                # user_context.path() rejects asset paths over 240 characters on Windows and a
+                # fixture root grows ~172 characters of generated account, series and project
+                # names, so the fixture root is a short subdirectory of the short run root
+                # instead of temporary/<driver name>. The receipt keeps the mapping legible.
+                fixture = run_root / f'f{len(fixtures) + 1}'
+                fixtures[name] = str(fixture)
+                command += [str(interpreter), str(fixture)]
             commands.append(command)
             try:
                 completed = subprocess.run(command, cwd=project, env=environment)
@@ -108,6 +124,7 @@ def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: b
             if completed.returncode:
                 result['errors'].append(f'{script} failed (exit {completed.returncode}).')
         result['commands'] = commands
+        result['fixture_roots'] = fixtures
         result['test_exit_code'] = int(bool(result['errors']))
     return result
 
@@ -118,7 +135,8 @@ def run(suite: str = 'all', check: bool = False, report_path: Path | None = None
     project = project.resolve()
     host = paths.DESKTOP_ROOT if desktop is None else Path(desktop).resolve()
     runtime_root = paths.RUNTIME_ROOT if runtime is None else Path(runtime).resolve()
-    run_root = runtime_root / ('t-' + uuid.uuid4().hex[:12])
+    # A short run-root token keeps room for the fixture roots below; see browser_suite().
+    run_root = runtime_root / ('t-' + uuid.uuid4().hex[:8])
     run_root.mkdir(parents=True, exist_ok=False)
     specs = suite_specs(project, run_root, host)
     names = list(specs) if suite == 'all' else [suite]
@@ -188,8 +206,10 @@ def main() -> int:
     parser.add_argument('--suite', choices=('all', 'core', 'auk', 'browser'), default='all')
     parser.add_argument('--check', action='store_true', help='Probe interpreters and package metadata without importing models or running tests.')
     parser.add_argument('--report', type=Path, help='Optional JSON receipt path; default: unique workspace runtime directory.')
+    parser.add_argument('--runtime', type=Path,
+                        help='Override the workspace runtime root; a shorter root keeps fixture asset paths inside the backend path limit.')
     args = parser.parse_args()
-    return run(args.suite, args.check, args.report)
+    return run(args.suite, args.check, args.report, runtime=args.runtime)
 
 
 if __name__ == '__main__':

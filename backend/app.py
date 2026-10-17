@@ -5507,7 +5507,9 @@ def enhancement_sources(project_id: str) -> list[dict[str, str]]:
         try:
             path = resolve_registered_path(value)
             if path.is_file() and path.suffix.lower() in enhancement.IMAGE_EXTENSIONS | enhancement.VIDEO_EXTENSIONS:
-                paths.setdefault(str(path).casefold(), {'value': value, 'label': label,
+                # One portable path form for every entry: upload receipts and plan
+                # entries already use it, and the panel selects by exact value.
+                paths.setdefault(str(path).casefold(), {'value': root_relative_path(path), 'label': label,
                     'kind': 'image' if path.suffix.lower() in enhancement.IMAGE_EXTENSIONS else 'video'})
         except (ValueError, OSError, HTTPException):
             pass

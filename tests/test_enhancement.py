@@ -136,6 +136,15 @@ def test_general_enhancement_requires_owned_project_and_files(private_workbench,
     assert other.post(f"/api/projects/{other_project['id']}/enhancement-tasks", json={'source': source, 'idempotency_key': 'foreign-file'}).status_code in (403, 422)
 
 
+def test_uploaded_media_is_listed_verbatim_for_the_panel_selector(preset_client, tmp_path):
+    """The panel selects a source by exact value, so the list must echo the upload receipt."""
+    client, _ = preset_client
+    source = register_image(client, 'preset-test', tmp_path)
+    listed = client.get('/api/projects/preset-test/enhancements').json()['sources']
+    assert source in [item['value'] for item in listed]
+    assert [item['kind'] for item in listed if item['value'] == source] == ['image']
+
+
 def test_worker_and_reconcile_publish_separate_candidate_without_plan_writes(preset_client, monkeypatch, tmp_path):
     client, _ = preset_client
     monkeypatch.setattr(backend, 'OUTPUT_ROOT', tmp_path / 'output')
