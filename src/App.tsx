@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { CSSProperties, InputHTMLAttributes, PointerEvent as ReactPointerEvent } from 'react';
+import type { CSSProperties, InputHTMLAttributes, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { ArrowDownToLine, ArrowUpRight, BookOpen, Check, ChevronDown, ChevronLeft, ChevronRight, Clapperboard, ClipboardCheck, Film, FolderOpen, Image as ImageIcon, Layers3, LayoutDashboard, LogOut, Maximize2, Music2, Pause, Play, Plus, Radio, Search, Settings2, Sparkles, Square, Workflow, X } from 'lucide-react';
 import { assets as fallbackAssets, clock, labels, pipelineStages as defaultPipelineStages, range, type Asset, type Kind, type PipelineInput, type PipelineStage, type Variant } from './data';
 import MaterialBridge from './MaterialBridge';
@@ -264,6 +264,19 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const [pipeline, setPipeline] = useState<PipelineStage[]>(defaultPipelineStages);
   const [pipelineStageId, setPipelineStageId] = useState('');
   const [pipelineOpen, setPipelineOpen] = useState(false);
+  // `<details open>` 是受控属性。派生默认值一旦变化（切换快速/完整模式、切换生成方式、切到别的分镜），
+  // React 就会重写 open，把用户手动的展开/收起顶掉。这里记住用户自己的选择，让它优先于派生默认值；
+  // 只影响本会话，刷新后回到当前模式的默认状态。
+  const [expandedPanels, setExpandedPanels] = useState<Record<string, boolean>>({});
+  const panelOpen = (key: string, fallback: boolean) => expandedPanels[key] ?? fallback;
+  const rememberPanel = (key: string) => (event: ReactMouseEvent<HTMLElement>) => {
+    const node = event.currentTarget.parentElement;
+    if (!(node instanceof HTMLDetailsElement)) return;
+    // summary 的默认行为也会自己翻转 open，可能与 React 的同步刷新互相抵消；
+    // 先取消默认行为，再由 React 独占写入，展开状态就只有一个来源。
+    event.preventDefault();
+    setExpandedPanels(current => ({ ...current, [key]: !node.open }));
+  };
   const [inspectorTab, setInspectorTab] = useState<'intent' | 'materials' | 'params' | 'history'>('intent');
   const [shotEditTab, setShotEditTab] = useState<'materials' | 'prompt' | 'history'>('materials');
   const [shotVersions, setShotVersions] = useState<ShotVersion[]>([]);
@@ -2103,7 +2116,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
                   {generationEdit.mode === 'auto' && <><label className="director-edit-wide">画面与动作描述<textarea rows={3} value={currentPrompt} onChange={event => { updateDraft(current.id, { prompt: event.target.value }); setSegmentEdit(previous => ({ ...previous, prompt: event.target.value })); }} placeholder="描述你想看到的画面、动作和声音" /></label><label className="director-edit-wide">生成方案<select aria-label="当前分镜生成方案" value={generationEdit.speed_profile} onChange={event => setGenerationEdit(previous => ({ ...previous, speed_profile: event.target.value as ShotGenerationSettings['speed_profile'] }))}><option value="standard">标准方案 · 原生配置</option><option value="fast">快速预览 · 已验证 8 步 + Kitchen（仅 16:9、无结束帧／表演音频）</option></select></label><ResolutionPicker label="视频" aspect={generationEdit.aspect_ratio} resolution={generationEdit.output_resolution} nativeSize={nativeVideoSize(generationEdit.aspect_ratio, isTextGeneration)} onChange={(aspect_ratio, output_resolution) => setGenerationEdit(previous => ({ ...previous, aspect_ratio, output_resolution, speed_profile: aspect_ratio === '16:9' ? previous.speed_profile : 'standard' }))} /></>}
                   {!autoCreation && <label className="director-edit-wide">导演意图<textarea rows={2} value={segmentEdit.performance} onChange={event => setSegmentEdit(previous => ({ ...previous, performance: event.target.value }))} placeholder="这一段要表达什么、人物怎样行动？" /></label>}
                   {quickActive && generationEdit.mode === 'auto' && <MaterialSelect excludedValues={diagnosticPaths} label="开始画面" kind="image" value={segmentEdit.first_frame} options={materialOptions} onChange={value => setSegmentEdit(previous => ({ ...previous, first_frame: value }))} onBrowse={() => setMaterialBridgeOpen(true)} />}
-                  <details className="director-edit-more director-edit-wide" open={!autoCreation}><summary>画面与声音控制（可选）</summary><div className="director-edit-grid">
+                  <details className="director-edit-more director-edit-wide" open={panelOpen('shot-controls', !autoCreation)}><summary onClick={rememberPanel('shot-controls')}>画面与声音控制（可选）</summary><div className="director-edit-grid">
                   {isTextGeneration && generationEdit.mode !== 'auto' ? <p className="director-edit-wide">当前方案仅用文字生成，无需首尾帧或表演音频。要控制起始画面，请明确选择图生方案；成片音频可在后期设置。</p> : <>{!(quickActive && generationEdit.mode === 'auto') && <MaterialSelect excludedValues={diagnosticPaths} label={generationEdit.mode === 'auto' ? '开始画面（可选）' : '首帧'} kind="image" value={segmentEdit.first_frame} options={materialOptions} onChange={value => setSegmentEdit(previous => ({ ...previous, first_frame: value }))} onBrowse={() => setMaterialBridgeOpen(true)} />}
                   <MaterialSelect excludedValues={diagnosticPaths} label={generationEdit.mode === 'auto' ? '结束画面（可选）' : '尾帧'} kind="image" value={segmentEdit.last_frame} options={materialOptions} onChange={value => setSegmentEdit(previous => ({ ...previous, last_frame: value }))} onBrowse={() => setMaterialBridgeOpen(true)} />
                   <MaterialSelect excludedValues={diagnosticPaths} label={generationEdit.mode === 'auto' ? '用于表演的声音（可选）' : '表演音频'} kind="audio" value={segmentEdit.audio_guide} options={materialOptions} onChange={value => setSegmentEdit(previous => ({ ...previous, audio_guide: value }))} onBrowse={() => setMaterialBridgeOpen(true)} /></>}
@@ -2180,9 +2193,9 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
       {materialBridgeOpen && <MaterialBridge projectId={project?.id ?? ''} initialMode={materialBridgeDevice ? 'device' : 'server'} onClose={() => { setMaterialBridgeOpen(false); setMaterialBridgeDevice(false); }} onRegistered={count => { void refreshRegisteredMaterials(count); }} />}
       {creativeConflictPanel}
       {batchId && <div className="director-batch-note" role="note">批次参数语义：按每个分镜自己的计划与源工作流冻结；当前片段 Inspector 的修改只影响单段重做。需要批量改参时，请先逐段确认后再提交。</div>}
-      <details className="quick-agent-settings" open={!quickShell}><summary>连接与 Agent 设置</summary><ConnectAgent /></details>
+      <details className="quick-agent-settings" open={panelOpen('agent-connect', !quickShell)}><summary onClick={rememberPanel('agent-connect')}>连接与 Agent 设置</summary><ConnectAgent /></details>
       {privateMode && <CreationAssistant projectId={project?.id} onPresentation={presentAssistantEvent} onResult={result => void openAssistantResult(result)} />}
-      {privateMode && <>{agentStep && <div className="director-readiness" role="status" aria-label="Agent 页面进度">{agentStep}</div>}<details className="quick-agent-settings" open={!quickShell}><summary>Agent 页面操作</summary><AgentPageBridge onAction={presentAgentAction} /></details></>}
+      {privateMode && <>{agentStep && <div className="director-readiness" role="status" aria-label="Agent 页面进度">{agentStep}</div>}<details className="quick-agent-settings" open={panelOpen('agent-page', !quickShell)}><summary onClick={rememberPanel('agent-page')}>Agent 页面操作</summary><AgentPageBridge onAction={presentAgentAction} /></details></>}
       {notice && <div className="director-toast" role="status"><Check size={16} /><span>{notice}</span></div>}
       {deleteDirectory && <DeleteDirectoryDialog target={deleteDirectory} onClose={() => setDeleteDirectory(null)} onDeleted={() => { void afterDirectoryDeleted(); }} />}
       {deleteShotOpen && currentPlanSegment && <div className="director-delete-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setDeleteShotOpen(false); }}><section className="director-delete-dialog" role="dialog" aria-modal="true" aria-label="删除分镜"><h2>删除分镜 {currentPlanSegment.id}？</h2><p>会从本作品的制作计划移除这一段，并重排后续时间轴。生成记录与可能被其他分镜共用的素材仍保留。</p><div className="director-delete-actions"><button type="button" className="button secondary compact" onClick={() => setDeleteShotOpen(false)}>取消</button><button type="button" className="button danger compact" disabled={deletingShot} onClick={() => void deleteCurrentShot()}>{deletingShot ? '删除中…' : '删除分镜'}</button></div></section></div>}

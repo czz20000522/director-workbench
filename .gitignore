@@ -60,6 +60,7 @@
 !/src/QuickStudioPrototype.tsx
 !/src/quick-studio-prototype.css
 !/tests/quick_generation.browser.mjs
+!/tests/quick_mode_panels.browser.mjs
 !/tests/quick_generation_bridge.py
 !/AGENTS.md
 !/CONTRIBUTING.md
