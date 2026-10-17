@@ -77,6 +77,10 @@ try {
   await page.goto('http://localhost:4197');
   await page.getByLabel('用户名').fill('user001'); await page.getByLabel('密码').fill('one');
   await page.getByRole('button', { name: '进入工作台', exact: true }).click();
+  // The hint names the series, not just a title: the series is what the adult zone promises
+  // to isolate. With no work yet it must say which series generation will create into.
+  await page.locator('.quick-navigation > span').waitFor();
+  assert.equal(await page.locator('.quick-navigation > span').textContent(), '还没有作品；生成时会先新建到「快速草稿」');
   await page.getByRole('button', { name: '文生图 描述画面，生成一张图片' }).click();
   await page.getByRole('alert').waitFor();
   await page.getByRole('button', { name: '文生图 描述画面，生成一张图片' }).click();
@@ -101,6 +105,9 @@ try {
   await imagePanel.getByRole('button', { name: '停止关键帧任务', exact: true }).waitFor();
   assert.equal(writes.filter(row => row.path === '/api/projects/create').length, 1);
   assert.equal(writes.filter(row => row.path.endsWith('/keyframe-tasks')).length, 1);
+  // With a work in place the hint must still lead with the series, and name that same work.
+  assert.equal(await page.locator('.quick-navigation > span').textContent(),
+    `新产物会存进：「快速草稿」/ ${await page.locator('.director-breadcrumb strong').textContent()}`);
   await call({ operation: 'complete', project_id: projectId, task_id: imageTask.id });
   await page.getByRole('button', { name: '让这张图动起来', exact: true }).waitFor({ timeout: 15000 });
   await imagePanel.getByRole('button', { name: '修改提示词 / 再生成', exact: true }).click();
@@ -362,7 +369,7 @@ try {
   // as an adult capability: 清晰化 upscales with RealESRGAN and loads no adult configuration.
   await page.getByRole('button', { name: '快速生成', exact: true }).click();
   const destination = await page.locator('.quick-navigation > span').textContent();
-  assert.ok(destination.startsWith('保存到：'), `Unexpected quick destination: ${destination}`);
+  assert.ok(destination.startsWith('新产物会存进：'), `Unexpected quick destination: ${destination}`);
   await page.getByRole('group', { name: '快速生成分区', exact: true }).getByRole('button', { name: '成人向创作', exact: true }).click();
   assert.equal(await page.locator('.quick-navigation > span').textContent(), destination,
     'Opening the adult zone keeps the current work instead of moving it into the adult series');
@@ -381,7 +388,7 @@ try {
   assert.deepEqual(errors, []);
   const stats = await call({ operation: 'stats' });
   assert.equal(stats.queued.length, 7); assert.deepEqual(stats.other_projects, []);
-  console.log('PASS: three entry types, adult-zone clarify entry, candidate comparison/restore/adopt, next shot, two-shot joins and sound, lost assembly receipt recovery, final preview/download/adopt, shot/account/file isolation, responsive layout. GPU and assembly execution are stubbed.');
+  console.log('PASS: three entry types, series-labelled destination hint, adult-zone clarify entry, candidate comparison/restore/adopt, next shot, two-shot joins and sound, lost assembly receipt recovery, final preview/download/adopt, shot/account/file isolation, responsive layout. GPU and assembly execution are stubbed.');
 } catch (error) {
   if (page) { console.error((await page.locator('body').innerText()).slice(-9000)); await page.screenshot({ path: resolve(process.argv[3], 'failure.png'), fullPage: true }); }
   throw error;
