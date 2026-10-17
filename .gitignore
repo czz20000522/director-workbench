@@ -44,9 +44,6 @@
 !/ComfyUI-Workspace/projects/director-workbench/tools/
 /ComfyUI-Workspace/projects/director-workbench/tools/*
 !/ComfyUI-Workspace/projects/director-workbench/tools/qwen_image_t2i.py
-!/ComfyUI-Workspace/projects/director-workbench/docs/workflow-baseline-2026-10-15.md
-!/ComfyUI-Workspace/projects/director-workbench/docs/agent-plugin-sharing.md
-!/ComfyUI-Workspace/projects/director-workbench/docs/quick-generation-integration.md
 !/ComfyUI-Workspace/projects/director-workbench/src/quick-create.css
 !/.agents/skills/aigc-video-production/assets/workflows/
 /.agents/skills/aigc-video-production/assets/workflows/*
@@ -72,11 +69,9 @@
 !/ComfyUI-Workspace/projects/director-workbench/prototype.html
 !/ComfyUI-Workspace/projects/director-workbench/src/QuickStudioPrototype.tsx
 !/ComfyUI-Workspace/projects/director-workbench/src/quick-studio-prototype.css
-!/ComfyUI-Workspace/projects/director-workbench/docs/quick-studio-prototype.md
 !/ComfyUI-Workspace/projects/director-workbench/src/quick-create.css
 !/ComfyUI-Workspace/projects/director-workbench/tests/quick_generation.browser.mjs
 !/ComfyUI-Workspace/projects/director-workbench/tests/quick_generation_bridge.py
-!/ComfyUI-Workspace/projects/director-workbench/docs/quick-generation-integration.md
 !/AGENTS.md
 !/CONTRIBUTING.md
 !/ComfyUI-Workspace/production/storage_layout.py
