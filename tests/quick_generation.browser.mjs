@@ -52,6 +52,9 @@ try {
     if (url.pathname.endsWith('/events')) return route.fulfill({ contentType: 'text/event-stream', body: '' });
     if (!url.pathname.startsWith('/api/') && !['/media-file', '/material-file', '/openapi.json'].includes(url.pathname)) return route.fulfill({ status: 404, body: '' });
     if (request.method() !== 'GET') writes.push({ path: url.pathname, method: request.method(), body: request.headers()['content-type']?.includes('application/json') ? request.postDataJSON() : null });
+    // DevTools omits uploaded file bytes from intercepted multipart bodies, so an upload forwarded
+    // through this route would store a zero-byte asset: hand it to the fixture's native handler.
+    if (request.method() === 'POST' && url.pathname.endsWith('/upload')) return route.continue();
     // Snapshot the holds before the fixture round trip: a request that arrived while nothing was
     // armed must not be held retroactively (the app's own refresh lands in this window), and one
     // that arrived while armed must not slip through.
@@ -133,14 +136,41 @@ try {
   await page.getByRole('button', { name: '让这张图动起来', exact: true }).click();
   const videoForm = page.getByRole('group', { name: '让图片动起来', exact: true });
   assert.ok(await videoForm.getByLabel('开始画面', { exact: true }).inputValue());
+  const videoAspect = videoForm.getByLabel('视频画幅', { exact: true });
+  const videoCanvas = () => videoAspect.inputValue();
+  // The canvas must follow the start frame that was just handed over, whatever size that file
+  // really is: H3 only stretches the first frame onto the canvas without cropping.
+  const startFrameAspect = () => page.evaluate(() => {
+    const image = document.querySelector('.quick-video-form .director-material-preview');
+    if (!image || !image.complete || !image.naturalWidth) return null;
+    return image.naturalWidth === image.naturalHeight ? '1:1' : image.naturalWidth > image.naturalHeight ? '16:9' : '9:16';
+  });
+  const handedOver = await startFrameAspect();
+  assert.ok(handedOver, 'The start frame preview must report its real size');
+  await page.waitForFunction(aspect => document.querySelector('.quick-video-form select[aria-label="视频画幅"]')?.value === aspect, handedOver);
+  assert.equal(await videoCanvas(), handedOver);
   await videoForm.getByLabel('提示词', { exact: true }).fill('Slow camera push in; clouds drift over the lighthouse.');
+  // The fixture picture is 32x48, so a freshly uploaded portrait start frame must land on 9:16.
   await videoForm.getByLabel('上传图片', { exact: true }).setInputFiles(ready.picture);
+  await page.waitForFunction(() => document.querySelector('.quick-video-form select[aria-label="视频画幅"]')?.value === '9:16');
+  // An explicit override stays explicit: the form states the consequence and offers one click back,
+  // but never rewrites the choice on its own.
+  await videoForm.locator('.resolution-picker summary').click();
+  await videoAspect.selectOption('16:9');
+  const mismatch = videoForm.locator('.quick-aspect-mismatch');
+  await mismatch.waitFor();
+  assert.match(await mismatch.textContent(), /开始画面是竖屏（9:16）/);
+  assert.match(await mismatch.textContent(), /拉伸铺满，不裁切/);
+  await mismatch.getByRole('button', { name: '改用竖屏（9:16）', exact: true }).click();
+  assert.equal(await videoCanvas(), '9:16');
+  await mismatch.waitFor({ state: 'detached' });
   await page.waitForFunction(() => !document.querySelector('.quick-video-form')?.disabled);
   await videoForm.getByRole('button', { name: '生成视频', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.director-edit-heading')?.textContent.includes('等待'));
   let videoTasks = (await tasks()).filter(task => task.asset_id === 'S01');
   assert.equal(videoTasks.length, 1);
   assert.equal(videoTasks[0].payload.execution_snapshot.resolved_generation.generation_mode, 'image_to_video');
+  assert.equal(videoTasks[0].payload.execution_snapshot.resolved_generation.aspect_ratio, '9:16', 'The submitted canvas matches the start frame');
   assert.equal(videoTasks[0].payload.execution_snapshot.prompt, 'Slow camera push in; clouds drift over the lighthouse.');
   assert.equal(writes.filter(row => row.path.endsWith('/plan/segments')).length, 1);
   assert.equal(writes.filter(row => row.path.endsWith('/tasks')).length, 1);

@@ -37,6 +37,7 @@ type Draft = { prompt?: string; note?: string };
 type Drafts = Record<string, Draft>;
 type CreativeProfile = 'general' | 'adult-realism' | 'adult-anime';
 type ShotGenerationSettings = { output_resolution?: OutputResolution; mode: 'auto' | 'advanced'; aspect_ratio: '16:9' | '1:1' | '9:16'; sound_mode: 'performance_reference' | 'locked_dialogue'; seed: number; speed_profile: 'standard' | 'fast'; creative_profile: CreativeProfile };
+type QuickAspect = ShotGenerationSettings['aspect_ratio'];
 type PlanSegment = ReferenceOriginData & { generation?: ShotGenerationSettings; generation_history?: Array<{ task_id?: string; generated_at?: string; snapshot?: Record<string, unknown> }>; id: string; script_scene_id?: string; script_revision?: number; start_seconds: number; end_seconds: number; duration_seconds: number; status: string; location: string; shot_size: string; camera: string; wardrobe: string; performance: string; dependencies?: string[]; audio?: { delivery_master?: string; guide?: string; range_seconds?: [number, number] | string }; keyframes?: { first?: string | null; last?: string | null }; workflow?: string | null; prompt?: string | null; comfyui_task_id?: string | null; current_version_task_id?: string | null; visual_review?: { status?: string; label?: string; reason?: string; reviewed_at?: string; reviewer?: string }; video?: { path?: string; variant?: string; rework_candidate?: { path?: string; variant?: string; workflow?: string; ui_workflow?: string; prompt_id?: string; status?: string; specs?: string }; finish_review?: { path?: string; variant?: string; workflow?: string; prompt_id?: string; task_id?: string; status?: string; specs?: string; processing?: { method?: string; model?: string; output_size?: { width?: number; height?: number } } } } };
 type PlanAssembly = { status?: string; output?: string; workflow?: string; prompt_id?: string; duration_seconds?: number; target_duration_seconds?: number; notes?: string };
 type WorkflowCatalogEntry = { id: string; role?: string; asset_id?: string; path: string; comfyui_import?: 'api' | 'ui'; equivalence?: string };
@@ -105,6 +106,27 @@ const QUICK_SERIES = { general: '快速草稿', adult: '成人向创作' } as co
 
 function sharedMediaUrl(path?: string | null) {
   return path ? `/media-file?path=${encodeURIComponent(path)}` : undefined;
+}
+
+// 视频画幅必须跟着开始画面走：H3 图像转视频对首帧只做缩放铺满（不裁切），
+// 画幅与首帧不一致就会把画面压扁。判定规则与关键帧面板的画幅回显一致。
+function stillAspectRatio(width: number, height: number): QuickAspect {
+  return width === height ? '1:1' : width > height ? '16:9' : '9:16';
+}
+
+const ASPECT_LABEL: Record<QuickAspect, string> = { '16:9': '横屏', '9:16': '竖屏', '1:1': '方形' };
+
+// 素材选项里只有路径、没有尺寸，所以尺寸只能由浏览器读取素材本身；
+// 读不到就返回 null，保持现有默认值，不猜。
+function measureStillAspect(path?: string | null): Promise<QuickAspect | null> {
+  const url = sharedMediaUrl(path);
+  if (!url) return Promise.resolve(null);
+  return new Promise(resolve => {
+    const image = new Image();
+    image.onload = () => resolve(stillAspectRatio(image.naturalWidth, image.naturalHeight));
+    image.onerror = () => resolve(null);
+    image.src = url;
+  });
 }
 
 function workflowDownloadUrl(path: string) {
@@ -303,6 +325,8 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const [restoringVersion, setRestoringVersion] = useState('');
   const [generationEdit, setGenerationEdit] = useState<ShotGenerationSettings>({ mode: 'auto', aspect_ratio: '16:9', sound_mode: 'performance_reference', seed: 42, speed_profile: 'standard', creative_profile: 'general' });
   const [generationDraft, setGenerationDraft] = useState<ShotGenerationSettings>({ mode: 'auto', aspect_ratio: '16:9', sound_mode: 'performance_reference', seed: 42, speed_profile: 'standard', creative_profile: 'general' });
+  // 当前开始画面实测到的画幅。只用于对齐默认值并给出事实提示，null 表示没测出来（保持现有默认）。
+  const [firstFrameAspect, setFirstFrameAspect] = useState<QuickAspect | null>(null);
   const [pipelineValues, setPipelineValues] = useState<Record<string, string | number | boolean | string[]>>({});
   const [pipelineValidation, setPipelineValidation] = useState<PipelineValidation | null>(null);
   const [draftReadiness, setDraftReadiness] = useState<ReadinessItem | null>(null);
@@ -325,6 +349,25 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const setSegmentDraft = (update: SegmentDraft | ((previous: SegmentDraft) => SegmentDraft)) => {
     setNewSegmentDrafts(previous => ({ ...previous, [segmentDraftKey]: typeof update === 'function' ? update(previous[segmentDraftKey] ?? readNewSegmentDraft(segmentDraftKey)) : update }));
   };
+  // 画幅是默认值而不是锁定值：快速预览只在 16:9 下可用，所以离开 16:9 一律回到标准方案
+  // （与规格选择器同一条规则）。
+  function adoptVideoAspect(aspect: QuickAspect) {
+    setGenerationDraft(previous => previous.aspect_ratio === aspect ? previous : { ...previous, aspect_ratio: aspect, speed_profile: aspect === '16:9' ? previous.speed_profile : 'standard' });
+  }
+  // 开始画面可能来自本机草稿缓存、素材库、上传，也可能从刚生成的图片接手，所以统一在这里对齐画幅：
+  // H3 图像转视频对首帧只做缩放铺满、不裁切，画幅与首帧不一致就会把画面压扁。对齐只在开始画面变化时发生，
+  // 用户随后手动选的画幅不会被回写；读不到尺寸时保持现状，不猜。
+  useEffect(() => {
+    const path = quickMode && quickTemplate === 'video' ? segmentDraft.first_frame : '';
+    if (!path) { setFirstFrameAspect(null); return; }
+    let cancelled = false;
+    void measureStillAspect(path).then(measured => {
+      if (cancelled) return;
+      setFirstFrameAspect(measured);
+      if (measured) adoptVideoAspect(measured);
+    });
+    return () => { cancelled = true; };
+  }, [quickMode, quickTemplate, segmentDraft.first_frame]);
   useEffect(() => {
     try {
       for (const [id, draft] of Object.entries(newSegmentDrafts)) {
@@ -2017,6 +2060,10 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
             <label>生成方案<select aria-label="视频生成方案" value={generationDraft.speed_profile} onChange={event => setGenerationDraft(previous => ({ ...previous, speed_profile: event.target.value as ShotGenerationSettings['speed_profile'] }))}><option value="standard">标准方案 · 约 1MP / 原生配置</option><option value="fast">快速预览 · 已验证 8 步 + Kitchen（仅 16:9）</option></select></label>
             {quickCategory === 'adult' && <p className="quick-adult-profile">{adultVideoProfileNote(adultProfile, generationDraft.aspect_ratio, generationDraft.speed_profile)}</p>}
             <ResolutionPicker label="视频" aspect={generationDraft.aspect_ratio} resolution={generationDraft.output_resolution} nativeSize={nativeVideoSize(generationDraft.aspect_ratio, quickTemplate === 'text-video')} onChange={(aspect_ratio, output_resolution) => setGenerationDraft(previous => ({ ...previous, aspect_ratio, output_resolution, speed_profile: aspect_ratio === '16:9' ? previous.speed_profile : 'standard' }))} />
+            {quickTemplate === 'video' && segmentDraft.first_frame && firstFrameAspect && firstFrameAspect !== generationDraft.aspect_ratio && <p className="quick-aspect-mismatch" role="status">
+              开始画面是{ASPECT_LABEL[firstFrameAspect]}（{firstFrameAspect}），当前视频画幅是{ASPECT_LABEL[generationDraft.aspect_ratio]}（{generationDraft.aspect_ratio}）：H3 会把首帧直接拉伸铺满，不裁切，画面比例会失真。
+              <button type="button" className="text-button" onClick={() => adoptVideoAspect(firstFrameAspect)}>改用{ASPECT_LABEL[firstFrameAspect]}（{firstFrameAspect}）</button>
+            </p>}
             <div className="quick-wide"><button className="button primary" disabled={!segmentDraft.prompt.trim() || quickTemplate === 'video' && !segmentDraft.first_frame} onClick={() => void createPlanSegment(true)}><Play size={15} />生成视频</button><button className="text-button" onClick={() => setSegmentFormOpen(false)}>返回已有片段</button></div>
           </fieldset>}
         </section>}

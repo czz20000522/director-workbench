@@ -40,6 +40,9 @@
 .quick-video-form input, .quick-video-form select, .quick-video-form textarea { max-width: 100%; box-sizing: border-box; padding: 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: white; color: var(--ink); font: inherit; }
 .quick-video-form textarea { resize: vertical; min-height: 100px; }
 .quick-wide { grid-column: 1 / -1; }
+/* 画幅与开始画面不一致时的事实提示：只说明会怎样，并给出一键对齐，不自动改方案。 */
+.quick-aspect-mismatch { grid-column: 1 / -1; display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; margin: 0; padding: 10px 12px; border: 1px solid #e6cfa6; border-radius: 8px; background: #fdf8ef; color: #6b5327; font-size: 12px; line-height: 1.7; }
+.quick-aspect-mismatch .text-button { color: #35548f; font-size: 12px; }
 .quick-result-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
 .quick-continuation, .quick-delivery > section { padding: 18px; margin: 16px 0; border: 1px solid var(--line); border-radius: 12px; background: #f8fafc; }
 .quick-continuation p, .quick-delivery p { color: var(--muted); line-height: 1.6; }
