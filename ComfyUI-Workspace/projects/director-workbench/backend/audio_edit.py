@@ -6,7 +6,9 @@ import wave
 
 import numpy as np
 
-OUTPUT_ROOT = Path('D:/Comfy-Desktop/ComfyUI-Workspace/runtime')
+import paths
+
+OUTPUT_ROOT = paths.RUNTIME_ROOT
 
 
 @contextmanager

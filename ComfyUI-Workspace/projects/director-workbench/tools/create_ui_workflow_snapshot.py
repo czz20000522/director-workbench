@@ -8,10 +8,13 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
+import sys
 
-ROOT = Path(r"D:\Comfy-Desktop")
-TEMPLATE = ROOT / "ComfyUI-Installs" / "第一个comfyui配置" / "ComfyUI" / "user" / "default" / "workflows" / "图生视频.json"
-DEST = ROOT / "ComfyUI-Workspace" / "projects" / "director-workbench" / "workflows" / "示例作品翻唱-S02-v3A-ComfyUI-ui-visual-snapshot.json"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import paths
+
+TEMPLATE = paths.INSTALL_ROOT / "user" / "default" / "workflows" / "图生视频.json"
+DEST = paths.PROJECT_ROOT / "workflows" / "示例作品翻唱-S02-v3A-ComfyUI-ui-visual-snapshot.json"
 PROMPT = "One continuous five-second intimate music performance. The same small yellow plush capybara girl in the dusty blue jacket and pink dress sings with sweet expressive emotion in the sunlit courtyard. Subtle breathing between phrases, her raised paw marks the repeating hu notes, one quick natural wink synchronized with a musical accent, then eyes reopen while singing continues. Stable face, orange muzzle, pink bow and orange ornament, daylight, no captions."
 
 

@@ -18,7 +18,9 @@ from urllib.parse import urlsplit
 
 import httpx
 
-DEFAULT_CONFIG_PATH = Path('D:/Comfy-Desktop/.config/director-workbench/cloud-agent.json')
+import paths
+
+DEFAULT_CONFIG_PATH = paths.CONFIG_ROOT / 'cloud-agent.json'
 MAX_TIMEOUT_SECONDS = 120
 
 

@@ -11,16 +11,20 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import sys
 import urllib.request
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(r"D:\Comfy-Desktop")
-PROJECT = ROOT / "ComfyUI-Workspace" / "projects" / "director-workbench"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import paths
+
+ROOT = paths.DESKTOP_ROOT
+PROJECT = paths.PROJECT_ROOT
 DEFAULT_API = PROJECT / "workflows" / "示例作品翻唱-S02-v3A-ComfyUI-api-recipe.json"
 DEFAULT_UI = PROJECT / "workflows" / "示例作品翻唱-S02-v3A-ComfyUI-ui-exact.json"
 COMFY_OBJECT_INFO = "http://127.0.0.1:8188/object_info"
-COMFY_INPUT = ROOT / "ComfyUI-Shared" / "input"
+COMFY_INPUT = paths.SHARED_ROOT / "input"
 
 
 def object_info() -> dict[str, Any]:

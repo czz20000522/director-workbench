@@ -34,6 +34,7 @@ from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictInt, field_
 from . import production_presets, background_jobs, speech, keyframes, audio_edit_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, guide, readiness, task_scheduler, creative_inspection, shot_creation
 from . import output_resolution, enhancement
 import av
+import paths
 from .private_auth import current_principal
 from .atomic_files import replace_prepared
 from .storage import storage_roots, relocate_asset, legacy_mappings
@@ -41,13 +42,13 @@ from .user_context import project_location
 
 PRIVATE_WORKSPACES = None
 
-ROOT = Path(__file__).resolve().parents[4]
-PROJECT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT / "ComfyUI-Workspace" / "runtime" / "director-workbench"
+ROOT = paths.DESKTOP_ROOT
+PROJECT = paths.PROJECT_ROOT
+RUNTIME = paths.RUNTIME_ROOT / "director-workbench"
 DB_PATH = RUNTIME / "director-workbench.sqlite3"
 COMFY_URL = os.environ.get("DIRECTOR_COMFY_URL", "http://127.0.0.1:8188").rstrip("/")
-RENDERER = ROOT / ".agents" / "skills" / "aigc-video-production" / "scripts" / "h3_render.py"
-TEMPLATE = ROOT / ".agents" / "skills" / "aigc-video-production" / "assets" / "workflows" / "minimax-h3-current-api.json"
+RENDERER = paths.SKILLS_ROOT / "skills" / "aigc-video-production" / "scripts" / "h3_render.py"
+TEMPLATE = paths.SKILLS_ROOT / "skills" / "aigc-video-production" / "assets" / "workflows" / "minimax-h3-current-api.json"
 STORAGE_ROOTS = storage_roots(ROOT)
 INPUT_ROOT = STORAGE_ROOTS['input']
 OUTPUT_ROOT = STORAGE_ROOTS['output']
@@ -211,7 +212,7 @@ def registered_candidate(value: str | Path) -> Path:
     candidate = Path(text)
     if not candidate.is_absolute():
         candidate = ROOT / text if text.startswith('ComfyUI-') else ROOT / 'ComfyUI-Shared' / text
-    if not (ROOT / 'ComfyUI-Workspace/config/storage.json').is_file():
+    if not paths.storage_config(ROOT).is_file():
         return candidate
     return relocate_asset(candidate, ROOT, {
         'input': INPUT_ROOT, 'output': OUTPUT_ROOT, 'workspaces': DIRECTOR_WORKSPACES_ROOT,
@@ -4842,7 +4843,7 @@ def import_project(request: ProjectImportRequest) -> dict[str, Any]:
         source = source.resolve()
         source.relative_to(ROOT.resolve())
     except ValueError as exc:
-        raise HTTPException(403, "只能导入 D:\\Comfy-Desktop 工作区内的目录") from exc
+        raise HTTPException(403, f"只能导入 {ROOT} 工作区内的目录") from exc
     if not source.is_dir():
         raise HTTPException(404, "导入目录不存在")
     project_id = request.project_id or source.name

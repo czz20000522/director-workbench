@@ -4,16 +4,19 @@ import argparse
 import json
 import math
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import av
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import paths
 
-ROOT = Path(__file__).resolve().parents[4]
-DEFAULT_FFMPEG = ROOT / "ComfyUI-Shared" / "tools" / "index-tts" / "ffmpeg.exe"
-ASR_PYTHON = ROOT / "ComfyUI-Shared" / "tools" / "index-tts" / ".venv" / "Scripts" / "python.exe"
+ROOT = paths.DESKTOP_ROOT
+DEFAULT_FFMPEG = paths.SHARED_ROOT / "tools" / "index-tts" / "ffmpeg.exe"
+ASR_PYTHON = paths.SHARED_ROOT / "tools" / "index-tts" / ".venv" / "Scripts" / "python.exe"
 ASR_SCRIPT = Path(__file__).resolve().with_name("reference_audio.py")
 
 

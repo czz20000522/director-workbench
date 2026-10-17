@@ -3,16 +3,19 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import paths
 
-ROOT = Path(__file__).resolve().parents[4]
-LLAMA_MTMD = Path(r"D:\software\llama.cpp\llama-mtmd-cli.exe")
-LLAMA_CLI = Path(r"D:\software\llama.cpp\llama-completion.exe")
-MODEL_ROOT = ROOT / "ComfyUI-Shared" / "models" / "LLM" / "Qwen3.8-27B-Uncensored"
+ROOT = paths.DESKTOP_ROOT
+LLAMA_MTMD = paths.LLAMA_ROOT / "llama-mtmd-cli.exe"
+LLAMA_CLI = paths.LLAMA_ROOT / "llama-completion.exe"
+MODEL_ROOT = paths.SHARED_ROOT / "models" / "LLM" / "Qwen3.8-27B-Uncensored"
 MODEL = MODEL_ROOT / "Qwen3.8-27B-Uncensored-Q4_K_M.gguf"
 MMPROJ = MODEL_ROOT / "mmproj-F16.gguf"
 ARTIFACT_IDS = ("story", "shots", "characters", "scenes", "actions", "mechanisms", "adaptation", "production_seed")

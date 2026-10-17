@@ -119,6 +119,7 @@
 !/ComfyUI-Workspace/projects/director-workbench/mcp_server/server.py
 !/ComfyUI-Workspace/projects/director-workbench/package-lock.json
 !/ComfyUI-Workspace/projects/director-workbench/package.json
+!/ComfyUI-Workspace/projects/director-workbench/paths.py
 !/ComfyUI-Workspace/projects/director-workbench/public/favicon.svg
 !/ComfyUI-Workspace/projects/director-workbench/requirements-audio-tests.txt
 !/ComfyUI-Workspace/projects/director-workbench/requirements-mcp.txt
@@ -220,6 +221,7 @@
 !/ComfyUI-Workspace/projects/director-workbench/tests/test_merge_range.py
 !/ComfyUI-Workspace/projects/director-workbench/tests/test_missing_execution.py
 !/ComfyUI-Workspace/projects/director-workbench/tests/test_monitor_uncertainty.py
+!/ComfyUI-Workspace/projects/director-workbench/tests/test_paths.py
 !/ComfyUI-Workspace/projects/director-workbench/tests/test_plan_assembly_stale.py
 !/ComfyUI-Workspace/projects/director-workbench/tests/test_plan_revision.py
 !/ComfyUI-Workspace/projects/director-workbench/tests/test_private_auth.py

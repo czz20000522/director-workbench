@@ -11,8 +11,11 @@ import re
 import sys
 import wave
 
-TTS_ROOT = Path('D:/Comfy-Desktop/ComfyUI-Shared/tools/AuK')
-MODELS = Path('D:/Comfy-Desktop/ComfyUI-Shared/models/AuK/ckpts')
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import paths
+
+TTS_ROOT = paths.SHARED_ROOT / 'tools/AuK'
+MODELS = paths.SHARED_ROOT / 'models/AuK/ckpts'
 MODEL_FILES = {'config': MODELS / 'AuK-Flash/config.yaml',
                'checkpoint': MODELS / 'AuK-Flash/auk_flash.safetensors',
                'vae': MODELS / 'AuK-Flash/vae.safetensors',

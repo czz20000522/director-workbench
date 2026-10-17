@@ -8,9 +8,11 @@ import shutil
 import subprocess
 import time
 
-ROOT = Path(__file__).resolve().parents[1]
-DESKTOP_PYTHON = Path('D:/Comfy-Desktop/ComfyUI-Installs/第一个comfyui配置/ComfyUI/.venv/Scripts/python.exe')
-ASR_ROOT = Path('D:/Comfy-Desktop/ComfyUI-Shared/tools/index-tts')
+import paths
+
+ROOT = paths.PROJECT_ROOT
+DESKTOP_PYTHON = paths.COMFY_PYTHON
+ASR_ROOT = paths.SHARED_ROOT / 'tools/index-tts'
 ASR_PYTHON = ASR_ROOT / '.venv/Scripts/python.exe'
 FFMPEG = ASR_ROOT / 'ffmpeg.exe'
 WHISPER_MODEL = ASR_ROOT / 'models/whisper/base.pt'

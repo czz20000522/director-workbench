@@ -105,7 +105,11 @@ print('empty private checkout passed')
     environment = dict(os.environ)
     environment.pop('PYTHONPATH', None)
     environment.pop('DIRECTOR_PROJECT_ID', None)
+    # The exported checkout is its own host here: without this the machine roots stay
+    # pointed at the real Comfy-Desktop installation, and the account store's permitted
+    # root no longer covers this temporary copy.
     environment.update(DIRECTOR_ACCOUNTS_FILE=str(project / 'runtime/accounts.json'),
+                       DIRECTOR_DESKTOP_ROOT=str(checkout),
                        DIRECTOR_ADMIN_USERS='user001', DIRECTOR_PRIVATE_ROOT=str(checkout / 'ComfyUI-Workspace/private-workspaces'))
     result = subprocess.run([sys.executable, '-c', code], cwd=project, env=environment,
                             capture_output=True, text=True, timeout=60)

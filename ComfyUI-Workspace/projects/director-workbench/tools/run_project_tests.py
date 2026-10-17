@@ -10,8 +10,10 @@ import subprocess
 import sys
 import uuid
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import paths
 
-PROJECT = Path(__file__).resolve().parents[1]
+PROJECT = paths.PROJECT_ROOT
 BROWSER_TESTS = (
     'agent_access', 'agent_page_bridge', 'assembly_edit', 'automatic_creation',
     'generation_stage', 'guide_queue', 'guide_review', 'media_tools_panel',
@@ -36,8 +38,11 @@ print(json.dumps({'executable': sys.executable, 'base_prefix': sys.base_prefix,
 """
 
 
-def suite_specs(project: Path, run_root: Path) -> dict:
-    desktop = project.parents[2]
+def suite_specs(project: Path, run_root: Path, desktop: Path | None = None) -> dict:
+    # The host installation is a machine root, not a property of the checkout, so it
+    # arrives as an explicit argument instead of a depth derivation: a relocated
+    # checkout still points at the real host, and a test can hand in a synthetic one.
+    host = paths.DESKTOP_ROOT if desktop is None else Path(desktop)
     return {
         'core': {
             'python': project / '.venv/Scripts/python.exe',
@@ -47,7 +52,7 @@ def suite_specs(project: Path, run_root: Path) -> dict:
                      '--basetemp', str(run_root / 'pytest')],
         },
         'auk': {
-            'python': desktop / 'ComfyUI-Shared/tools/AuK/.venv/Scripts/python.exe',
+            'python': host / 'ComfyUI-Shared/tools/AuK/.venv/Scripts/python.exe',
             'modules': ['numpy', 'soundfile', 'torch'],
             'args': ['-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_generate_auk_flash.py', '-v'],
         },
@@ -108,11 +113,14 @@ def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: b
 
 
 def run(suite: str = 'all', check: bool = False, report_path: Path | None = None,
-        *, project: Path = PROJECT) -> int:
+        *, project: Path = PROJECT, desktop: Path | None = None,
+        runtime: Path | None = None) -> int:
     project = project.resolve()
-    run_root = project.parents[1] / 'runtime' / ('t-' + uuid.uuid4().hex[:12])
+    host = paths.DESKTOP_ROOT if desktop is None else Path(desktop).resolve()
+    runtime_root = paths.RUNTIME_ROOT if runtime is None else Path(runtime).resolve()
+    run_root = runtime_root / ('t-' + uuid.uuid4().hex[:12])
     run_root.mkdir(parents=True, exist_ok=False)
-    specs = suite_specs(project, run_root)
+    specs = suite_specs(project, run_root, host)
     names = list(specs) if suite == 'all' else [suite]
     receipt = {'mode': 'check' if check else 'tests', 'project': str(project),
                'run_root': str(run_root), 'suites': {}}
@@ -150,7 +158,7 @@ def run(suite: str = 'all', check: bool = False, report_path: Path | None = None
                     missing = [key for key, value in details['modules'].items() if not value['available']]
                     if missing:
                         result['errors'].append('Missing modules: ' + ', '.join(missing))
-                    if not Path(details['base_prefix']).resolve().is_relative_to(project.parents[2]):
+                    if not Path(details['base_prefix']).resolve().is_relative_to(host):
                         result['warnings'].append('Python base_prefix is outside the Comfy-Desktop root; the environment depends on that installation.')
             except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError) as exc:
                 result['errors'].append(f'Environment probe could not complete: {type(exc).__name__}.')

@@ -11,11 +11,15 @@ import argparse
 import json
 import math
 from pathlib import Path
+import sys
 
-ROOT = Path(r"D:\Comfy-Desktop")
-SHARED = ROOT / "ComfyUI-Shared"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import paths
+
+ROOT = paths.DESKTOP_ROOT
+SHARED = paths.SHARED_ROOT
 OUTPUT_ROOT = SHARED / "output"
-PROJECT = ROOT / "ComfyUI-Workspace" / "projects" / "director-workbench"
+PROJECT = paths.PROJECT_ROOT
 DEFAULT_PLAN = OUTPUT_ROOT / "示例系列工作目录" / "示例作品翻唱" / "导演台" / "示例作品-完整版分段计划-v2-audio-ready.json"
 DEFAULT_AUDIO = str(SHARED / "input" / "示例系列工作目录/示例作品翻唱/导演台/完整版-v2/audio/lumei-sweeter-v4-full-A-delivery.wav")
 

@@ -5,9 +5,13 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 
-PROJECT = Path(__file__).resolve().parents[1]
-ROOT = PROJECT.parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import paths
+
+PROJECT = paths.PROJECT_ROOT
+ROOT = paths.REPO_ROOT
 SUFFIXES = {'.py', '.ts', '.tsx', '.json', '.md', '.ps1', '.cmd', '.html', '.css', '.svg', '.txt', '.yml', '.mjs'}
 PRIVATE_PARTS = {'.git', '.config', 'config', '.venv', 'node_modules', 'runtime', 'input', 'output',
                  'workspaces', 'private-workspaces', 'reviews', 'logs', 'dist', '__pycache__'}

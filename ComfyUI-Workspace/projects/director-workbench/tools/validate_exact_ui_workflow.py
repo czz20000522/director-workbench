@@ -3,14 +3,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import urllib.request
 from pathlib import Path
 from typing import Any
 
-PROJECT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import paths
+
+PROJECT = paths.PROJECT_ROOT
 DEFAULT_API = PROJECT / "workflows" / "示例作品翻唱-S02-v3A-ComfyUI-api-recipe.json"
 DEFAULT_UI = PROJECT / "workflows" / "示例作品翻唱-S02-v3A-ComfyUI-ui-exact.json"
-DEFAULT_PLAN = Path(r"D:\Comfy-Desktop\ComfyUI-Shared\output\示例系列工作目录\示例作品翻唱\导演台\示例作品-完整版分段计划-v2-audio-ready.json")
+DEFAULT_PLAN = paths.SHARED_ROOT / "output/示例系列工作目录/示例作品翻唱/导演台/示例作品-完整版分段计划-v2-audio-ready.json"
 
 
 def history(prompt_id: str) -> dict[str, Any] | None:

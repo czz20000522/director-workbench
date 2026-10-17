@@ -12,12 +12,15 @@ import os
 from pathlib import Path
 import socket
 import subprocess
+import sys
 import time
 import uuid
 import urllib.request
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import paths
 
-ROOT = Path(__file__).resolve().parents[4]
+ROOT = paths.DESKTOP_ROOT
 PORT = 8188
 DEFAULT_HEALTH_TIMEOUT = 240
 

@@ -5,19 +5,23 @@ import argparse
 import importlib.util
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-ROOT = Path(r"D:\Comfy-Desktop")
-SHARED = ROOT / "ComfyUI-Shared"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import paths
+
+ROOT = paths.DESKTOP_ROOT
+SHARED = paths.SHARED_ROOT
 INPUT_ROOT = SHARED / "input"
 OUTPUT_ROOT = SHARED / "output"
-PROJECT = ROOT / "ComfyUI-Workspace" / "projects" / "director-workbench"
-RUNTIME = ROOT / "ComfyUI-Workspace" / "runtime" / "director-workbench"
+PROJECT = paths.PROJECT_ROOT
+RUNTIME = paths.RUNTIME_ROOT / "director-workbench"
 PLAN = OUTPUT_ROOT / "示例系列工作目录" / "示例作品翻唱" / "导演台" / "示例作品-完整版分段计划-v2-audio-ready.json"
 TEMPLATE = PROJECT / "workflows\示例作品翻唱-S02-v3A-ComfyUI-api-recipe.json"
-H3_RENDER = ROOT / ".agents" / "skills" / "aigc-video-production" / "scripts" / "h3_render.py"
+H3_RENDER = paths.SKILLS_ROOT / "skills" / "aigc-video-production" / "scripts" / "h3_render.py"
 
 spec = importlib.util.spec_from_file_location("director_h3_render", H3_RENDER)
 if spec is None or spec.loader is None:

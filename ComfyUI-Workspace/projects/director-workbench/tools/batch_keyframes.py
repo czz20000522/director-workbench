@@ -8,17 +8,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import time
 import uuid
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-ROOT = Path(r"D:\Comfy-Desktop")
-PLAN = ROOT / "ComfyUI-Shared" / "output" / "示例系列工作目录" / "示例作品翻唱" / "导演台" / "示例作品-完整版分段计划-v2-audio-ready.json"
-INPUT_ROOT = ROOT / "ComfyUI-Shared" / "input"
-OUTPUT_ROOT = ROOT / "ComfyUI-Shared" / "output"
-PROJECT = ROOT / "ComfyUI-Workspace" / "projects" / "director-workbench"
-RUNTIME = ROOT / "ComfyUI-Workspace" / "runtime" / "director-workbench"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import paths
+
+ROOT = paths.DESKTOP_ROOT
+PLAN = paths.SHARED_ROOT / "output" / "示例系列工作目录" / "示例作品翻唱" / "导演台" / "示例作品-完整版分段计划-v2-audio-ready.json"
+INPUT_ROOT = paths.SHARED_ROOT / "input"
+OUTPUT_ROOT = paths.SHARED_ROOT / "output"
+PROJECT = paths.PROJECT_ROOT
+RUNTIME = paths.RUNTIME_ROOT / "director-workbench"
 BASE_IMAGE = INPUT_ROOT / "示例系列工作目录" / "示例作品翻唱" / "动态试作" / "first-frame-v1.png"
 QWEN_RECIPE_DIR = PROJECT / "workflows" / "示例作品翻唱" / "keyframes-v2"
 OUTPUT_RELATIVE = Path("output/示例系列工作目录/示例作品翻唱/导演台/完整版-v2/keyframes")

@@ -17,7 +17,9 @@ import stat
 import time
 from typing import Callable
 
-PERMITTED_ROOT = Path('D:/Comfy-Desktop/ComfyUI-Workspace')
+import paths
+
+PERMITTED_ROOT = paths.WORKSPACE_ROOT
 DEFAULT_ROOT = Path('E:/DirectorWorkspaces')
 
 

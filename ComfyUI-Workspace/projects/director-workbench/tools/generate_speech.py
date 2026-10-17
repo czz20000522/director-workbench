@@ -7,9 +7,11 @@ import os
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[4]
-TTS_ROOT = ROOT / 'ComfyUI-Shared/tools/index-tts'
-MODEL_ROOT = ROOT / 'ComfyUI-Shared/models/IndexTTS-2.5'
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import paths
+
+TTS_ROOT = paths.SHARED_ROOT / 'tools/index-tts'
+MODEL_ROOT = paths.SHARED_ROOT / 'models/IndexTTS-2.5'
 
 
 def load_request(path: Path) -> dict:

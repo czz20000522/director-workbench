@@ -11,11 +11,13 @@ import wave
 from collections.abc import Callable
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[4]
-TTS_ROOT = ROOT / 'ComfyUI-Shared/tools/index-tts'
+import paths
+
+ROOT = paths.DESKTOP_ROOT
+TTS_ROOT = paths.SHARED_ROOT / 'tools/index-tts'
 ADAPTER = Path(__file__).resolve().parents[1] / 'tools/generate_speech.py'
-MODEL_ROOT = ROOT / 'ComfyUI-Shared/models/IndexTTS-2.5'
-FLASH_ROOT = ROOT / 'ComfyUI-Shared/tools/AuK'
+MODEL_ROOT = paths.SHARED_ROOT / 'models/IndexTTS-2.5'
+FLASH_ROOT = paths.SHARED_ROOT / 'tools/AuK'
 FLASH_ADAPTER = Path(__file__).resolve().parents[1] / 'tools/generate_auk_flash.py'
 
 
