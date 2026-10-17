@@ -83,6 +83,33 @@ def test_video_reports_whether_requested_profile_was_applied(creative, aspect, s
         assert selected['preset_id'] not in production_presets.ADULT_PRESET_IDS
 
 
+def test_fallback_note_names_the_recipe_that_is_actually_used():
+    """DW-034: the note must describe the selected recipe, not a native one.
+
+    The fast profile and a bound performance audio both leave the adult recipe
+    family, so claiming a native recipe there would be false."""
+    for creative, aspect, speed in (('adult-realism', '16:9', 'fast'), ('adult-realism', '1:1', 'standard'),
+                                    ('adult-realism', '9:16', 'standard'), ('adult-anime', '16:9', 'fast'),
+                                    ('adult-anime', '1:1', 'standard'), ('adult-anime', '9:16', 'standard')):
+        selected = shot_creation.resolve({'aspect_ratio': aspect, 'sound_mode': 'native',
+                                          'speed_profile': speed, 'creative_profile': creative})
+        note = selected['creative_profile_note']
+        assert selected['creative_profile_applied'] is False
+        assert production_presets.title(selected['preset_id']) in note
+        if speed == 'fast':
+            assert '原生' not in production_presets.title(selected['preset_id'])
+            assert '原生配方' not in note
+
+
+def test_bound_performance_audio_reports_the_audio_recipe():
+    selected = shot_creation.resolve({'aspect_ratio': '9:16', 'sound_mode': 'performance_reference',
+                                      'speed_profile': 'standard', 'creative_profile': 'adult-realism'},
+                                     first='first', guide='guide')
+    assert selected['preset_id'] == production_presets.FIRST_PRESET_ID
+    assert selected['creative_profile_applied'] is False
+    assert production_presets.title(selected['preset_id']) in selected['creative_profile_note']
+
+
 def test_adult_anime_video_never_promises_an_adult_recipe():
     for aspect in ('16:9', '1:1', '9:16'):
         for first, last in ((None, None), ('first', None), ('first', 'last')):
