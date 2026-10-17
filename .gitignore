@@ -328,4 +328,11 @@
 !/tests/queued_panels.browser.mjs
 !/tests/reference_queue.browser.mjs
 !/tests/speech_panel.browser.mjs
+# Fixture-driven drivers, deliberately outside --suite browser: they take a completed
+# pytest fixture root as argv[2] instead of bundling their own. Their producers --
+# test_guide_joins.py and test_creative_inspection.py -- are already published, so
+# publishing the drivers completes those pairs. Each reads only the given fixture root;
+# guide_joins asks paths.py for the machine runtime root rather than naming one.
+!/tests/creative_review.browser.mjs
+!/tests/guide_joins.browser.mjs
 !/tests/test_finish_tasks.py
