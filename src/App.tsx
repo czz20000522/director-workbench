@@ -88,6 +88,17 @@ function candidateOutputFacts(task: TaskRecord | null, segment?: PlanSegment | n
 }
 const checkpointLabel = (checkpoint: CheckpointRecord | undefined, hasContent: boolean) => checkpoint?.status === 'approved' ? '已确认' : checkpoint?.status === 'changes_requested' ? '需修改' : checkpoint?.status === 'stale' ? '上游变化 · 待复核' : hasContent ? '有内容 · 待确认' : '待填写';
 
+// 成人向视频配方只有一个组合（16:9 + 标准步数），其余组合必须说清实际会用什么，
+// 不能把快速预览或别的画幅的原生配方说成成人向配方。
+function adultVideoProfileNote(profile: CreativeProfile, aspect: string, speed: string) {
+  const used = speed === 'fast'
+    ? '本次改用「快速预览」方案（8 步 + Kitchen attention，0.4MP 横屏）'
+    : '本次改用该画幅的 H3 原生配方';
+  if (profile === 'adult-anime') return `动漫质感只在关键帧图像加载 Qwen Anime Consistency，视频生成没有对应的成人向配方；${used}，其中不含成人向配方。`;
+  if (aspect === '16:9' && speed === 'standard') return '成人向视频将使用：H3 Realism People（标准步数）。';
+  return `真人质感配方只在 16:9 + 标准方案下可用；${used}，其中不含成人向配方。`;
+}
+
 function sharedMediaUrl(path?: string | null) {
   return path ? `/media-file?path=${encodeURIComponent(path)}` : undefined;
 }
@@ -1987,7 +1998,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
             <label className="quick-wide">提示词<textarea rows={4} value={segmentDraft.prompt} onChange={event => setSegmentDraft(previous => ({ ...previous, prompt: event.target.value }))} placeholder="描述主体如何运动、镜头如何移动，以及需要保持的内容" /></label>
             <label>时长<select aria-label="视频时长" value={segmentDraft.duration_seconds} onChange={event => setSegmentDraft(previous => ({ ...previous, duration_seconds: event.target.value }))}>{[4, 5, 8, 10, 15].map(n => <option key={n} value={n}>{n} 秒</option>)}</select></label>
             <label>生成方案<select aria-label="视频生成方案" value={generationDraft.speed_profile} onChange={event => setGenerationDraft(previous => ({ ...previous, speed_profile: event.target.value as ShotGenerationSettings['speed_profile'] }))}><option value="standard">标准方案 · 约 1MP / 原生配置</option><option value="fast">快速预览 · 已验证 8 步 + Kitchen（仅 16:9）</option></select></label>
-            {quickCategory === 'adult' && <p className="quick-adult-profile">{adultProfile === 'adult-anime' ? '动漫质感只在关键帧图像加载 Qwen Anime Consistency；视频生成没有对应的成人向配方，将使用 H3 原生模型。' : generationDraft.aspect_ratio === '16:9' && generationDraft.speed_profile === 'standard' ? '成人向视频将使用：H3 Realism People（标准步数）。' : '真人质感配方只在 16:9 + 标准方案下可用；当前画幅或方案将改用 H3 原生配方。'}</p>}
+            {quickCategory === 'adult' && <p className="quick-adult-profile">{adultVideoProfileNote(adultProfile, generationDraft.aspect_ratio, generationDraft.speed_profile)}</p>}
             <ResolutionPicker label="视频" aspect={generationDraft.aspect_ratio} resolution={generationDraft.output_resolution} nativeSize={nativeVideoSize(generationDraft.aspect_ratio, quickTemplate === 'text-video')} onChange={(aspect_ratio, output_resolution) => setGenerationDraft(previous => ({ ...previous, aspect_ratio, output_resolution, speed_profile: aspect_ratio === '16:9' ? previous.speed_profile : 'standard' }))} />
             <div className="quick-wide"><button className="button primary" disabled={!segmentDraft.prompt.trim() || quickTemplate === 'video' && !segmentDraft.first_frame} onClick={() => void createPlanSegment(true)}><Play size={15} />生成视频</button><button className="text-button" onClick={() => setSegmentFormOpen(false)}>返回已有片段</button></div>
           </fieldset>}

@@ -7,10 +7,19 @@ from mcp_server.creation_inputs import GenerationSettings
 # video path has a single adult recipe family and it covers just one
 # combination, so the remaining requests must be reported instead of silently
 # echoing the requested profile back as if it had been applied.
-FALLBACK_NOTES = {
-    'adult-anime': '动漫质感目前只在关键帧图像加载 Qwen Anime Consistency；视频生成没有对应的成人向配方，本次使用 H3 原生模型。',
-    'adult-realism': '真人质感视频配方目前只在 16:9、标准步数且未绑定表演声音时可用；本次组合使用该画幅的原生配方。',
+LIMITS = {
+    'adult-anime': '视频生成目前没有对应的成人向动漫配方（动漫质感只在关键帧图像加载 Qwen Anime Consistency）。',
+    'adult-realism': '成人向真人质感视频配方目前只在 16:9、标准步数且未绑定表演声音时可用。',
 }
+
+
+def fallback_note(creative: str, recipe: str) -> str:
+    """Name the recipe that was actually selected.
+
+    The fallback can be a fast preview, a performance-audio recipe or another
+    canvas size, so the note must not claim a native recipe when the selected
+    one is something else."""
+    return f'{LIMITS[creative]}本次改用「{presets.title(recipe)}」，其中不含成人向配方。'
 
 
 def resolve(settings, *, first=None, last=None, guide=None):
@@ -52,7 +61,7 @@ def resolve(settings, *, first=None, last=None, guide=None):
     if creative == 'general' or recipe in presets.ADULT_PRESET_IDS:
         applied, note = True, ''
     else:
-        applied, note = False, FALLBACK_NOTES[creative]
+        applied, note = False, fallback_note(creative, recipe)
     return {'preset_id': recipe, 'generation_mode': 'image_to_video' if first else 'text_to_video',
             'aspect_ratio': aspect, 'megapixels': presets.megapixels(recipe),
             'turbo_sampling': 'enable' if presets.turbo_default(recipe) else 'disable',
