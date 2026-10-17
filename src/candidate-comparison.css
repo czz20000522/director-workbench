@@ -1,0 +1,24 @@
+.candidate-comparison { margin: 0 0 24px; padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: #f8fafc; color: var(--ink); }
+.candidate-comparison-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.candidate-comparison-heading p, .candidate-comparison-help { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.candidate-comparison-heading > button { flex-shrink: 0; }
+.candidate-comparison-help { margin: 16px 0 12px; }
+.candidate-comparison-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.candidate-comparison-card { min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: white; }
+.candidate-comparison-card > label { display: flex; align-items: center; gap: 12px; font-size: 12px; }
+.candidate-comparison-card select { flex: 1; min-width: 0; padding: 8px; color: var(--ink); font: inherit; border: 1px solid var(--line-strong); border-radius: 6px; background: white; }
+.candidate-comparison-card video { display: block; width: 100%; max-height: 360px; aspect-ratio: 16 / 9; object-fit: contain; background: #17202c; border-radius: 7px; margin: 12px 0; }
+.candidate-comparison-facts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.candidate-comparison-facts > span { padding: 3px 7px; border-radius: 6px; color: #35548f; background: #e8eefb; font-size: 11px; }
+.candidate-comparison-facts small { width: 100%; color: var(--muted); overflow-wrap: anywhere; }
+.candidate-comparison-card details { margin: 14px 0; font-size: 12px; }
+.candidate-comparison-card summary { cursor: pointer; }
+.candidate-comparison-card pre { margin-bottom: 0; max-height: 12em; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.7; }
+.candidate-comparison-card > [role="alert"] { color: #9d3028; font-size: 12px; }
+.candidate-comparison-more { margin-top: 16px; }
+.candidate-comparison select:focus-visible, .candidate-comparison summary:focus-visible { outline: 2px solid #6685c9; outline-offset: 3px; }
+@media (max-width: 640px) {
+  .candidate-comparison { padding: 14px; }
+  .candidate-comparison-heading { align-items: flex-start; flex-direction: column; }
+  .candidate-comparison-grid { grid-template-columns: 1fr; }
+}

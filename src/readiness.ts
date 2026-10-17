@@ -1,0 +1,6 @@
+export type ReadinessAction = { id: string; label: string; method?: string; path?: string; input_id?: string };
+export type ReadinessBlocker = { code: string; message?: string; input_id?: string; dependency?: string; action?: ReadinessAction };
+export type ReadinessItem = { asset_id?: string; stage_id?: string; revision: number; source?: 'saved' | 'draft'; state: string; ready: boolean; queueable?: boolean; blockers: ReadinessBlocker[]; allowed_actions: ReadinessAction[]; next_actions: ReadinessAction[] };
+export type ProjectReadiness = { schema_version: number; revision: number; source: 'saved'; segments: ReadinessItem[]; assembly: ReadinessItem; next_actions: ReadinessAction[] };
+export const blockerMessage = (blocker: ReadinessBlocker) => blocker.message || `暂时无法继续（${blocker.code || 'unknown'}），请刷新状态或检查当前输入。`;
+export const readinessStateLabel = (state?: string) => ({ ready: '可以提交', blocked: '需要补齐输入', waiting_gpu: '已排队，等待 GPU', waiting_dependency: '已排队，等待依赖', pending_review: '候选已生成，等待审核', adopted: '当前候选已采用', redo_required: '已记录问题，等待重做', review_stale: '上游版本变化，需要复核', running: '执行中', needs_reconcile: '等待核对原执行', preparing: '准备执行', submitting: '正在提交' }[state ?? ''] ?? `状态待核对（${state ?? 'loading'}）`);

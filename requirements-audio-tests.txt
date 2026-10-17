@@ -1,0 +1,8 @@
+# Audio integration test dependencies. Install these into the dedicated
+# ComfyUI-Shared/tools/AuK/.venv, never the workbench API environment.
+# test_generate_auk_flash.py imports soundfile directly to decode its WAV
+# contract; it is intentionally kept out of requirements.txt.
+# The AuK venv intentionally has no pip; use `uv pip install --python
+# ComfyUI-Shared/tools/AuK/.venv/Scripts/python.exe -r requirements-audio-tests.txt`.
+pytest==9.1.1
+soundfile==0.14.0

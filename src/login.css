@@ -1,0 +1,14 @@
+.workspace-login { min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: 32px 20px; background: #f4f5f7; color: #252a32; }
+.workspace-login-card { width: min(100%, 400px); padding: 36px; background: #fff; border: 1px solid #dfe3e9; border-radius: 14px; box-shadow: 0 12px 40px rgb(24 34 52 / 5%); }
+.workspace-login-mark { display: grid; place-items: center; width: 48px; height: 48px; margin-bottom: 24px; border-radius: 12px; background: #242a34; color: #fff; }
+.workspace-login-card h1 { margin: 0; font-size: 24px; font-weight: 600; line-height: 1.4; }
+.workspace-login-intro { margin: 8px 0 28px; color: #6a7280; font-size: 14px; }
+.workspace-login-card form { display: flex; flex-direction: column; }
+.workspace-login-card label { margin: 0 0 8px; font-size: 14px; font-weight: 500; }
+.workspace-login-card input { width: 100%; min-height: 44px; margin-bottom: 20px; padding: 10px 12px; border: 1px solid #cbd2dc; border-radius: 7px; color: #252a32; background: #fff; font-size: 16px; }
+.workspace-login-card input:focus-visible, .workspace-login button:focus-visible { outline: 2px solid #2563eb; outline-offset: 3px; }
+.workspace-login-submit { min-height: 44px; margin-top: 4px; padding: 10px 14px; border: 0; border-radius: 7px; color: #fff; background: #2563eb; font-weight: 600; }
+.workspace-login-submit:hover:not(:disabled) { background: #1d4ed8; }
+.workspace-login-error { margin: -2px 0 16px; color: #a32929; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.workspace-login-note { margin: 24px 0 0; color: #727b88; text-align: center; font-size: 12px; }
+@media (max-width: 480px) { .workspace-login-card { padding: 28px 24px; } .workspace-login-card h1 { font-size: 22px; } }

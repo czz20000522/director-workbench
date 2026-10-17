@@ -1,0 +1,196 @@
+"""Run CPU tests in their owning environments without activation or installation."""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import uuid
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import paths
+
+PROJECT = paths.PROJECT_ROOT
+BROWSER_TESTS = (
+    'agent_access', 'agent_page_bridge', 'assembly_edit', 'automatic_creation',
+    'generation_stage', 'guide_queue', 'guide_review', 'media_tools_panel',
+    'queued_panels', 'reference_queue', 'speech_panel',
+)
+PROBE = """
+import importlib.util, importlib.metadata, json, os, site, sys
+modules = {}
+for name in sys.argv[1:]:
+    try:
+        found = importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError, AttributeError):
+        found = False
+    try:
+        version = importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        version = None
+    modules[name] = {'available': found, 'version': version}
+print(json.dumps({'executable': sys.executable, 'base_prefix': sys.base_prefix,
+                  'enable_user_site': site.ENABLE_USER_SITE, 'stdlib_path': os.__file__,
+                  'version': sys.version, 'modules': modules}))
+"""
+
+
+def suite_specs(project: Path, run_root: Path, desktop: Path | None = None) -> dict:
+    # The host installation is a machine root, not a property of the checkout, so it
+    # arrives as an explicit argument instead of a depth derivation: a relocated
+    # checkout still points at the real host, and a test can hand in a synthetic one.
+    host = paths.DESKTOP_ROOT if desktop is None else Path(desktop)
+    return {
+        'core': {
+            'python': project / '.venv/Scripts/python.exe',
+            'modules': ['fastapi', 'uvicorn', 'httpx', 'pytest', 'mcp', 'numpy', 'av'],
+            'args': ['-m', 'pytest', 'tests', 'tools/test_build_video_finish_workflow.py',
+                     '--ignore=tests/test_generate_auk_flash.py', '-q',
+                     '--basetemp', str(run_root / 'pytest')],
+        },
+        'auk': {
+            'python': host / 'ComfyUI-Shared/tools/AuK/.venv/Scripts/python.exe',
+            'modules': ['numpy', 'soundfile', 'torch'],
+            'args': ['-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_generate_auk_flash.py', '-v'],
+        },
+        # Browser acceptance drives need no Python interpreter argument: they bundle the
+        # front end themselves and intercept their own HTTP. Drivers that take fixtures
+        # (a Python interpreter, an absolute runtime directory, an MP4 or ffmpeg, a
+        # completed fixture root) are not listed yet; see the browser-suite notes in the
+        # project docs before adding one.
+        'browser': {
+            'runner': 'node',
+            'scripts': [f'tests/{name}.browser.mjs' for name in BROWSER_TESTS],
+        },
+    }
+
+
+def report_suite(name: str, result: dict) -> None:
+    result['status'] = 'failed' if result['errors'] else 'passed'
+    for warning in result['warnings']:
+        print(f'[{name}] WARNING: {warning}', flush=True)
+    for error in result['errors']:
+        print(f'[{name}] ERROR: {error}', flush=True)
+
+
+def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: bool) -> dict:
+    """Run browser acceptance drivers through node, failing rather than skipping when absent."""
+    temporary = run_root / name
+    temporary.mkdir()
+    result = {'cwd': str(project), 'temporary': str(temporary),
+              'warnings': [], 'errors': [], 'test_exit_code': None}
+    environment = dict(os.environ)
+    environment['PYTHONNOUSERSITE'] = '1'
+    environment.update({key: str(temporary) for key in ('TMP', 'TEMP', 'TMPDIR')})
+    runner = shutil.which('node')
+    if runner is None:
+        result['errors'].append('Required node runner is missing; this suite is failed, not skipped.')
+        return result
+    result['interpreter'] = runner
+    missing = [script for script in spec['scripts'] if not (project / script).is_file()]
+    if missing:
+        result['errors'].append('Missing browser tests: ' + ', '.join(missing))
+    if not check:
+        commands = []
+        for script in spec['scripts']:
+            if script in missing:
+                continue
+            command = [runner, script]
+            commands.append(command)
+            try:
+                completed = subprocess.run(command, cwd=project, env=environment)
+            except OSError as exc:
+                result['errors'].append(f'{script} could not start: {type(exc).__name__}.')
+                continue
+            if completed.returncode:
+                result['errors'].append(f'{script} failed (exit {completed.returncode}).')
+        result['commands'] = commands
+        result['test_exit_code'] = int(bool(result['errors']))
+    return result
+
+
+def run(suite: str = 'all', check: bool = False, report_path: Path | None = None,
+        *, project: Path = PROJECT, desktop: Path | None = None,
+        runtime: Path | None = None) -> int:
+    project = project.resolve()
+    host = paths.DESKTOP_ROOT if desktop is None else Path(desktop).resolve()
+    runtime_root = paths.RUNTIME_ROOT if runtime is None else Path(runtime).resolve()
+    run_root = runtime_root / ('t-' + uuid.uuid4().hex[:12])
+    run_root.mkdir(parents=True, exist_ok=False)
+    specs = suite_specs(project, run_root, host)
+    names = list(specs) if suite == 'all' else [suite]
+    receipt = {'mode': 'check' if check else 'tests', 'project': str(project),
+               'run_root': str(run_root), 'suites': {}}
+    for name in names:
+        spec = specs[name]
+        if spec.get('runner') == 'node':
+            print(f'[{name}] Runner: node', flush=True)
+            receipt['suites'][name] = browser_suite(spec, project, run_root, name, check)
+            report_suite(name, receipt['suites'][name])
+            continue
+        interpreter = spec['python']
+        temporary = run_root / name
+        temporary.mkdir()
+        environment = dict(os.environ)
+        environment.pop('PYTHONHOME', None)
+        environment.pop('PYTHONPATH', None)
+        environment['PYTHONNOUSERSITE'] = '1'
+        environment.update({key: str(temporary) for key in ('TMP', 'TEMP', 'TMPDIR')})
+        result = {'interpreter': str(interpreter), 'cwd': str(project), 'temporary': str(temporary),
+                  'warnings': [], 'errors': [], 'test_exit_code': None}
+        receipt['suites'][name] = result
+        print(f'[{name}] Python: {interpreter}', flush=True)
+        if not interpreter.is_file():
+            result['errors'].append('Required interpreter is missing; this suite is failed, not skipped.')
+        else:
+            try:
+                probe = subprocess.run([str(interpreter), '-c', PROBE, *spec['modules']],
+                                       cwd=project, env=environment, capture_output=True, text=True,
+                                       encoding='utf-8', errors='replace', timeout=60)
+                if probe.returncode:
+                    result['errors'].append(f'Environment probe failed (exit {probe.returncode}).')
+                else:
+                    details = json.loads(probe.stdout)
+                    result['environment'] = details
+                    missing = [key for key, value in details['modules'].items() if not value['available']]
+                    if missing:
+                        result['errors'].append('Missing modules: ' + ', '.join(missing))
+                    if not Path(details['base_prefix']).resolve().is_relative_to(host):
+                        result['warnings'].append('Python base_prefix is outside the Comfy-Desktop root; the environment depends on that installation.')
+            except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError) as exc:
+                result['errors'].append(f'Environment probe could not complete: {type(exc).__name__}.')
+            if not check:
+                command = [str(interpreter), *spec['args']]
+                result['command'] = command
+                try:
+                    completed = subprocess.run(command, cwd=project, env=environment)
+                    result['test_exit_code'] = completed.returncode
+                    if completed.returncode:
+                        result['errors'].append(f'Test suite failed (exit {completed.returncode}).')
+                except OSError as exc:
+                    result['errors'].append(f'Test suite could not start: {type(exc).__name__}.')
+        report_suite(name, result)
+    failed = [name for name, result in receipt['suites'].items() if result['status'] == 'failed']
+    receipt['exit_code'] = int(bool(failed))
+    destination = report_path.resolve() if report_path else run_root / 'report.json'
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(receipt, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    print('Summary: ' + ', '.join(f"{name}={result['status']}" for name, result in receipt['suites'].items()), flush=True)
+    print(f'Report: {destination}', flush=True)
+    return receipt['exit_code']
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--suite', choices=('all', 'core', 'auk', 'browser'), default='all')
+    parser.add_argument('--check', action='store_true', help='Probe interpreters and package metadata without importing models or running tests.')
+    parser.add_argument('--report', type=Path, help='Optional JSON receipt path; default: unique workspace runtime directory.')
+    args = parser.parse_args()
+    return run(args.suite, args.check, args.report)
+
+
+if __name__ == '__main__':
+    sys.exit(main())

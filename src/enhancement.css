@@ -1,0 +1,25 @@
+.enhancement-panel { max-width: 1160px; margin: 0 auto; }
+.enhancement-panel header { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.enhancement-panel h1 { font-size: 28px; margin: 8px 0; }
+.enhancement-panel h2 { font-size: 18px; margin: 0 0 16px; }
+.enhancement-panel p { color: var(--muted); line-height: 1.65; overflow-wrap: anywhere; }
+.enhancement-panel > section { margin: 20px 0; padding: 24px; border: 1px solid var(--line); border-radius: 12px; background: white; min-width: 0; }
+.enhancement-panel label { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.enhancement-panel select { width: 100%; min-width: 0; padding: 12px; color: var(--ink); background: white; border: 1px solid var(--line-strong); border-radius: 8px; }
+.enhancement-panel input { max-width: 100%; }
+.enhancement-panel .enhancement-limits { font-size: 12px; }
+.enhancement-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+.enhancement-compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.enhancement-compare figure { margin: 0; min-width: 0; }
+.enhancement-compare figcaption { margin-bottom: 12px; font-weight: 600; }
+.enhancement-panel img, .enhancement-panel video { display: block; width: 100%; max-height: 460px; object-fit: contain; background: #18202c; border-radius: 8px; }
+.enhancement-compare a { display: inline-block; margin-top: 12px; }
+.enhancement-source { max-width: 480px; }
+.enhancement-source img, .enhancement-source video { max-height: 180px; }
+.enhancement-history ul { list-style: none; padding: 0; }
+.enhancement-history li { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.enhancement-history button { padding: 10px; text-align: left; border: 1px solid var(--line-strong); border-radius: 8px; background: white; color: var(--ink); }
+.enhancement-history button[aria-pressed="true"] { border-color: #6685c9; background: #eef3ff; }
+.enhancement-history time { color: var(--muted); font-size: 12px; }
+.enhancement-panel button:focus-visible, .enhancement-panel a:focus-visible, .enhancement-panel select:focus-visible, .enhancement-panel input:focus-visible { outline: 2px solid #6685c9; outline-offset: 3px; }
+@media (max-width: 700px) { .enhancement-compare { grid-template-columns: 1fr; } .enhancement-panel > section { padding: 16px; } }

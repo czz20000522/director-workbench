@@ -1,0 +1,46 @@
+.script-workbench { margin-top: 20px; border: 1px solid var(--line); border-radius: 8px; background: #fff; overflow: hidden; }
+.script-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 18px; padding: 22px 24px; border-bottom: 1px solid var(--line); }
+.script-header h2 { display: flex; gap: 9px; align-items: center; margin: 0; font-size: 18px; }
+.script-header p { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+.script-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.script-meta { color: var(--muted); font-size: 12px; line-height: 1.7; }
+.script-layout { display: grid; grid-template-columns: minmax(185px, 240px) minmax(0, 1fr); min-height: 480px; }
+.script-scenes { padding: 16px 12px; border-right: 1px solid var(--line); background: #fafafa; min-width: 0; }
+.script-scene-item { width: 100%; display: flex; gap: 10px; align-items: baseline; text-align: left; border: 1px solid transparent; border-radius: 5px; background: transparent; padding: 12px; margin-bottom: 5px; color: var(--ink); }
+.script-scene-item:first-child { display: block; margin-bottom: 16px; }
+.script-scene-item:hover { background: #f0f1f3; }
+.script-scene-item.active { border-color: var(--line-strong); background: #e9ebee; }
+.script-scene-item strong { display: block; font-size: 13px; font-weight: 550; overflow-wrap: anywhere; }
+.script-scene-item small { display: block; margin-top: 5px; font-size: 11px; color: var(--muted); }
+.script-scene-order { color: var(--muted); font-size: 11px; }
+.script-add { width: 100%; justify-content: center; margin-top: 12px; }
+.script-reading { min-width: 0; padding: 32px clamp(20px, 3.5vw, 54px); }
+.script-reading h3 { font-size: 23px; font-weight: 550; line-height: 1.5; margin: 0 0 24px; overflow-wrap: anywhere; }
+.script-prose { max-width: 780px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 2; color: #383b40; }
+.script-fields { min-width: 0; border: 0; padding: 0; margin: 0; }
+.script-fields label { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; font-size: 13px; color: var(--muted); min-width: 0; }
+.script-fields input, .script-fields textarea { width: 100%; min-width: 0; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 5px; background: white; color: var(--ink); font: inherit; }
+.script-fields-row { display: grid; grid-template-columns: minmax(0, 1fr) 170px; gap: 18px; }
+.script-fields .script-text-editor { min-height: 390px; resize: vertical; line-height: 1.9; font-size: 15px; }
+.script-linked { margin-top: 32px; padding-top: 22px; border-top: 1px solid var(--line); }
+.script-linked h4 { font-size: 14px; margin: 0 0 14px; }
+.script-remove { color: var(--danger); }
+.script-message { display: flex; gap: 12px; justify-content: space-between; flex-wrap: wrap; margin: 12px 24px; padding: 12px 14px; border-radius: 5px; background: #f2f3f5; color: #4b515c; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.script-error { background: #fff3ef; color: #854c3c; }
+.script-empty { padding: 50px 24px; color: var(--muted); text-align: center; }
+.script-latest { margin: 16px 24px; padding: 18px; border: 1px solid var(--line-strong); border-radius: 5px; background: #f7f8fa; }
+.script-latest h3 { margin: 0 0 8px; font-size: 15px; }
+.script-latest p, .script-latest summary { font-size: 13px; line-height: 1.7; }
+.script-latest details { margin-bottom: 16px; }
+.script-latest details .script-prose { max-height: 320px; overflow-y: auto; margin-top: 15px; }
+@media (max-width: 800px) {
+  .script-header { padding: 18px; }
+  .script-layout { grid-template-columns: minmax(0, 1fr); }
+  .script-scenes { border-right: 0; border-bottom: 1px solid var(--line); max-height: 240px; overflow-y: auto; }
+  .script-scene-item { padding: 9px 12px; }
+  .script-scene-item:first-child { margin-bottom: 8px; }
+  .script-reading { padding: 24px 18px; }
+  .script-fields-row { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .script-reading h3 { font-size: 20px; }
+  .script-message, .script-latest { margin-left: 12px; margin-right: 12px; }
+}

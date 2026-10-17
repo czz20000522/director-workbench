@@ -1,0 +1,22 @@
+.assembly-edit-panel { margin: 14px 0; padding: 14px 16px; border: 1px solid var(--border, #39414c); border-radius: 12px; background: var(--surface, #20252d); }
+.assembly-edit-panel summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; }
+.assembly-edit-panel summary span, .assembly-edit-panel p, .assembly-edit-panel small { color: var(--muted, #aeb5bd); }
+.assembly-edit-content { display: grid; gap: 18px; margin-top: 15px; }
+.assembly-edit-content section + section { border-top: 1px solid var(--border, #39414c); padding-top: 15px; }
+.assembly-edit-content h3 { margin: 0 0 5px; font-size: 15px; }
+.assembly-edit-content p { margin: 0 0 12px; font-size: 13px; }
+.assembly-edit-row, .assembly-edit-actions { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin: 8px 0; }
+.assembly-edit-panel label { display: grid; gap: 5px; min-width: 170px; font-size: 12px; }
+.assembly-edit-panel select, .assembly-edit-panel input, .assembly-edit-panel textarea { width: 100%; min-height: 34px; box-sizing: border-box; }
+.assembly-edit-panel audio { display: block; width: min(100%, 520px); margin-top: 9px; }
+.assembly-edit-joins { display: flex; flex-wrap: wrap; gap: 7px; }
+.assembly-edit-joins button { display: grid; gap: 3px; padding: 8px 10px; text-align: left; border: 1px solid var(--border, #39414c); border-radius: 8px; background: transparent; color: inherit; cursor: pointer; }
+.assembly-edit-joins button.active { border-color: currentColor; }
+.assembly-edit-joins small { font-size: 11px; }
+.assembly-edit-review { display: grid; gap: 11px; margin-top: 13px; }
+.assembly-edit-previews { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.assembly-edit-previews > div, .assembly-edit-full { display: grid; gap: 6px; }
+.assembly-edit-previews video, .assembly-edit-full video { display: block; width: 100%; max-height: 220px; background: #111; }
+.assembly-edit-full video { max-width: 520px; }
+.assembly-edit-error { color: #d95a5a !important; }
+@media (max-width: 780px) { .assembly-edit-previews { grid-template-columns: 1fr; } }
