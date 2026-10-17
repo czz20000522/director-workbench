@@ -13,8 +13,9 @@ import uuid
 
 PROJECT = Path(__file__).resolve().parents[1]
 BROWSER_TESTS = (
-    'agent_page_bridge', 'assembly_edit', 'guide_queue', 'guide_review',
-    'media_tools_panel', 'queued_panels', 'reference_queue', 'speech_panel',
+    'agent_access', 'agent_page_bridge', 'assembly_edit', 'automatic_creation',
+    'generation_stage', 'guide_queue', 'guide_review', 'media_tools_panel',
+    'queued_panels', 'reference_queue', 'speech_panel',
 )
 PROBE = """
 import importlib.util, importlib.metadata, json, os, site, sys

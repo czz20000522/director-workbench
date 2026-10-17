@@ -44,9 +44,6 @@
 !/ComfyUI-Workspace/projects/director-workbench/tools/
 /ComfyUI-Workspace/projects/director-workbench/tools/*
 !/ComfyUI-Workspace/projects/director-workbench/tools/qwen_image_t2i.py
-!/ComfyUI-Workspace/projects/director-workbench/docs/workflow-baseline-2026-10-15.md
-!/ComfyUI-Workspace/projects/director-workbench/docs/agent-plugin-sharing.md
-!/ComfyUI-Workspace/projects/director-workbench/docs/quick-generation-integration.md
 !/ComfyUI-Workspace/projects/director-workbench/src/quick-create.css
 !/.agents/skills/aigc-video-production/assets/workflows/
 /.agents/skills/aigc-video-production/assets/workflows/*
@@ -72,11 +69,9 @@
 !/ComfyUI-Workspace/projects/director-workbench/prototype.html
 !/ComfyUI-Workspace/projects/director-workbench/src/QuickStudioPrototype.tsx
 !/ComfyUI-Workspace/projects/director-workbench/src/quick-studio-prototype.css
-!/ComfyUI-Workspace/projects/director-workbench/docs/quick-studio-prototype.md
 !/ComfyUI-Workspace/projects/director-workbench/src/quick-create.css
 !/ComfyUI-Workspace/projects/director-workbench/tests/quick_generation.browser.mjs
 !/ComfyUI-Workspace/projects/director-workbench/tests/quick_generation_bridge.py
-!/ComfyUI-Workspace/projects/director-workbench/docs/quick-generation-integration.md
 !/AGENTS.md
 !/CONTRIBUTING.md
 !/ComfyUI-Workspace/production/storage_layout.py
@@ -321,16 +316,21 @@
 !/ComfyUI-Workspace/projects/director-workbench/src/enhancement.css
 !/ComfyUI-Workspace/projects/director-workbench/tests/test_enhancement.py
 !/ComfyUI-Workspace/projects/director-workbench/tests/enhancement.browser.mjs
-!/ComfyUI-Workspace/projects/director-workbench/docs/media-enhancement.md
 
 # Adult creative partition (recipe selection is pinned by tests)
 !/ComfyUI-Workspace/projects/director-workbench/tests/test_adult_profiles.py
 
 # Browser acceptance driven by tools/run_project_tests.py --suite browser.
-# Every listed driver bundles the front end, intercepts its own HTTP and uses
-# isolated synthetic media; none reads a private path, account or work asset.
+# Most listed drivers bundle the front end, intercept their own HTTP and use
+# isolated synthetic media. automatic_creation and agent_access instead drive
+# the real local ASGI app through their bridge with seeded synthetic accounts
+# and fixtures, writing only under the runtime directory. None reads a private
+# path, personal account or work asset.
+!/ComfyUI-Workspace/projects/director-workbench/tests/agent_access.browser.mjs
 !/ComfyUI-Workspace/projects/director-workbench/tests/agent_page_bridge.browser.mjs
 !/ComfyUI-Workspace/projects/director-workbench/tests/assembly_edit.browser.mjs
+!/ComfyUI-Workspace/projects/director-workbench/tests/automatic_creation.browser.mjs
+!/ComfyUI-Workspace/projects/director-workbench/tests/generation_stage.browser.mjs
 !/ComfyUI-Workspace/projects/director-workbench/tests/guide_queue.browser.mjs
 !/ComfyUI-Workspace/projects/director-workbench/tests/guide_review.browser.mjs
 !/ComfyUI-Workspace/projects/director-workbench/tests/media_tools_panel.browser.mjs
