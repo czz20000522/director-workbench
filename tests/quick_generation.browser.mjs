@@ -369,7 +369,7 @@ try {
   // as an adult capability: 清晰化 upscales with RealESRGAN and loads no adult configuration.
   await page.getByRole('button', { name: '快速生成', exact: true }).click();
   const destination = await page.locator('.quick-navigation > span').textContent();
-  assert.ok(destination.startsWith('保存到：'), `Unexpected quick destination: ${destination}`);
+  assert.ok(destination.startsWith('新产物会存进：'), `Unexpected quick destination: ${destination}`);
   await page.getByRole('group', { name: '快速生成分区', exact: true }).getByRole('button', { name: '成人向创作', exact: true }).click();
   assert.equal(await page.locator('.quick-navigation > span').textContent(), destination,
     'Opening the adult zone keeps the current work instead of moving it into the adult series');
