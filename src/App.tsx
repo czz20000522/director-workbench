@@ -1445,12 +1445,19 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
     if (quickWorking.current || projectLoading) return;
     quickWorking.current = true; setQuickBusy(true); setQuickError('');
     try {
-      if (!project || (zone === 'adult' && project.series !== '成人向创作')) {
+      // 每个快速分区的创作入口各自对应一个系列：成人向内容必须留在「成人向创作」，
+      // 普通创作也不应被写进该系列。只有当前作品不属于本分区的系列时才新建并切换；
+      // 用户自建的其他作品在普通分区里仍是默认去向，清晰化等加工入口始终作用于当前作品。
+      const adultSeries = '成人向创作';
+      const series = zone === 'adult' ? adultSeries : '快速草稿';
+      const previousSeries = project?.series ?? '';
+      const inZoneSeries = template === 'enhance' || (zone === 'adult' ? previousSeries === series : previousSeries !== adultSeries);
+      let switchedTitle = '';
+      if (!project || !inZoneSeries) {
         // Private workspaces assign their own IDs. Recover a lost response by
         // the unique draft title within the authenticated project catalog.
         const key = `director-workbench:quick-project-pending:${zone}:v1`;
         const pending = localStorage.getItem(key);
-        const series = zone === 'adult' ? '成人向创作' : '快速草稿';
         const title = pending || `${zone === 'adult' ? '成人向试作' : '随手创作'} ${new Date().toLocaleString('zh-CN', { hour12: false })} · ${crypto.randomUUID().slice(0, 6)}`;
         if (!pending) localStorage.setItem(key, title);
         const response = pending
@@ -1466,16 +1473,23 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
         const created = matches[0];
         await selectProject(created.id, true, pageInteraction.current);
         localStorage.removeItem(key);
+        switchedTitle = title;
       }
       setQuickCategory(zone); setQuickMode(true); setQuickTemplate(template); setArchive(null);
+      // switchKind 会清空提示，所以切换说明必须放在每个分支的最后一句。
+      const switchNotice = switchedTitle ? (previousSeries && previousSeries !== series
+        ? `内容不会写进「${previousSeries}」作品；已新建并切换到「${series}」作品：${switchedTitle}`
+        : `已新建「${series}」作品：${switchedTitle}`) : '';
       if (template === 'enhance') {
-        setEnhancementSource(firstFrame); setWorkspaceMode('production'); setWorkspacePage('enhance'); return;
+        setEnhancementSource(firstFrame); setWorkspaceMode('production'); setWorkspacePage('enhance');
+        if (switchNotice) setNotice(switchNotice); return;
       }
       setWorkspaceMode('production'); setWorkspacePage('shots'); setAdvancedOpen(false);
       switchKind(template === 'image' ? 'image' : 'video');
       setSegmentFormOpen(template !== 'image');
       if (zone === 'adult') setGenerationDraft(previous => ({ ...previous, creative_profile: adultProfile, speed_profile: 'standard' }));
       if (firstFrame) setSegmentDraft(previous => ({ ...previous, first_frame: firstFrame }));
+      if (switchNotice) setNotice(switchNotice);
     } catch (error) { setQuickError(error instanceof Error ? error.message : '暂时无法打开生成入口'); }
     finally { quickWorking.current = false; setQuickBusy(false); }
   }
