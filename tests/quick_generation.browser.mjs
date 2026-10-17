@@ -358,10 +358,30 @@ try {
   await delivery.getByRole('button', { name: '查看成片并审核', exact: true }).click();
   assert.ok(await page.getByLabel('使用生成结果').getByRole('button', { name: '通过全片审核', exact: true }).isDisabled());
   assert.equal((await tasks()).length, 7, 'Restoring and viewing stale assembly retain all original task candidates without new generation');
+  // The adult zone needs the same clarify entry as the general zone, but it must not dress it up
+  // as an adult capability: 清晰化 upscales with RealESRGAN and loads no adult configuration.
+  await page.getByRole('button', { name: '快速生成', exact: true }).click();
+  const destination = await page.locator('.quick-navigation > span').textContent();
+  assert.ok(destination.startsWith('保存到：'), `Unexpected quick destination: ${destination}`);
+  await page.getByRole('group', { name: '快速生成分区', exact: true }).getByRole('button', { name: '成人向创作', exact: true }).click();
+  assert.equal(await page.locator('.quick-navigation > span').textContent(), destination,
+    'Opening the adult zone keeps the current work instead of moving it into the adult series');
+  const adultTemplates = page.locator('.quick-templates-adult button');
+  assert.equal(await adultTemplates.count(), 4, 'The adult zone offers the three adult entries plus clarify');
+  const adultEnhance = adultTemplates.filter({ hasText: '提高当前作品分辨率' });
+  assert.equal(await adultEnhance.locator('strong').textContent(), '图像／视频清晰化');
+  assert.equal(await adultEnhance.locator('span').textContent(), '提高当前作品分辨率，不经过成人向配方');
+  assert.equal(await adultTemplates.locator('strong').filter({ hasText: '成人向' }).count(), 3, 'Only the entrants that load an adult profile are named 成人向');
+  assert.ok(!(await adultEnhance.locator('strong').textContent()).startsWith('成人向'));
+  await adultEnhance.click();
+  await page.getByLabel('图像／视频清晰化', { exact: true }).getByRole('heading', { name: '选择原素材', exact: true }).waitFor();
+  assert.equal(await page.locator('.quick-navigation > span').textContent(), destination,
+    'Clarify acts on the current work instead of moving it into the adult series');
+  assert.equal(writes.filter(row => row.path === '/api/projects/create').length, 1, 'Clarify creates no work');
   assert.deepEqual(errors, []);
   const stats = await call({ operation: 'stats' });
   assert.equal(stats.queued.length, 7); assert.deepEqual(stats.other_projects, []);
-  console.log('PASS: three entry types, candidate comparison/restore/adopt, next shot, two-shot joins and sound, lost assembly receipt recovery, final preview/download/adopt, shot/account/file isolation, responsive layout. GPU and assembly execution are stubbed.');
+  console.log('PASS: three entry types, adult-zone clarify entry, candidate comparison/restore/adopt, next shot, two-shot joins and sound, lost assembly receipt recovery, final preview/download/adopt, shot/account/file isolation, responsive layout. GPU and assembly execution are stubbed.');
 } catch (error) {
   if (page) { console.error((await page.locator('body').innerText()).slice(-9000)); await page.screenshot({ path: resolve(process.argv[3], 'failure.png'), fullPage: true }); }
   throw error;
