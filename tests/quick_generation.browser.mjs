@@ -35,8 +35,14 @@ try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   const writes = [], errors = [];
   let loseImageResponse = false, loseProjectResponse = true, loseAssemblyResponse = false;
-  let holdPlan = null, onPlanHeld = null;
-  let holdState = null, onStateHeld = null;
+  // A hold pairs "the driver is waiting to see this request" with "the request is still unanswered",
+  // so it is armed as one object: arming is a single write, and the handler reads it once on entry.
+  const arm = () => {
+    let arrived, release;
+    return { arrival: new Promise(resolve => { arrived = resolve; }),
+      gate: new Promise(resolve => { release = resolve; }), arrived, release };
+  };
+  let holdPlan = null, holdState = null;
   await context.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url());
     assert.equal(url.origin, 'http://localhost:4197', 'Never contact live services');
@@ -46,10 +52,14 @@ try {
     if (url.pathname.endsWith('/events')) return route.fulfill({ contentType: 'text/event-stream', body: '' });
     if (!url.pathname.startsWith('/api/') && !['/media-file', '/material-file', '/openapi.json'].includes(url.pathname)) return route.fulfill({ status: 404, body: '' });
     if (request.method() !== 'GET') writes.push({ path: url.pathname, method: request.method(), body: request.headers()['content-type']?.includes('application/json') ? request.postDataJSON() : null });
+    // Snapshot the holds before the fixture round trip: a request that arrived while nothing was
+    // armed must not be held retroactively (the app's own refresh lands in this window), and one
+    // that arrived while armed must not slip through.
+    const planHold = holdPlan, stateHold = holdState;
     const value = await call({ method: request.method(), path: url.pathname + url.search, headers: await request.allHeaders(),
       ...(request.postDataBuffer() ? { body: request.postDataBuffer().toString('base64') } : {}) });
-    if (holdPlan && request.method() === 'GET' && url.pathname.endsWith('/plan')) { onPlanHeld(); await holdPlan; }
-    if (holdState && request.method() === 'GET' && url.pathname.endsWith('/state')) { onStateHeld(); await holdState; }
+    if (planHold && request.method() === 'GET' && url.pathname.endsWith('/plan')) { planHold.arrived(); await planHold.gate; }
+    if (stateHold && request.method() === 'GET' && url.pathname.endsWith('/state')) { stateHold.arrived(); await stateHold.gate; }
     if (loseProjectResponse && request.method() === 'POST' && url.pathname === '/api/projects/create') {
       assert.equal(value.status, 200); loseProjectResponse = false; return route.abort('failed');
     }
@@ -277,14 +287,12 @@ try {
   await delivery.getByRole('button', { name: '已通过', exact: true }).click();
   await delivery.getByText('S01 → S02', { exact: true }).locator('..').getByText(/已通过/).waitFor();
   await delivery.getByLabel('音轨方式').selectOption('mute');
-  let releasePlan;
-  holdPlan = new Promise(resolve => { releasePlan = resolve; });
-  const planHeld = new Promise(resolve => { onPlanHeld = resolve; });
+  holdPlan = arm();
   const soundReload = page.waitForResponse(response => response.url().endsWith('/assembly/edit') && response.request().method() === 'GET');
   await delivery.getByRole('button', { name: '保存音轨方案', exact: true }).click();
-  await planHeld;
+  await holdPlan.arrival;
   assert.ok(await delivery.getByRole('button', { name: '无 GPU 装配预检', exact: true }).isDisabled(), 'Preflight waits for the saved-plan refresh');
-  releasePlan(); holdPlan = null;
+  holdPlan.release(); holdPlan = null;
   await (await soundReload).finished();
   await page.waitForFunction(async pid => (await (await fetch(`/api/projects/${pid}/assembly/edit`)).json()).sound.policy === 'mute', projectId);
   await delivery.getByRole('button', { name: '无 GPU 装配预检', exact: true }).click();
@@ -337,17 +345,15 @@ try {
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
   await delivery.getByRole('button', { name: '打开分镜1', exact: true }).click();
   await page.getByRole('button', { name: '并排比较候选', exact: true }).click();
-  let releaseState;
-  holdState = new Promise(resolve => { releaseState = resolve; });
-  const stateHeld = new Promise(resolve => { onStateHeld = resolve; });
+  holdState = arm();
   await comparison.getByRole('article', { name: '左侧候选', exact: true }).getByRole('button', { name: '恢复为当前候选', exact: true }).click();
   await page.waitForFunction(async pid => (await (await fetch(`/api/projects/${pid}/plan`)).json()).assembly.status === 'stale', projectId);
   await page.getByRole('button', { name: '检查并装配成片', exact: true }).click();
   await delivery.getByRole('heading', { name: '历史成片 · 需重新装配', exact: true }).waitFor();
   await delivery.getByRole('link', { name: '下载历史成片', exact: true }).waitFor();
-  await stateHeld;
+  await holdState.arrival;
   assert.ok(await delivery.getByRole('button', { name: '重新装配成片', exact: true }).isDisabled());
-  releaseState(); holdState = null;
+  holdState.release(); holdState = null;
   await delivery.getByRole('heading', { name: '已采用 1 / 2 段', exact: true }).waitFor();
   await delivery.getByRole('button', { name: '查看成片并审核', exact: true }).click();
   assert.ok(await page.getByLabel('使用生成结果').getByRole('button', { name: '通过全片审核', exact: true }).isDisabled());
