@@ -35,8 +35,14 @@ try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   const writes = [], errors = [];
   let loseImageResponse = false, loseProjectResponse = true, loseAssemblyResponse = false;
-  let holdPlan = null, onPlanHeld = null;
-  let holdState = null, onStateHeld = null;
+  // A hold pairs "the driver is waiting to see this request" with "the request is still unanswered",
+  // so it is armed as one object: arming is a single write, and the handler reads it once on entry.
+  const arm = () => {
+    let arrived, release;
+    return { arrival: new Promise(resolve => { arrived = resolve; }),
+      gate: new Promise(resolve => { release = resolve; }), arrived, release };
+  };
+  let holdPlan = null, holdState = null;
   await context.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url());
     assert.equal(url.origin, 'http://localhost:4197', 'Never contact live services');
@@ -46,10 +52,14 @@ try {
     if (url.pathname.endsWith('/events')) return route.fulfill({ contentType: 'text/event-stream', body: '' });
     if (!url.pathname.startsWith('/api/') && !['/media-file', '/material-file', '/openapi.json'].includes(url.pathname)) return route.fulfill({ status: 404, body: '' });
     if (request.method() !== 'GET') writes.push({ path: url.pathname, method: request.method(), body: request.headers()['content-type']?.includes('application/json') ? request.postDataJSON() : null });
+    // Snapshot the holds before the fixture round trip: a request that arrived while nothing was
+    // armed must not be held retroactively (the app's own refresh lands in this window), and one
+    // that arrived while armed must not slip through.
+    const planHold = holdPlan, stateHold = holdState;
     const value = await call({ method: request.method(), path: url.pathname + url.search, headers: await request.allHeaders(),
       ...(request.postDataBuffer() ? { body: request.postDataBuffer().toString('base64') } : {}) });
-    if (holdPlan && request.method() === 'GET' && url.pathname.endsWith('/plan')) { onPlanHeld(); await holdPlan; }
-    if (holdState && request.method() === 'GET' && url.pathname.endsWith('/state')) { onStateHeld(); await holdState; }
+    if (planHold && request.method() === 'GET' && url.pathname.endsWith('/plan')) { planHold.arrived(); await planHold.gate; }
+    if (stateHold && request.method() === 'GET' && url.pathname.endsWith('/state')) { stateHold.arrived(); await stateHold.gate; }
     if (loseProjectResponse && request.method() === 'POST' && url.pathname === '/api/projects/create') {
       assert.equal(value.status, 200); loseProjectResponse = false; return route.abort('failed');
     }
@@ -284,14 +294,12 @@ try {
   await delivery.getByRole('button', { name: '已通过', exact: true }).click();
   await delivery.getByText('S01 → S02', { exact: true }).locator('..').getByText(/已通过/).waitFor();
   await delivery.getByLabel('音轨方式').selectOption('mute');
-  let releasePlan;
-  holdPlan = new Promise(resolve => { releasePlan = resolve; });
-  const planHeld = new Promise(resolve => { onPlanHeld = resolve; });
+  holdPlan = arm();
   const soundReload = page.waitForResponse(response => response.url().endsWith('/assembly/edit') && response.request().method() === 'GET');
   await delivery.getByRole('button', { name: '保存音轨方案', exact: true }).click();
-  await planHeld;
+  await holdPlan.arrival;
   assert.ok(await delivery.getByRole('button', { name: '无 GPU 装配预检', exact: true }).isDisabled(), 'Preflight waits for the saved-plan refresh');
-  releasePlan(); holdPlan = null;
+  holdPlan.release(); holdPlan = null;
   await (await soundReload).finished();
   await page.waitForFunction(async pid => (await (await fetch(`/api/projects/${pid}/assembly/edit`)).json()).sound.policy === 'mute', projectId);
   await delivery.getByRole('button', { name: '无 GPU 装配预检', exact: true }).click();
@@ -344,25 +352,43 @@ try {
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
   await delivery.getByRole('button', { name: '打开分镜1', exact: true }).click();
   await page.getByRole('button', { name: '并排比较候选', exact: true }).click();
-  let releaseState;
-  holdState = new Promise(resolve => { releaseState = resolve; });
-  const stateHeld = new Promise(resolve => { onStateHeld = resolve; });
+  holdState = arm();
   await comparison.getByRole('article', { name: '左侧候选', exact: true }).getByRole('button', { name: '恢复为当前候选', exact: true }).click();
   await page.waitForFunction(async pid => (await (await fetch(`/api/projects/${pid}/plan`)).json()).assembly.status === 'stale', projectId);
   await page.getByRole('button', { name: '检查并装配成片', exact: true }).click();
   await delivery.getByRole('heading', { name: '历史成片 · 需重新装配', exact: true }).waitFor();
   await delivery.getByRole('link', { name: '下载历史成片', exact: true }).waitFor();
-  await stateHeld;
+  await holdState.arrival;
   assert.ok(await delivery.getByRole('button', { name: '重新装配成片', exact: true }).isDisabled());
-  releaseState(); holdState = null;
+  holdState.release(); holdState = null;
   await delivery.getByRole('heading', { name: '已采用 1 / 2 段', exact: true }).waitFor();
   await delivery.getByRole('button', { name: '查看成片并审核', exact: true }).click();
   assert.ok(await page.getByLabel('使用生成结果').getByRole('button', { name: '通过全片审核', exact: true }).isDisabled());
   assert.equal((await tasks()).length, 7, 'Restoring and viewing stale assembly retain all original task candidates without new generation');
+  // The adult zone needs the same clarify entry as the general zone, but it must not dress it up
+  // as an adult capability: 清晰化 upscales with RealESRGAN and loads no adult configuration.
+  await page.getByRole('button', { name: '快速生成', exact: true }).click();
+  const destination = await page.locator('.quick-navigation > span').textContent();
+  assert.ok(destination.startsWith('保存到：'), `Unexpected quick destination: ${destination}`);
+  await page.getByRole('group', { name: '快速生成分区', exact: true }).getByRole('button', { name: '成人向创作', exact: true }).click();
+  assert.equal(await page.locator('.quick-navigation > span').textContent(), destination,
+    'Opening the adult zone keeps the current work instead of moving it into the adult series');
+  const adultTemplates = page.locator('.quick-templates-adult button');
+  assert.equal(await adultTemplates.count(), 4, 'The adult zone offers the three adult entries plus clarify');
+  const adultEnhance = adultTemplates.filter({ hasText: '提高当前作品分辨率' });
+  assert.equal(await adultEnhance.locator('strong').textContent(), '图像／视频清晰化');
+  assert.equal(await adultEnhance.locator('span').textContent(), '提高当前作品分辨率，不经过成人向配方');
+  assert.equal(await adultTemplates.locator('strong').filter({ hasText: '成人向' }).count(), 3, 'Only the entrants that load an adult profile are named 成人向');
+  assert.ok(!(await adultEnhance.locator('strong').textContent()).startsWith('成人向'));
+  await adultEnhance.click();
+  await page.getByLabel('图像／视频清晰化', { exact: true }).getByRole('heading', { name: '选择原素材', exact: true }).waitFor();
+  assert.equal(await page.locator('.quick-navigation > span').textContent(), destination,
+    'Clarify acts on the current work instead of moving it into the adult series');
+  assert.equal(writes.filter(row => row.path === '/api/projects/create').length, 1, 'Clarify creates no work');
   assert.deepEqual(errors, []);
   const stats = await call({ operation: 'stats' });
   assert.equal(stats.queued.length, 7); assert.deepEqual(stats.other_projects, []);
-  console.log('PASS: three entry types, series-labelled destination hint, candidate comparison/restore/adopt, next shot, two-shot joins and sound, lost assembly receipt recovery, final preview/download/adopt, shot/account/file isolation, responsive layout. GPU and assembly execution are stubbed.');
+  console.log('PASS: three entry types, series-labelled destination hint, adult-zone clarify entry, candidate comparison/restore/adopt, next shot, two-shot joins and sound, lost assembly receipt recovery, final preview/download/adopt, shot/account/file isolation, responsive layout. GPU and assembly execution are stubbed.');
 } catch (error) {
   if (page) { console.error((await page.locator('body').innerText()).slice(-9000)); await page.screenshot({ path: resolve(process.argv[3], 'failure.png'), fullPage: true }); }
   throw error;
