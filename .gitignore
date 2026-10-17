@@ -271,6 +271,7 @@
 !/tools/reference_audio.py
 !/tools/reference_decompose.py
 !/tools/reference_semantic.py
+!/tools/remove_tree.py
 !/tools/run_project_tests.py
 !/tools/test_build_video_finish_workflow.py
 !/tools/validate_exact_ui_workflow.py
@@ -281,8 +282,10 @@
 !/SECURITY.md
 !/docs/public-development-guide.md
 !/docs/public-api-guide.md
+!/tests/runtime_scratch.py
 !/tests/test_public_source.py
 !/tests/test_review_openapi.py
+!/tests/test_runtime_scratch.py
 !/tests/test_media_qc.py
 !/tests/media_qc.browser.mjs
 !/.github/workflows/

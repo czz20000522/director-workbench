@@ -6,6 +6,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_scratch import scratch_root
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from backend import private_sessions as p
 from backend.user_context import Layout, from_session
@@ -13,8 +16,9 @@ from backend.user_context import Layout, from_session
 
 class SessionsTests(unittest.TestCase):
     def setUp(self):
-        root = p.PERMITTED_ROOT / 'runtime/private-session-tests'
-        root.mkdir(parents=True, exist_ok=True)
+        # p.PERMITTED_ROOT is the workspace root, which contains the runtime tree that
+        # both the run root and the historical fixed directory live under.
+        root = scratch_root('private-session-tests')
         self.root = Path(tempfile.mkdtemp(dir=root))
         self.path = self.root / 'accounts-hashed.json'
         self.store = p.AccountStore(self.path)

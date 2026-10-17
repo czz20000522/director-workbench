@@ -9,6 +9,9 @@ import wave
 
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_scratch import scratch_root
+
 SPEC = importlib.util.spec_from_file_location('audio_edit', Path(__file__).resolve().parents[1] / 'backend/audio_edit.py')
 m = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(m)
@@ -16,10 +19,10 @@ SPEC.loader.exec_module(m)
 
 class AudioEditTests(unittest.TestCase):
     def setUp(self):
-        runtime = m.OUTPUT_ROOT / 'audio-edit-tests'
-        runtime.mkdir(parents=True, exist_ok=True)
+        # The newest scratch entries are kept for diagnosis and older ones are pruned,
+        # so a suite run leaves a bounded directory instead of a growing one.
+        runtime = scratch_root('audio-edit-tests', prefix='case-')
         self.root = Path(tempfile.mkdtemp(prefix='case-', dir=runtime))
-        # Retain diagnostic artifacts; no deletion, no real user assets.
         self.source = self.make('source', 8000, 1, 8000, 8192)
         self.output = self.root / 'edited.wav'
 

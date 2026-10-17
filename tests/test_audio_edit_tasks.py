@@ -5,14 +5,16 @@ import tempfile
 import unittest
 import wave
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_scratch import scratch_root
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from backend import audio_edit_tasks as tasks
 
 
 class AudioTaskTests(unittest.TestCase):
     def setUp(self):
-        root = tasks.audio_edit.OUTPUT_ROOT / 'audio-edit-task-tests'
-        root.mkdir(parents=True, exist_ok=True)
+        root = scratch_root('audio-edit-task-tests')
         self.root = Path(tempfile.mkdtemp(dir=root))
         self.source = self.root / 'input.wav'
         with wave.open(str(self.source), 'wb') as stream:

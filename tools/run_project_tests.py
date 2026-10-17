@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -12,6 +13,7 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import paths
+from tools.remove_tree import remove_tree
 
 PROJECT = paths.PROJECT_ROOT
 BROWSER_TESTS = (
@@ -22,6 +24,11 @@ BROWSER_TESTS = (
 # These drivers additionally need the project interpreter and a fresh absolute runtime
 # directory (relative or pre-existing roots raise AccessDenied in backend/user_context.py).
 BROWSER_FIXTURE_TESTS = ('enhancement',)
+# Run roots are named '<prefix><token>' with the current eight hex digits and the
+# historical twelve.  The match is anchored: the machine runtime tree also holds live
+# roots (accounts, agent pages, the relocation backup) and a prefix test would eat them.
+RUN_ROOT_NAME = re.compile(r'^t-[0-9a-f]{8}(?:[0-9a-f]{4})?$')
+KEEP_RUNS = 3
 PROBE = """
 import importlib.util, importlib.metadata, json, os, site, sys
 modules = {}
@@ -129,19 +136,67 @@ def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: b
     return result
 
 
+def prune_run_roots(runtime_root: Path, *, keep: int = KEEP_RUNS) -> tuple[list[Path], list[str]]:
+    """Remove this harness's own run roots beyond the newest ``keep``.
+
+    A run leaves over a hundred megabytes of fixtures behind, so without this the machine
+    runtime tree only grows.  The newest runs stay for diagnosis; what was removed is
+    reported back so a run can say what it took away.  ``keep`` counts every root left
+    behind, so a caller prunes once this run's own root exists rather than before it.
+    """
+    if keep < 0:
+        raise ValueError('keep must not be negative')
+    if not runtime_root.is_dir():
+        return [], []
+    candidates = [entry for entry in runtime_root.iterdir()
+                  if RUN_ROOT_NAME.match(entry.name) and entry.is_dir() and not entry.is_symlink()]
+    candidates.sort(key=_mtime, reverse=True)
+    removed, errors = [], []
+    for entry in candidates[keep:]:
+        try:
+            # remove_tree handles the two things a run root holds that plain rmtree does
+            # not: read-only git objects in the pytest fixtures, and junctions.
+            remove_tree(entry)
+        except OSError as exc:
+            errors.append(f'Old run root {entry.name} could not be removed: {type(exc).__name__}.')
+            continue
+        removed.append(entry)
+    return removed, errors
+
+
+def _mtime(entry: Path) -> float:
+    try:
+        return entry.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 def run(suite: str = 'all', check: bool = False, report_path: Path | None = None,
         *, project: Path = PROJECT, desktop: Path | None = None,
-        runtime: Path | None = None) -> int:
+        runtime: Path | None = None, keep_runs: int = KEEP_RUNS) -> int:
+    if keep_runs < 1:
+        raise ValueError('keep_runs must be at least 1: the run in flight is one of the kept roots')
     project = project.resolve()
     host = paths.DESKTOP_ROOT if desktop is None else Path(desktop).resolve()
     runtime_root = paths.RUNTIME_ROOT if runtime is None else Path(runtime).resolve()
     # A short run-root token keeps room for the fixture roots below; see browser_suite().
     run_root = runtime_root / ('t-' + uuid.uuid4().hex[:8])
     run_root.mkdir(parents=True, exist_ok=False)
+    # Pruned after this run's root exists, so the tree settles at exactly ``keep_runs``
+    # entries rather than one more than the operator asked for.
+    pruned, prune_errors = prune_run_roots(runtime_root, keep=keep_runs)
+    if pruned:
+        print(f'Retention: removed {len(pruned)} run root(s) beyond the newest {keep_runs}: '
+              + ', '.join(entry.name for entry in pruned), flush=True)
+    for error in prune_errors:
+        print(f'Retention: WARNING: {error}', flush=True)
     specs = suite_specs(project, run_root, host)
     names = list(specs) if suite == 'all' else [suite]
     receipt = {'mode': 'check' if check else 'tests', 'project': str(project),
-               'run_root': str(run_root), 'suites': {}}
+               'run_root': str(run_root), 'suites': {},
+               'retention': {'keep_runs': keep_runs,
+                             'removed_run_roots': [str(entry) for entry in pruned],
+                             'errors': prune_errors}}
     for name in names:
         spec = specs[name]
         if spec.get('runner') == 'node':
@@ -157,6 +212,10 @@ def run(suite: str = 'all', check: bool = False, report_path: Path | None = None
         environment.pop('PYTHONPATH', None)
         environment['PYTHONNOUSERSITE'] = '1'
         environment.update({key: str(temporary) for key in ('TMP', 'TEMP', 'TMPDIR')})
+        # Tests that must write inside the machine runtime tree ask tests/runtime_scratch.py
+        # where to put their scratch; pointing it at this run root keeps those artifacts
+        # inside the tree this run removes, instead of in a fixed directory that grows.
+        environment['DIRECTOR_TEST_RUNTIME'] = str(run_root)
         result = {'interpreter': str(interpreter), 'cwd': str(project), 'temporary': str(temporary),
                   'warnings': [], 'errors': [], 'test_exit_code': None}
         receipt['suites'][name] = result
@@ -208,8 +267,12 @@ def main() -> int:
     parser.add_argument('--report', type=Path, help='Optional JSON receipt path; default: unique workspace runtime directory.')
     parser.add_argument('--runtime', type=Path,
                         help='Override the workspace runtime root; a shorter root keeps fixture asset paths inside the backend path limit.')
+    parser.add_argument('--keep-runs', type=int, default=KEEP_RUNS,
+                        help='Run roots left behind for diagnosis, counting the run just '
+                             f'started; older ones are removed first, so at least 1 '
+                             f'(default: {KEEP_RUNS}).')
     args = parser.parse_args()
-    return run(args.suite, args.check, args.report, runtime=args.runtime)
+    return run(args.suite, args.check, args.report, runtime=args.runtime, keep_runs=args.keep_runs)
 
 
 if __name__ == '__main__':
