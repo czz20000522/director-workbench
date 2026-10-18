@@ -2386,173 +2386,41 @@ def persist_artifact(request: ArtifactRequest, project_id: str | None = None) ->
     return {"kind": request.kind, "asset_id": request.asset_id, **data, "revision": record["revision"], "source": record["source"], "created_at": record["created_at_iso"]}
 
 
-@app.get('/api/private/series')
-def list_private_series() -> dict[str, Any]:
-    if PRIVATE_WORKSPACES is None:
-        raise HTTPException(404, '私人工作区未启用')
-    return {'series': PRIVATE_WORKSPACES.series_tree()}
+# 私有系列与作品目录领域已拆到 backend/routers/private_series.py。
+# 下面两行必须留在原位置：路由注册顺序决定 /api/... 的匹配结果。
+from .routers.private_series import ROUTER as _private_series_router
+app.include_router(_private_series_router)
+# 这些名称原本定义在 app.py 模块层，拆出后按原样再导出：
+# app.py、private_mode.py 与既有测试都以 backend.<名称> 取用它们。
+from .routers.private_series import (
+    create_private_series,
+    delete_series,
+    delete_work,
+    list_private_archive_media,
+    list_private_series,
+    plan_series_deletion,
+    plan_work_deletion,
+    private_delete_target,
+)
 
 
-@app.post('/api/private/series', status_code=201)
-def create_private_series(request: SeriesCreateRequest) -> dict[str, Any]:
-    if PRIVATE_WORKSPACES is None:
-        raise HTTPException(404, '私人工作区未启用')
-    return PRIVATE_WORKSPACES.create_series(request.name)
-
-
-@app.get('/api/private/series/{series_name}/works/{work_name}/media')
-def list_private_archive_media(series_name: str, work_name: str) -> dict[str, Any]:
-    if PRIVATE_WORKSPACES is None:
-        raise HTTPException(404, '私人工作区未启用')
-    try:
-        return PRIVATE_WORKSPACES.archive_media(series_name, work_name)
-    except (ValueError, FileNotFoundError, OSError) as exc:
-        raise HTTPException(404, '目录不存在') from exc
-
-
-def private_delete_target(series_name: str, work_name: str | None = None) -> tuple[Path, Path]:
-    if PRIVATE_WORKSPACES is None:
-        raise HTTPException(404, '私人工作区未启用')
-    try:
-        return PRIVATE_WORKSPACES.deletion_target(series_name, work_name)
-    except (ValueError, FileNotFoundError, OSError) as exc:
-        raise HTTPException(404, '目录不存在') from exc
-
-
-@app.post('/api/private/series/{series_name}/deletion-plan')
-def plan_series_deletion(series_name: str) -> dict[str, Any]:
-    root, target = private_delete_target(series_name)
-    return private_deletion.plan(root, target, RUNTIME / 'deletion-plans')
-
-
-@app.delete('/api/private/series/{series_name}')
-def delete_series(series_name: str, request: DirectoryDeleteRequest) -> dict[str, Any]:
-    root, target = private_delete_target(series_name)
-    if request.confirm != series_name:
-        raise HTTPException(422, '请填写完整系列名称以确认删除')
-    ensure_no_release_blocking_tasks('删除系列')
-    result = private_deletion.apply(root, target, RUNTIME / 'deletion-plans', request.plan_id)
-    PRIVATE_WORKSPACES.retire_deleted(series_name)
-    return result
-
-
-@app.post('/api/private/series/{series_name}/works/{work_name}/deletion-plan')
-def plan_work_deletion(series_name: str, work_name: str) -> dict[str, Any]:
-    root, target = private_delete_target(series_name, work_name)
-    return private_deletion.plan(root, target, RUNTIME / 'deletion-plans')
-
-
-@app.delete('/api/private/series/{series_name}/works/{work_name}')
-def delete_work(series_name: str, work_name: str, request: DirectoryDeleteRequest) -> dict[str, Any]:
-    root, target = private_delete_target(series_name, work_name)
-    if request.confirm != work_name:
-        raise HTTPException(422, '请填写完整作品目录名称以确认删除')
-    ensure_no_release_blocking_tasks('删除作品')
-    result = private_deletion.apply(root, target, RUNTIME / 'deletion-plans', request.plan_id)
-    PRIVATE_WORKSPACES.retire_deleted(series_name, work_name)
-    return result
-
-
-@app.get("/api/projects")
-def projects() -> dict[str, Any]:
-    catalog = load_project_catalog()
-    manifests: list[dict[str, Any]] = []
-    principal = current_principal.get()
-    selected = PRIVATE_WORKSPACES.selected() if PRIVATE_WORKSPACES is not None and principal else CURRENT_PROJECT_ID
-    for entry in project_entries():
-        project_id = str(entry.get("id", ""))
-        if PRIVATE_WORKSPACES is not None and principal:
-            try:
-                PRIVATE_WORKSPACES.require(project_id)
-            except HTTPException:
-                continue
-        try:
-            manifest = load_project_manifest(project_id)
-        except RuntimeError:
-            continue
-        summary = project_summary(manifest)
-        summary["selected"] = project_id == selected
-        manifests.append(summary)
-    return {"schema_version": 1, "default_project_id": selected if principal else catalog.get("default_project_id"), "current_project_id": selected, "projects": manifests}
-
-
-@app.post("/api/projects/select")
-@catalog_transaction
-def select_project(request: ProjectSelectRequest) -> dict[str, Any]:
-    if PRIVATE_WORKSPACES is not None and current_principal.get() is not None:
-        manifest = require_project_manifest(request.project_id)
-        PRIVATE_WORKSPACES.select(request.project_id)
-        return public_project(manifest)
-    ensure_no_release_blocking_tasks("切换项目")
-    try:
-        manifest = load_project_manifest(request.project_id)
-    except RuntimeError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    apply_project_manifest(manifest)
-    catalog = load_project_catalog()
-    catalog["default_project_id"] = request.project_id
-    PROJECT_CATALOG_PATH.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return public_project()
-
-
-def require_project_manifest(project_id: str) -> dict[str, Any]:
-    try:
-        return load_project_manifest(project_id)
-    except RuntimeError as exc:
-        raise HTTPException(404, str(exc)) from exc
-
-
-@app.get("/api/projects/{project_id}")
-def project_detail(project_id: str) -> dict[str, Any]:
-    """Read a work without changing the shared legacy selection."""
-    return public_project(require_project_manifest(project_id))
-
-
-@app.delete('/api/projects/{project_id}/registration')
-def retire_legacy_project(project_id: str) -> dict[str, Any]:
-    if PRIVATE_WORKSPACES is None:
-        raise HTTPException(404, '私人工作区未启用')
-    principal = current_principal.get()
-    if principal is None or not principal.administrator:
-        raise HTTPException(404, '作品不存在')
-    require_project_manifest(project_id)
-    ensure_no_release_blocking_tasks('移除旧作品登记')
-    PRIVATE_WORKSPACES.retire_legacy_registration(project_id)
-    return {'retired_project_id': project_id, 'source_files_preserved': True}
-
-
-@app.get("/api/projects/{project_id}/plan")
-def project_plan(project_id: str) -> dict[str, Any]:
-    return load_project_plan(project_id)[0]
-
-
-@app.get("/api/projects/{project_id}/state")
-def project_state_detail(project_id: str) -> dict[str, Any]:
-    require_project_manifest(project_id)
-    state = build_project_state(project_id)
-    state['readiness'] = project_readiness(project_id, state)
-    return state
-
-
-@app.get("/api/projects/{project_id}/tasks")
-def project_task_list(project_id: str, limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0)) -> dict[str, Any]:
-    require_project_manifest(project_id)
-    with DB_LOCK, db() as connection:
-        rows = connection.execute("SELECT * FROM tasks WHERE project_id = ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?", (project_id, limit + 1, offset)).fetchall()
-    more = len(rows) > limit
-    values = [task_row(row) for row in rows[:limit]]
-    for task in values:
-        task['queue'] = TASK_SCHEDULER.queue_info(task['id'])
-    return {"project_id": project_id, "tasks": values, "next_offset": offset + limit if more else None}
-
-
-@app.get("/api/projects/{project_id}/tasks/{task_id}")
-def project_task_detail(project_id: str, task_id: str) -> dict[str, Any]:
-    require_project_manifest(project_id)
-    task = get_task(task_id)
-    if not task or task.get("project_id") != project_id:
-        raise HTTPException(404, "该作品中不存在此任务")
-    return task
+# 作品目录与选择领域已拆到 backend/routers/project_catalog.py。
+# 下面两行必须留在原位置：路由注册顺序决定 /api/... 的匹配结果。
+from .routers.project_catalog import ROUTER as _project_catalog_router
+app.include_router(_project_catalog_router)
+# 这些名称原本定义在 app.py 模块层，拆出后按原样再导出：
+# app.py、private_mode.py 与既有测试都以 backend.<名称> 取用它们。
+from .routers.project_catalog import (
+    project_detail,
+    project_plan,
+    project_state_detail,
+    project_task_detail,
+    project_task_list,
+    projects,
+    require_project_manifest,
+    retire_legacy_project,
+    select_project,
+)
 
 
 def task_video_path(task: dict[str, Any]) -> str | None:
