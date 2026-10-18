@@ -290,7 +290,8 @@ def describe_enhancement_result(payload: dict, done: dict) -> dict:
 def find_submission_task(project_id: str, key: str) -> dict[str, Any] | None:
     with backend.DB_LOCK, backend.db() as connection:
         row = connection.execute(
-            "SELECT * FROM tasks WHERE project_id = ? AND json_extract(payload, '$.submission_receipt.key') = ? ORDER BY created_at, id LIMIT 1",
+            "SELECT tasks.* FROM tasks JOIN task_idempotency ON task_idempotency.task_id = tasks.id "
+            "WHERE task_idempotency.project_id = ? AND task_idempotency.idempotency_key = ?",
             (project_id, key),
         ).fetchone()
     return backend.task_row(row) if row else None

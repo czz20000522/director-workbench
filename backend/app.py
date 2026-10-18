@@ -35,7 +35,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictInt, field_validator, model_validator
 from . import production_presets, background_jobs, speech, keyframes, audio_edit_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, guide, readiness, task_scheduler, creative_inspection, shot_creation
-from . import output_resolution, enhancement
+from . import output_resolution, enhancement, task_store
 import av
 import paths
 from .private_auth import SecurityHeaders, current_principal
@@ -620,41 +620,7 @@ app.add_middleware(SecurityHeaders)
 
 def db() -> sqlite3.Connection:
     RUNTIME.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(DB_PATH, check_same_thread=False)
-    connection.row_factory = sqlite3.Row
-    connection.execute("""CREATE TABLE IF NOT EXISTS tasks (
-        id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, status TEXT NOT NULL,
-        prompt_id TEXT, created_at REAL NOT NULL, updated_at REAL NOT NULL,
-        stop_requested INTEGER NOT NULL DEFAULT 0, payload TEXT NOT NULL,
-        result TEXT, error TEXT, batch_id TEXT, sequence INTEGER, project_id TEXT
-    )""")
-    # Existing pilot databases predate batch metadata; keep them readable.
-    for column, declaration in (("batch_id", "TEXT"), ("sequence", "INTEGER"), ("project_id", "TEXT")):
-        try:
-            connection.execute(f"ALTER TABLE tasks ADD COLUMN {column} {declaration}")
-        except sqlite3.OperationalError:
-            pass
-    connection.execute("""CREATE TABLE IF NOT EXISTS resource_samples (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT, timestamp REAL NOT NULL,
-        gpu_free_mib INTEGER, gpu_total_mib INTEGER, ram_free_gib REAL,
-        queue_running INTEGER, queue_pending INTEGER
-    )""")
-    connection.execute("""CREATE TABLE IF NOT EXISTS project_records (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id TEXT NOT NULL,
-        asset_id TEXT NOT NULL DEFAULT '',
-        record_type TEXT NOT NULL,
-        revision INTEGER NOT NULL,
-        source TEXT NOT NULL,
-        created_at REAL NOT NULL,
-        data TEXT NOT NULL,
-        UNIQUE(project_id, asset_id, record_type, revision)
-    )""")
-    connection.execute("CREATE INDEX IF NOT EXISTS idx_tasks_project_asset ON tasks(project_id, asset_id, created_at DESC)")
-    connection.execute("CREATE INDEX IF NOT EXISTS idx_records_project_type ON project_records(project_id, record_type, asset_id, revision DESC)")
-    connection.execute("CREATE TABLE IF NOT EXISTS user_settings (owner TEXT PRIMARY KEY, revision INTEGER NOT NULL, guide TEXT NOT NULL)")
-    connection.commit()
-    return connection
+    return task_store.configure(sqlite3.connect(DB_PATH, check_same_thread=False), DB_PATH)
 
 
 def request_json(path: str, payload: dict[str, Any] | None = None, timeout: float = 8) -> dict[str, Any]:
