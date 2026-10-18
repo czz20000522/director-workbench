@@ -1,6 +1,7 @@
 """Security hardening: browser headers, login throttling and status path redaction."""
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pytest
 
 from backend import app as backend
 from backend import private_auth
@@ -37,6 +38,32 @@ def test_status_does_not_leak_the_machine_runtime_path(monkeypatch):
     monkeypatch.setattr(backend, 'comfy_status', lambda: {'online': False})
     payload = workbench_status.status()
     assert payload == {'comfy': {'online': False}}
+
+
+def test_unhandled_exception_is_logged_and_redacted(caplog):
+    application = FastAPI()
+    application.add_exception_handler(Exception, backend.unhandled_exception)
+
+    @application.get('/boom')
+    def boom():
+        raise RuntimeError('secret path C:\\private\\trace.py:99')
+
+    with TestClient(application, raise_server_exceptions=False) as client:
+        response = client.get('/boom')
+    assert response.status_code == 500
+    assert response.json() == {'detail': backend.UNHANDLED_ERROR_DETAIL}
+    assert 'secret path' in caplog.text
+    assert 'trace.py' in caplog.text
+
+
+def test_execution_script_paths_are_contained(tmp_path):
+    allowed = tmp_path / 'tools'
+    allowed.mkdir()
+    safe = allowed / 'builder.py'
+    safe.write_text('value = 1', encoding='utf-8')
+    assert backend.validate_execution_script_path(safe, allowed_roots=(tmp_path,), label='构建器') == safe.resolve()
+    with pytest.raises(ValueError, match='不在允许目录内'):
+        backend.validate_execution_script_path(tmp_path.parent / 'outside.py', allowed_roots=(tmp_path,), label='构建器')
 
 
 def test_repeated_login_failures_are_throttled(private_workbench, monkeypatch):
