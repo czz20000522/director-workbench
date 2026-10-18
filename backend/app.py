@@ -84,6 +84,8 @@ from .workbench_config import (
     PIPELINE_INPUT_OVERRIDES,
     SEGMENT_GENERATION_FIELDS,
     MATERIAL_EXTENSIONS,
+    TASK_EXECUTION_TIMEOUT_SECONDS,
+    TASK_MONITOR_POLL_SECONDS,
 )
 
 PRIVATE_WORKSPACES = None
@@ -1602,10 +1604,40 @@ def comfy_execution_error(payload: dict[str, Any], done: dict[str, Any]) -> str:
     return prefix
 
 
+class TaskExecutionTimeout(RuntimeError):
+    """The bounded monitor window expired before a terminal receipt arrived."""
+
+
+def _task_stage(payload: dict[str, Any]) -> str:
+    return str(payload.get("pipeline_stage_id") or payload.get("kind") or "generation")
+
+
+def _task_log(task_id: str, payload: dict[str, Any], phase: str, started: float, *, error_class: str | None = None) -> None:
+    record: dict[str, Any] = {
+        "task_id": str(task_id),
+        "project_id": str(payload.get("project_id") or ""),
+        "stage": _task_stage(payload),
+        "phase": phase,
+        "elapsed_seconds": round(max(0.0, time.monotonic() - started), 3),
+    }
+    if error_class:
+        record["error_class"] = error_class
+    logging.getLogger("uvicorn.error").info("task_monitor %s", json.dumps(record, ensure_ascii=False, sort_keys=True))
+
+
+def _check_task_timeout(task_id: str, payload: dict[str, Any], started: float) -> None:
+    if time.monotonic() - started >= max(0.1, float(TASK_EXECUTION_TIMEOUT_SECONDS)):
+        _task_log(task_id, payload, "timeout", started, error_class="TaskExecutionTimeout")
+        raise TaskExecutionTimeout("任务执行超过总超时限制，请核对 ComfyUI 回执")
+
+
 def run_submission(task_id: str, payload: dict[str, Any]) -> None:
     submission_attempted = False
     prompt_id = None
+    started = time.monotonic()
+    _task_log(task_id, payload, "started", started)
     try:
+        _check_task_timeout(task_id, payload, started)
         set_task(task_id, status="submitting")
         first = shared_path(payload["first_frame"])
         last = shared_path(payload["last_frame"])
@@ -1622,7 +1654,9 @@ def run_submission(task_id: str, payload: dict[str, Any]) -> None:
                    "--output-prefix", payload["output_prefix"]]
         recipe_path = str((payload.get("execution_snapshot") or {}).get("api_graph") or write_recipe_snapshot(payload, project_id=str(payload.get("project_id") or CURRENT_PROJECT_ID)))
         submission_attempted = True
-        result = subprocess.run(command, capture_output=True, text=True, cwd=RENDERER.parent, timeout=120, check=False)
+        _task_log(task_id, payload, "submitting", started)
+        remaining = max(0.1, float(TASK_EXECUTION_TIMEOUT_SECONDS) - (time.monotonic() - started))
+        result = subprocess.run(command, capture_output=True, text=True, cwd=RENDERER.parent, timeout=min(120, remaining), check=False)
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"h3_render exited {result.returncode}")
         submitted = None
@@ -1646,13 +1680,14 @@ def run_submission(task_id: str, payload: dict[str, Any]) -> None:
             raise RuntimeError(f"ComfyUI 未返回 prompt_id: {submitted}")
         set_task(task_id, status="queued", prompt_id=prompt_id, result=json.dumps({"submission": submitted, "recipe": recipe_path}, ensure_ascii=False))
         while True:
+            _check_task_timeout(task_id, payload, started)
             current = get_task(task_id)
             if not current:
                 return
             if current["stop_requested"]:
                 if advance_task_stop(current, str(prompt_id)):
                     return
-                time.sleep(2)
+                time.sleep(TASK_MONITOR_POLL_SECONDS)
                 continue
             sample_resources(task_id)
             done = history_done(prompt_id)
@@ -1667,13 +1702,16 @@ def run_submission(task_id: str, payload: dict[str, Any]) -> None:
                         target_plan, task_id=task_id, payload=payload,
                     )
                     set_task(task_id, status="succeeded", result=json.dumps(done, ensure_ascii=False))
+                    _task_log(task_id, payload, "succeeded", started)
                 else:
                     set_task(task_id, status="failed", result=json.dumps(done, ensure_ascii=False), error=comfy_execution_error(payload, done))
+                    _task_log(task_id, payload, "failed", started, error_class="ComfyExecutionError")
                 return
             update_comfy_execution_state(task_id, str(prompt_id))
-            time.sleep(2)
+            time.sleep(TASK_MONITOR_POLL_SECONDS)
     except Exception as exc:
         set_task(task_id, status="needs_reconcile" if submission_attempted else "failed", error=("提交或监控结果待核对: " if submission_attempted else "") + str(exc))
+        _task_log(task_id, payload, "error", started, error_class=type(exc).__name__)
 
 
 def assembly_duration(output: str) -> float | None:
@@ -1846,7 +1884,10 @@ def run_workflow_submission(task_id: str, payload: dict[str, Any]) -> None:
     submission_attempted = False
     prompt_id = None
     submission_acknowledged = False
+    started = time.monotonic()
+    _task_log(task_id, payload, "started", started)
     try:
+        _check_task_timeout(task_id, payload, started)
         if PRIVATE_WORKSPACES is not None:
             PRIVATE_WORKSPACES.verify_task({'project_id': payload.get('project_id'), 'payload': payload})
         set_task(task_id, status="submitting")
@@ -1859,6 +1900,7 @@ def run_workflow_submission(task_id: str, payload: dict[str, Any]) -> None:
         prompt_id = task_id
         set_task(task_id, prompt_id=prompt_id)
         submission_attempted = True
+        _task_log(task_id, payload, "submitting", started)
         submitted = request_json("/prompt", {"prompt": graph, "prompt_id": prompt_id, "client_id": "director-workbench-assembly-v2"})
         prompt_id = submitted.get("prompt_id")
         if not prompt_id:
@@ -1866,13 +1908,14 @@ def run_workflow_submission(task_id: str, payload: dict[str, Any]) -> None:
         submission_acknowledged = True
         set_task(task_id, status="queued", prompt_id=prompt_id, result=json.dumps({"submission": submitted, "workflow": str(workflow_path)}, ensure_ascii=False))
         while True:
+            _check_task_timeout(task_id, payload, started)
             current = get_task(task_id)
             if not current:
                 return
             if current["stop_requested"]:
                 if advance_task_stop(current, str(prompt_id)):
                     return
-                time.sleep(2)
+                time.sleep(TASK_MONITOR_POLL_SECONDS)
                 continue
             sample_resources(task_id)
             done = (keyframes.read_result(request_json(f'/history/{prompt_id}'), str(prompt_id), payload, OUTPUT_ROOT)
@@ -1905,19 +1948,24 @@ def run_workflow_submission(task_id: str, payload: dict[str, Any]) -> None:
                             target_plan, task_id=task_id, payload=payload,
                         )
                     set_task(task_id, status="succeeded", result=json.dumps(done, ensure_ascii=False))
+                    _task_log(task_id, payload, "succeeded", started)
                 else:
                     set_task(task_id, status="failed", result=json.dumps(done, ensure_ascii=False), error=comfy_execution_error(payload, done))
+                    _task_log(task_id, payload, "failed", started, error_class="ComfyExecutionError")
                 return
             update_comfy_execution_state(task_id, str(prompt_id))
-            time.sleep(2)
+            time.sleep(TASK_MONITOR_POLL_SECONDS)
     except output_resolution.OutputStopped as exc:
         set_task(task_id, status='stopped', error=str(exc))
+        _task_log(task_id, payload, "stopped", started, error_class=type(exc).__name__)
     except HTTPError as exc:
         uncertain = submission_acknowledged or exc.code >= 500
         fields = {} if uncertain else {'prompt_id': None}
         set_task(task_id, status="needs_reconcile" if uncertain else "failed", error=comfy_submission_error(exc), **fields)
+        _task_log(task_id, payload, "error", started, error_class=type(exc).__name__)
     except Exception as exc:
         set_task(task_id, status="needs_reconcile" if submission_attempted else "failed", error=("提交或监控结果待核对: " if submission_attempted else "") + str(exc))
+        _task_log(task_id, payload, "error", started, error_class=type(exc).__name__)
 
 
 def run_batch(batch_id: str, task_ids: list[str], payloads: list[dict[str, Any]]) -> None:
