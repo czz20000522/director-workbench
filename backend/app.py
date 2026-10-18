@@ -18,6 +18,7 @@ import importlib.util
 import logging
 import psutil
 from datetime import datetime, timezone
+from contextlib import AsyncExitStack, asynccontextmanager
 from functools import wraps
 from pathlib import PurePosixPath
 from pathlib import Path
@@ -471,7 +472,33 @@ def scan_import_directory(source: Path, project_id: str) -> tuple[dict[str, Any]
     }
     return manifest, report
 
-app = FastAPI(title="Director Workbench API", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Start the workbench, then every subsystem that registered a lifespan for itself.
+
+    A mounted subsystem needs code to run for the lifetime of the process. It appends a
+    context-manager factory to ``app.state.lifespan_subsystems`` rather than adding its own
+    ``on_event`` handlers, which FastAPI deprecates; this is the only place those factories
+    are entered and exited, so the order lives in one readable spot.
+    """
+    start_workbench()
+    subsystems = AsyncExitStack()
+    await subsystems.__aenter__()
+    for factory in app.state.lifespan_subsystems:
+        await subsystems.enter_async_context(factory())
+    try:
+        yield
+    finally:
+        # The workbench stops before its subsystems, the order the two startup handlers ran
+        # in while they were on_event pairs.
+        stop_gpu_idle_release()
+        await subsystems.aclose()
+
+
+app = FastAPI(title="Director Workbench API", version="0.1.0", lifespan=lifespan)
+# Subsystems mounted onto this app append their lifespan factory here; see lifespan above.
+app.state.lifespan_subsystems = []
 
 
 @app.get('/api/auth/config')
@@ -5100,14 +5127,12 @@ def mark_orphans() -> None:
         connection.commit()
 
 
-@app.on_event("startup")
 def start_workbench() -> None:
     mark_orphans()
     TASK_SCHEDULER.start()
     GPU_IDLE_RELEASER.start()
 
 
-@app.on_event("shutdown")
 def stop_gpu_idle_release() -> None:
     TASK_SCHEDULER.stop()
     GPU_IDLE_RELEASER.stop()
