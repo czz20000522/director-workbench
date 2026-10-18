@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import time
@@ -19,6 +20,33 @@ class _NoopThread:
 
     def start(self) -> None:
         pass
+
+
+def _openapi_contract_snapshot() -> dict[str, object]:
+    """Normalize route methods/operation IDs and component names for a stable digest.
+
+    To intentionally update this contract, run this module's OpenAPI snapshot helper,
+    review the route/schema diff, then replace the digest below with its SHA-256.
+    """
+    spec = backend.app.openapi()
+    methods = {"get", "post", "put", "patch", "delete", "head", "options"}
+    paths = {
+        path: {
+            method: {"operationId": operation.get("operationId")}
+            for method, operation in sorted(item.items())
+            if method in methods
+        }
+        for path, item in sorted(spec["paths"].items())
+    }
+    schemas = sorted(spec.get("components", {}).get("schemas", {}))
+    return {"paths": paths, "schemas": schemas}
+
+
+def test_openapi_route_and_schema_snapshot() -> None:
+    snapshot = _openapi_contract_snapshot()
+    encoded = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    assert hashlib.sha256(encoded).hexdigest() == "cacdfd16a2cffacfa4b007a00eaa50bfc0836e5961b187c88ac3e140f257badf"
+    assert {"StartRequest", "AssemblyRequest", "ProjectCreateRequest"} <= set(snapshot["schemas"])
 
 
 @pytest.fixture()
@@ -56,6 +84,27 @@ def _insert_task(project_id: str, asset_id: str, status: str = "stopped") -> str
         )
         connection.commit()
     return task_id
+
+
+def test_core_response_contracts_keep_stable_field_sets(client: TestClient) -> None:
+    state = client.get("/api/project-state")
+    assert state.status_code == 200
+    assert set(state.json()) == {"schema_version", "project_id", "creative", "reviews", "checkpoints", "artifacts", "history", "readiness"}
+
+    status = client.get("/api/status")
+    assert status.status_code == 200
+    assert set(status.json()) == {"comfy"}
+
+    task_id = _insert_task("project-a", "S01")
+    tasks = client.get("/api/tasks")
+    assert tasks.status_code == 200
+    assert isinstance(tasks.json(), list)
+    assert len(tasks.json()) == 1
+    assert set(tasks.json()[0]) == {
+        "id", "asset_id", "status", "prompt_id", "created_at", "updated_at", "stop_requested",
+        "payload", "result", "error", "batch_id", "sequence", "project_id", "queue",
+    }
+    assert tasks.json()[0]["id"] == task_id
 
 
 def test_tasks_and_resume_are_isolated_by_project(client: TestClient) -> None:

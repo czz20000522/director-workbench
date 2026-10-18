@@ -15,7 +15,6 @@ from mcp import Client
 
 from backend import app as backend, creative_inspection, h3_duration, media_operations, audio_edit
 from mcp_server.server import create_server
-from test_production_presets import preset_client as base_preset_client
 from support import add_shot, create, generated_version
 
 # Real FFmpeg/ASR and the host media pipeline are required by this module.
@@ -27,11 +26,12 @@ REAL_THREAD = threading.Thread
 
 
 @pytest.fixture
-def preset_client(base_preset_client, monkeypatch):
+def preset_client(preset_client_factory, monkeypatch):
+    client_project = preset_client_factory()
     # Disable dispatch at the task boundary, preserving real subprocess pipe readers.
     monkeypatch.setattr(backend.threading, 'Thread', REAL_THREAD)
     monkeypatch.setattr(backend, 'queue_task', lambda task_id: None)
-    return base_preset_client
+    return client_project
 
 
 def ffmpeg(*args):

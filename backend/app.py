@@ -89,6 +89,25 @@ from .workbench_config import (
 )
 
 PRIVATE_WORKSPACES = None
+CODE_ROOT = Path(__file__).resolve().parents[1]
+
+UNHANDLED_ERROR_DETAIL = '服务器内部错误，请稍后重试'
+
+
+def validate_execution_script_path(value: str | Path, *, allowed_roots: tuple[Path, ...], label: str) -> Path:
+    """Resolve a configured Python module and reject paths outside its roots."""
+    candidate = Path(value).expanduser()
+    if not candidate.is_absolute():
+        candidate = PROJECT / candidate
+    resolved = candidate.resolve()
+    roots = tuple(Path(root).expanduser().resolve() for root in allowed_roots)
+    if not any(resolved == root or root in resolved.parents for root in roots):
+        raise ValueError(f'{label}路径不在允许目录内')
+    return resolved
+
+
+def renderer_path() -> Path:
+    return validate_execution_script_path(RENDERER, allowed_roots=(PROJECT, paths.SKILLS_ROOT), label='渲染器')
 
 ASSEMBLY_BUILDER = PROJECT / "tools" / "build_assembly_workflow.py"
 REFERENCE_DECOMPOSE_ACTIVE = 0
@@ -609,6 +628,12 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Director Workbench API", version="0.1.0", lifespan=lifespan)
 # Subsystems mounted onto this app append their lifespan factory here; see lifespan above.
 app.state.lifespan_subsystems = []
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception(request: BrowserRequest, exc: Exception):
+    logging.getLogger('uvicorn.error').exception('Unhandled exception for %s %s', request.method, request.url.path)
+    return JSONResponse(status_code=500, content={'detail': UNHANDLED_ERROR_DETAIL})
 
 
 @app.get('/api/auth/config')
@@ -1520,9 +1545,10 @@ def write_recipe_snapshot(payload: dict[str, Any], *, project_id: str | None = N
     This is an execution snapshot, alongside the user-facing UI workflow. It is
     intentionally generated from the same adapter call used by h3_render.py.
     """
-    module_spec = importlib.util.spec_from_file_location("director_h3_adapter", RENDERER)
+    renderer = renderer_path()
+    module_spec = importlib.util.spec_from_file_location("director_h3_adapter", renderer)
     if module_spec is None or module_spec.loader is None:
-        raise RuntimeError(f"无法加载 ComfyUI 适配器: {RENDERER}")
+        raise RuntimeError(f"无法加载 ComfyUI 适配器: {renderer}")
     module = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)
     graph = module.prepare_h3_graph(
@@ -1642,11 +1668,12 @@ def run_submission(task_id: str, payload: dict[str, Any]) -> None:
         first = shared_path(payload["first_frame"])
         last = shared_path(payload["last_frame"])
         guide = shared_path(payload["audio_guide"])
-        required = [RENDERER, TEMPLATE, first, last, guide]
+        renderer = renderer_path()
+        required = [renderer, TEMPLATE, first, last, guide]
         missing = [str(path) for path in required if not path.is_file()]
         if missing:
             raise FileNotFoundError("缺少 ComfyUI 输入或工作流: " + "; ".join(missing))
-        command = [sys.executable, str(RENDERER), "submit", "--api-url", COMFY_URL,
+        command = [sys.executable, str(renderer), "submit", "--api-url", COMFY_URL,
                    "--template", str(TEMPLATE), "--prompt", payload["prompt"],
                    "--first-frame", str(first), "--last-frame", str(last),
                    "--audio-guide", str(guide), "--duration", "5", "--seed", str(payload["seed"]),
@@ -1656,7 +1683,7 @@ def run_submission(task_id: str, payload: dict[str, Any]) -> None:
         submission_attempted = True
         _task_log(task_id, payload, "submitting", started)
         remaining = max(0.1, float(TASK_EXECUTION_TIMEOUT_SECONDS) - (time.monotonic() - started))
-        result = subprocess.run(command, capture_output=True, text=True, cwd=RENDERER.parent, timeout=min(120, remaining), check=False)
+        result = subprocess.run(command, capture_output=True, text=True, cwd=renderer.parent, timeout=min(120, remaining), check=False)
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"h3_render exited {result.returncode}")
         submitted = None
@@ -1806,14 +1833,21 @@ def bind_approved_assembly_candidates(document: dict[str, Any], state: dict[str,
 
 def assembly_builder_path(manifest: dict[str, Any] | None = None) -> Path:
     if manifest is None:
-        return ASSEMBLY_BUILDER
-    return PROJECT / str((manifest.get('assembly') or {}).get('builder', 'tools/build_assembly_workflow.py'))
+        value = ASSEMBLY_BUILDER
+    else:
+        value = (manifest.get('assembly') or {}).get('builder', 'tools/build_assembly_workflow.py')
+    return validate_execution_script_path(value, allowed_roots=(PROJECT, CODE_ROOT), label='装配构建器')
 
 
 def assembly_builder_blocker(manifest: dict[str, Any] | None = None):
-    if not assembly_builder_path(manifest).is_file():
+    try:
+        builder = assembly_builder_path(manifest)
+    except ValueError:
+        builder = None
+    if builder is None or not builder.is_file():
         project_id = str(manifest['id']) if manifest is not None else CURRENT_PROJECT_ID
-        return {'code': 'assembly_builder_missing', 'message': '装配能力尚未配置完整，请联系管理员检查构建器',
+        code = 'assembly_builder_invalid' if builder is None else 'assembly_builder_missing'
+        return {'code': code, 'message': '装配能力尚未配置完整，请联系管理员检查构建器',
                 'action': {'id': 'inspect_assembly_config', 'label': '查看制作方案并联系管理员',
                            'method': 'GET', 'path': f'/api/projects/{project_id}/pipeline'}}
     return None

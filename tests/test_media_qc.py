@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from backend import app as backend, media_operations
-from test_production_presets import preset_client as base_client
 from support import reference_image
 
 ROOT = '/api/projects/preset-test'
@@ -18,7 +17,8 @@ pytestmark = pytest.mark.host_tool
 
 
 @pytest.fixture
-def client(base_client, monkeypatch):
+def client(preset_client_factory, monkeypatch):
+    client_project = preset_client_factory()
     # The inherited fixture blocks generation. CPU workers still need real pipe readers.
     monkeypatch.setattr(backend.threading, 'Thread', REAL_THREAD)
     monkeypatch.setattr(backend, 'queue_task', lambda task_id: None)
@@ -26,7 +26,7 @@ def client(base_client, monkeypatch):
     monkeypatch.setattr(backend.media_operations, 'capability', lambda: {'operations': {
         name: {'available': True} for name in ('video_qc', 'silence')
     }})
-    return base_client
+    return client_project
 
 
 def submit(client, **body):

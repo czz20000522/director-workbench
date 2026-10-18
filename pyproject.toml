@@ -26,3 +26,19 @@ markers = [
     "host_tool: needs this machine's FFmpeg/ASR interpreter/ComfyUI installation",
     "windows: relies on Windows-only system tools, junctions or frozen host paths",
 ]
+
+[tool.coverage.run]
+source = ["backend", "mcp_server"]
+omit = [
+    "*/__init__.py",
+    "*/__main__.py",
+    # test_public_source imports a clean checkout in-process; its duplicate copy
+    # must not dilute the real backend/mcp_server line coverage.
+    "*/test_clean_public_checkout_*/*",
+]
+
+[tool.coverage.report]
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]
