@@ -3378,59 +3378,19 @@ from .routers.batch_assembly import (
 )
 
 
-def gpu_idle_reason() -> str | None:
-    """Inspect every user's GPU work and ComfyUI's whole queue; unknown is an error."""
-    if REFERENCE_DECOMPOSE_ACTIVE or REVERSE_SEMANTIC_LOCK.locked():
-        return "参考分析仍在运行"
-    release_statuses = tuple(status for status in RELEASE_BLOCKING_STATUSES if status not in task_scheduler.WAITING)
-    placeholders = ",".join("?" for _ in release_statuses)
-    with DB_LOCK, db() as connection:
-        rows = connection.execute(f"SELECT payload FROM tasks WHERE status IN ({placeholders})", release_statuses).fetchall()
-    if any(json.loads(row['payload']).get('kind') not in {'audio_edit', 'media_operation'} for row in rows):
-        return "工作台 GPU 任务仍在执行或待核对"
-    with background_jobs.LOCK:
-        jobs = background_jobs.records(analysis_job_root())
-    if any(job['status'] in background_jobs.ACTIVE and not job.get('task_id') for job in jobs):
-        return "参考语义分析任务仍在执行或待核对"
-    if TASK_SCHEDULER.runnable_waiting():
-        return '已有可派发 GPU 任务等待资源'
-    queue = request_json('/queue')
-    if not isinstance(queue, dict) or not all(isinstance(queue.get(key), list) for key in ('queue_running', 'queue_pending')):
-        raise ValueError('ComfyUI 队列回执不完整')
-    if queue['queue_running'] or queue['queue_pending']:
-        return "ComfyUI 队列仍有运行或待处理任务"
-    return None
-
-
-def gpu_free_mib() -> int | None:
-    stats = request_json('/system_stats')
-    if not isinstance(stats, dict) or not isinstance(stats.get('devices'), list) or not stats['devices']:
-        return None
-    free_bytes = stats['devices'][0].get('vram_free')
-    return round(float(free_bytes) / 2**20) if free_bytes is not None else None
-
-
-def comfy_history_token() -> str:
-    """Notice a short direct-ComfyUI job even when both queue polls miss it."""
-    history = request_json('/history?max_items=1')
-    if not isinstance(history, dict) or len(history) > 1 or any(not isinstance(item, dict) for item in history.values()):
-        raise ValueError('ComfyUI 最近任务历史回执不完整')
-    return next(iter(history), '')
-
-
-def request_comfy_free() -> dict[str, Any]:
-    return request_json('/free', {'unload_models': True, 'free_memory': True})
-
-
-def gpu_idle_setting(name: str, default: float) -> float:
-    try:
-        value = float(os.environ.get(name, default))
-        if not math.isfinite(value) or value <= 0:
-            raise ValueError('must be positive')
-        return value
-    except ValueError:
-        logging.warning('Invalid %s; using %.0f seconds', name, default)
-        return default
+# GPU 空闲释放领域已拆到 backend/routers/gpu_idle.py。
+# 下面两行必须留在原位置：路由注册顺序决定 /api/... 的匹配结果。
+from .routers.gpu_idle import ROUTER as _gpu_idle_router
+app.include_router(_gpu_idle_router)
+# 这些名称原本定义在 app.py 模块层，拆出后按原样再导出：
+# app.py、private_mode.py 与既有测试都以 backend.<名称> 取用它们。
+from .routers.gpu_idle import (
+    comfy_history_token,
+    gpu_free_mib,
+    gpu_idle_reason,
+    gpu_idle_setting,
+    request_comfy_free,
+)
 
 
 GPU_IDLE_RELEASER = gpu_idle_release.IdleGPURelease(
@@ -3442,116 +3402,20 @@ GPU_IDLE_RELEASER = gpu_idle_release.IdleGPURelease(
 )
 
 
-def check_queue_limits(connection, owner, count=1):
-    try:
-        TASK_SCHEDULER.check_limits(connection, owner, count)
-    except task_scheduler.QueueLimitError as exc:
-        raise HTTPException(429, exc.detail) from exc
-
-
-def queue_task(task_id: str) -> None:
-    TASK_SCHEDULER.wake()
-
-
-def ensure_asset_not_pending(project_id: str, asset_id: str) -> None:
-    statuses = tuple(task_scheduler.WAITING | task_scheduler.EXECUTING)
-    with DB_LOCK, db() as connection:
-        row = connection.execute(f"SELECT id FROM tasks WHERE project_id=? AND asset_id=? AND status IN ({','.join('?' for _ in statuses)})",
-                                 (project_id, asset_id, *statuses)).fetchone()
-    if row:
-        raise HTTPException(409, {'code': 'asset_task_pending', 'message': '此分镜已有等待、执行或待核对任务，请查看原回执', 'task_id': row['id'], 'retryable': False})
-
-
-def scheduler_resource_reason():
-    if REFERENCE_DECOMPOSE_ACTIVE or REVERSE_SEMANTIC_LOCK.locked():
-        return {'code': 'reference_running', 'message': '等待参考分析释放共享资源'}
-    with background_jobs.LOCK:
-        jobs = background_jobs.records(analysis_job_root())
-    if any(job['status'] in background_jobs.ACTIVE and not job.get('task_id') for job in jobs):
-        return {'code': 'analysis_needs_reconcile', 'message': '等待旧参考分析结束或核对回执'}
-    queue = request_json('/queue')
-    if not isinstance(queue, dict) or not all(isinstance(queue.get(key), list) for key in ('queue_running', 'queue_pending')):
-        raise ValueError('ComfyUI queue unavailable')
-    if queue['queue_running'] or queue['queue_pending']:
-        return {'code': 'external_queue_busy', 'message': '等待 ComfyUI 当前任务结束，不抢占外部任务'}
-    return None
-
-
-def revalidate_queued_task(task):
-    payload = task['payload']
-    if PRIVATE_WORKSPACES is not None:
-        PRIVATE_WORKSPACES.verify_task(task)
-    manifest = load_project_manifest(task['project_id'])
-    if payload.get('workflow') and not resolve_registered_path(payload['workflow']).is_file():
-        raise ValueError('冻结工作流无法读取，请重新预检')
-    for material in (payload.get('execution_snapshot') or {}).get('staged_materials', []):
-        path = Path(material['path'])
-        if not path.is_file() or path.stat().st_size != material['size_bytes']:
-            raise ValueError('冻结素材缺失或内容大小变化，请重新预检')
-    for key in ('source_asset', 'background_asset'):
-        record = payload.get(key)
-        if record:
-            path = resolve_registered_path(record['source'])
-            if not path.is_file() or path.stat().st_size != record['size'] or path.stat().st_mtime_ns != record['mtime_ns']:
-                raise ValueError('冻结素材已改变，请重新登记输入')
-    if payload.get('kind') in {'reference_semantic', 'reference_decomposition'}:
-        key = 'analysis_path' if payload['kind'] == 'reference_semantic' else 'source'
-        if not resolve_registered_path(payload[key]).is_file():
-            raise ValueError('参考分析输入无法读取')
-    if payload.get('segment_dependencies'):
-        document = json.loads(resolve_registered_path(manifest['plan_path']).read_text(encoding='utf-8-sig'))
-        blockers = segment_dependency_blockers(document, {'dependencies': payload['segment_dependencies']})
-        if blockers:
-            return blockers[0]
-    return None
-
-
-def execute_scheduled_task(task):
-    payload = task['payload']
-    kind = payload.get('kind')
-    if kind == 'speech':
-        return run_speech_task(task['id'], payload)
-    if kind == 'audio_edit':
-        return run_audio_edit_task(task['id'], payload)
-    if kind == 'media_operation':
-        return run_media_operation_task(task['id'], payload)
-    if kind == 'reference_semantic':
-        job = dict(payload)
-        if not REVERSE_SEMANTIC_LOCK.acquire(blocking=False):
-            raise RuntimeError('Reference execution slot changed')
-        set_task(task['id'], status='running')
-        background_jobs.update(analysis_job_root(), job, status='running', owner=background_jobs.SESSION)
-        try:
-            execute_reverse_semantic(task['project_id'], payload['analysis_id'], Path(payload['analysis_path']), job)
-            status = 'stopped' if (get_task(task['id']) or {}).get('stop_requested') else 'succeeded'
-            set_task(task['id'], status=status)
-            background_jobs.update(analysis_job_root(), job, status=status, owner=background_jobs.SESSION)
-        except ReferenceStopped as exc:
-            set_task(task['id'], status='stopped', error=str(exc))
-            background_jobs.update(analysis_job_root(), job, status='stopped', error=str(exc), owner=background_jobs.SESSION)
-        except HTTPException as exc:
-            set_task(task['id'], status='failed', error=str(exc.detail))
-            background_jobs.update(analysis_job_root(), job, status='failed', error=str(exc.detail), owner=background_jobs.SESSION)
-        except Exception as exc:
-            set_task(task['id'], status='needs_reconcile', error=str(exc))
-            background_jobs.update(analysis_job_root(), job, status='needs_reconcile', error=str(exc))
-        return
-    if kind == 'reference_decomposition':
-        set_task(task['id'], status='running')
-        try:
-            run_tracked_reference_decomposition(payload['command'], task_id=task['id'])
-        except ReferenceStopped as exc:
-            set_task(task['id'], status='stopped', error=str(exc))
-            return
-        except HTTPException as exc:
-            set_task(task['id'], status='failed', error=str(exc.detail))
-            return
-        document, _ = read_reverse_analysis(task['project_id'], payload['analysis_id'])
-        status = 'stopped' if (get_task(task['id']) or {}).get('stop_requested') else 'succeeded'
-        set_task(task['id'], status=status, result=json.dumps(document, ensure_ascii=False))
-        return
-    runner = run_workflow_submission if payload.get('workflow') else run_submission
-    runner(task['id'], payload)
+# 队列与调度执行领域已拆到 backend/routers/queue_scheduler.py。
+# 下面两行必须留在原位置：路由注册顺序决定 /api/... 的匹配结果。
+from .routers.queue_scheduler import ROUTER as _queue_scheduler_router
+app.include_router(_queue_scheduler_router)
+# 这些名称原本定义在 app.py 模块层，拆出后按原样再导出：
+# app.py、private_mode.py 与既有测试都以 backend.<名称> 取用它们。
+from .routers.queue_scheduler import (
+    check_queue_limits,
+    ensure_asset_not_pending,
+    execute_scheduled_task,
+    queue_task,
+    revalidate_queued_task,
+    scheduler_resource_reason,
+)
 
 
 TASK_SCHEDULER = task_scheduler.TaskScheduler(lambda: db(), DB_LOCK, GPU_ADMISSION_LOCK,
