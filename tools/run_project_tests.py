@@ -106,6 +106,10 @@ def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: b
     environment = dict(os.environ)
     environment['PYTHONNOUSERSITE'] = '1'
     environment.update({key: str(temporary) for key in ('TMP', 'TEMP', 'TMPDIR')})
+    # Drivers spawn bridges that have to write inside the machine runtime tree. Pointing
+    # them at this run root keeps that scratch inside the tree this run removes, instead of
+    # leaving it for the bounded retention under tests/runtime_scratch.py to age out.
+    environment['DIRECTOR_TEST_RUNTIME'] = str(run_root)
     runner = shutil.which('node')
     if runner is None:
         result['errors'].append('Required node runner is missing; this suite is failed, not skipped.')
