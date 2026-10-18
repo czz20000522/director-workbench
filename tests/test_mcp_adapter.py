@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 
 import httpx
@@ -7,6 +8,10 @@ import pytest
 pytest.importorskip('mcp')
 from mcp import Client
 from mcp_server.server import create_server
+
+
+MCP_TOOL_NAMES = """list_projects,upload_material,read_guide_settings,update_guide_settings,read_queue,list_production_presets,configure_production_preset,create_project,read_project,read_script,save_script,list_tasks,get_task,list_shot_versions,restore_shot_version,preflight,repair_shot_recipe_identity,save_creative_draft,record_review,approve_candidate,update_shot,arrange_shot,create_shot,reuse_materials,import_reference,list_references,read_reference,start_reference_analysis,reconcile_reference_analysis,annotate_reference_timeline,correct_reference_artifact,correct_reference_classification,convert_reference_to_shots,submit_shot,submit_batch,control_batch,get_keyframe_capability,submit_assembly,read_assembly_edit,review_assembly_join,set_assembly_sound,preflight_assembly_edit,submit_keyframe,get_speech_capability,submit_speech,get_submission_receipt,reconcile_generation,resolve_missing_execution,stop_generation,resume_generation,submit_audio_edit,get_media_capability,create_silence,inspect_video,transcribe_audio,export_silent_video""".split(',')
+MCP_TOOL_SCHEMA_SHA256 = '513073b4fd0caa9e4a5e60525811479b63036e4404cc3c21a0d1911f82938fac'
 
 
 def test_create_shot_forwards_explicit_materials_without_contract_probe():
@@ -50,6 +55,18 @@ def test_mcp_protocol_discovery_scoped_calls_and_errors():
         assert requests[-1].method == 'POST'
         assert requests[-1].url.path == '/api/projects/work-b/pipeline/motion-generation/validate'
         assert all('/select' not in request.url.path for request in requests)
+    asyncio.run(verify())
+
+
+def test_mcp_tool_schema_snapshot_is_stable():
+    async def verify():
+        async with Client(create_server('http://localhost:4100', httpx.MockTransport(lambda request: httpx.Response(200, json={})))) as client:
+            tools = (await client.list_tools()).tools
+            payload = [tool.model_dump(mode='json', exclude_none=True) for tool in tools]
+            digest = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+            assert [tool.name for tool in tools] == MCP_TOOL_NAMES
+            assert digest == MCP_TOOL_SCHEMA_SHA256
+
     asyncio.run(verify())
 
 
