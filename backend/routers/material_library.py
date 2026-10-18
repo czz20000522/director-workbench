@@ -53,7 +53,7 @@ def material_roots(project_id: str) -> dict[str, tuple[str, Path, str]]:
 
 
 def resolve_material_path(project_id: str, source_id: str, relative_path: str = "") -> tuple[str, Path, Path, str]:
-    roots = material_roots(project_id)
+    roots = backend.material_roots(project_id)
     if source_id not in roots:
         raise HTTPException(422, "未知素材库")
     label, root, import_mode = roots[source_id]
@@ -90,8 +90,8 @@ def browse_material_library(
     query: str = "",
     kind: str = "all",
 ) -> dict[str, Any]:
-    roots = material_roots(project_id)
-    label, root, directory, _ = resolve_material_path(project_id, source_id, path)
+    roots = backend.material_roots(project_id)
+    label, root, directory, _ = backend.resolve_material_path(project_id, source_id, path)
     if not directory.is_dir():
         raise HTTPException(404, "素材目录不存在")
     normalized_query = query.strip().casefold()
@@ -116,7 +116,7 @@ def browse_material_library(
         if kind != "all" and not item.is_dir() and entry_kind != kind:
             continue
         try:
-            entries.append(public_material_entry(item, root))
+            entries.append(backend.public_material_entry(item, root))
         except OSError:
             continue
         if len(entries) >= 200:
@@ -138,7 +138,7 @@ def browse_material_library(
 
 @ROUTER.get("/material-file")
 def download_material_file(project_id: str, source_id: str, path: str) -> FileResponse:
-    _, _, target, _ = resolve_material_path(project_id, source_id, path)
+    _, _, target, _ = backend.resolve_material_path(project_id, source_id, path)
     if not target.is_file() or backend.material_kind(target) == "other":
         raise HTTPException(404, "素材文件不存在")
     return FileResponse(target, filename=target.name)
@@ -157,7 +157,7 @@ def register_server_materials(project_id: str, request: MaterialRegisterRequest)
     known_asset_ids = {str(item.get("id")) for item in assets if isinstance(item, dict)}
     registered: list[dict[str, Any]] = []
     for requested in request.items:
-        source_label, _, target, import_mode = resolve_material_path(project_id, requested.source_id, requested.relative_path)
+        source_label, _, target, import_mode = backend.resolve_material_path(project_id, requested.source_id, requested.relative_path)
         kind = backend.material_kind(target)
         if not target.is_file() or kind not in {"video", "audio", "image"}:
             raise HTTPException(422, f"只能登记图片、音频或视频素材: {requested.relative_path}")
@@ -176,7 +176,7 @@ def register_server_materials(project_id: str, request: MaterialRegisterRequest)
                 raise HTTPException(500, f"素材导入校验失败: {requested.relative_path}")
         root_relative = backend.root_relative_path(registered_target)
         existing = next(
-            (item for item in assets if isinstance(item, dict) and root_relative in asset_record_paths(item)),
+            (item for item in assets if isinstance(item, dict) and root_relative in backend.asset_record_paths(item)),
             None,
         )
         if existing:
@@ -219,7 +219,7 @@ def reusable_materials(project_id: str) -> dict[str, Any]:
     diagnostic_paths = set()
     for asset in manifest.get('assets', []):
         if isinstance(asset, dict) and (asset.get('operation') == 'video_qc' or asset.get('purpose') == 'diagnostic'):
-            for value in asset_record_paths(asset):
+            for value in backend.asset_record_paths(asset):
                 try:
                     diagnostic_paths.add(str(backend.resolve_registered_path(value)).casefold())
                 except (ValueError, OSError):
@@ -246,7 +246,7 @@ def reusable_materials(project_id: str) -> dict[str, Any]:
 
     for asset in manifest.get("assets", []):
         if isinstance(asset, dict):
-            for path in asset_record_paths(asset):
+            for path in backend.asset_record_paths(asset):
                 add(path, str(asset.get("title") or asset.get("id") or "项目素材"))
     for title, path in (manifest.get("media") or {}).items():
         add(path, title)
@@ -276,7 +276,7 @@ def reuse_project_materials(project_id: str, request: MaterialReuseRequest) -> d
             manifest = backend.load_project_manifest(project_id)
         except RuntimeError as exc:
             raise HTTPException(404, str(exc)) from exc
-        available = {item["id"]: item for item in reusable_materials(request.source_project_id)["materials"]}
+        available = {item["id"]: item for item in backend.reusable_materials(request.source_project_id)["materials"]}
         requested = list(dict.fromkeys(request.material_ids))
         if any(item not in available for item in requested):
             raise HTTPException(409, "来源素材已变化或不存在，请刷新后重新选择")

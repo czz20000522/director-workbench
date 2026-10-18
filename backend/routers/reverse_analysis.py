@@ -39,7 +39,7 @@ def reverse_analysis_root(project_id: str) -> Path:
 def reverse_analysis_path(project_id: str, analysis_id: str) -> Path:
     if not analysis_id or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for char in analysis_id):
         raise HTTPException(422, "非法参考拆解 ID")
-    root = reverse_analysis_root(project_id)
+    root = backend.reverse_analysis_root(project_id)
     target = (root / analysis_id).resolve()
     if root not in target.parents:
         raise HTTPException(422, "参考拆解路径越界")
@@ -47,7 +47,7 @@ def reverse_analysis_path(project_id: str, analysis_id: str) -> Path:
 
 
 def read_reverse_analysis(project_id: str, analysis_id: str) -> tuple[dict[str, Any], Path]:
-    path = reverse_analysis_path(project_id, analysis_id) / "analysis.json"
+    path = backend.reverse_analysis_path(project_id, analysis_id) / "analysis.json"
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
@@ -97,7 +97,7 @@ def reverse_model_status() -> dict[str, Any]:
 
 @ROUTER.get("/api/projects/{project_id}/reverse-analyses")
 def list_reverse_analyses(project_id: str) -> dict[str, Any]:
-    root = reverse_analysis_root(project_id)
+    root = backend.reverse_analysis_root(project_id)
     analyses: list[dict[str, Any]] = []
     for path in sorted(root.glob("*/analysis.json"), key=lambda item: item.stat().st_mtime, reverse=True):
         try:
@@ -111,7 +111,7 @@ def list_reverse_analyses(project_id: str) -> dict[str, Any]:
 
 @ROUTER.get("/api/projects/{project_id}/reverse-analyses/{analysis_id}")
 def get_reverse_analysis(project_id: str, analysis_id: str) -> dict[str, Any]:
-    document, _ = read_reverse_analysis(project_id, analysis_id)
+    document, _ = backend.read_reverse_analysis(project_id, analysis_id)
     with backend.DB_LOCK, backend.db() as connection:
         row = connection.execute('SELECT id FROM tasks WHERE project_id=? AND asset_id=? ORDER BY created_at DESC LIMIT 1',
                                  (project_id, f'reference-import-{analysis_id}')).fetchone()
@@ -130,7 +130,7 @@ async def create_reverse_analysis(project_id: str, file: UploadFile = File(...))
     if suffix not in {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".mp3", ".wav", ".flac", ".m4a", ".aac"}:
         raise HTTPException(422, "只支持常见音视频参考素材")
     analysis_id = f"ref-{time.strftime('%Y%m%d')}-{uuid.uuid4().hex[:8]}"
-    output = reverse_analysis_path(project_id, analysis_id)
+    output = backend.reverse_analysis_path(project_id, analysis_id)
     source_dir = output / "source"
     source_dir.mkdir(parents=True, exist_ok=False)
     source = source_dir / f"reference{suffix}"
@@ -160,17 +160,17 @@ async def create_reverse_analysis(project_id: str, file: UploadFile = File(...))
         backend.check_queue_limits(connection, backend.settings_owner())
         connection.execute('INSERT INTO tasks(id,asset_id,status,created_at,updated_at,payload,project_id) VALUES (?,?,?,?,?,?,?)',
                            (task_id, payload['asset_id'], 'scheduler_waiting', time.time(), time.time(), json.dumps(payload, ensure_ascii=False), project_id))
-        write_reverse_analysis(document, output / 'analysis.json')
+        backend.write_reverse_analysis(document, output / 'analysis.json')
         connection.commit()
         backend.GPU_IDLE_RELEASER.note_activity()
     backend.TASK_SCHEDULER.wake()
-    return get_reverse_analysis(project_id, analysis_id)
+    return backend.get_reverse_analysis(project_id, analysis_id)
 
 
 @ROUTER.patch("/api/projects/{project_id}/reverse-analyses/{analysis_id}/artifacts/{artifact_id}")
 def update_reverse_artifact(project_id: str, analysis_id: str, artifact_id: str, request: ReverseArtifactUpdateRequest) -> dict[str, Any]:
     with backend.REVERSE_DOCUMENT_LOCK:
-        document, path = read_reverse_analysis(project_id, analysis_id)
+        document, path = backend.read_reverse_analysis(project_id, analysis_id)
         current_revision = int(document.get("revision", 0))
         if request.expected_revision is not None and request.expected_revision != current_revision:
             raise HTTPException(409, {"code": "analysis_revision_conflict", "message": "参考分析已更新，请比较最新内容后再保存；本次校订未覆盖服务器", "current_revision": current_revision, "expected_revision": request.expected_revision, "retryable": False})
@@ -190,7 +190,7 @@ def update_reverse_artifact(project_id: str, analysis_id: str, artifact_id: str,
             artifact["status"] = "ready"
         if request.confidence is not None:
             artifact["confidence"] = request.confidence
-        write_reverse_analysis(document, path)
+        backend.write_reverse_analysis(document, path)
         return {"artifact_id": artifact_id, "artifact": artifact, "analysis": document}
 
 
@@ -200,7 +200,7 @@ def correct_reverse_classification(project_id: str, analysis_id: str, request: R
     if not reason:
         raise HTTPException(422, '请填写内容类型校订依据')
     with backend.REVERSE_DOCUMENT_LOCK:
-        document, path = read_reverse_analysis(project_id, analysis_id)
+        document, path = backend.read_reverse_analysis(project_id, analysis_id)
         current_revision = int(document.get('revision', 0))
         if request.expected_revision != current_revision:
             raise HTTPException(409, {'code': 'analysis_revision_conflict', 'message': '参考分析已更新，请读取后再校订内容类型',
@@ -212,14 +212,14 @@ def correct_reverse_classification(project_id: str, analysis_id: str, request: R
         document['content_mode'] = request.content_mode
         document['content_mode_reason'] = reason
         document['content_mode_user_status'] = 'reviewed'
-        write_reverse_analysis(document, path)
+        backend.write_reverse_analysis(document, path)
         return {'analysis': document}
 
 
 @ROUTER.patch("/api/projects/{project_id}/reverse-analyses/{analysis_id}/timeline/{segment_id}")
 def update_reverse_timeline(project_id: str, analysis_id: str, segment_id: str, request: ReverseTimelineUpdateRequest) -> dict[str, Any]:
     with backend.REVERSE_DOCUMENT_LOCK:
-        document, path = read_reverse_analysis(project_id, analysis_id)
+        document, path = backend.read_reverse_analysis(project_id, analysis_id)
         current_revision = int(document.get("revision", 0))
         if request.expected_revision is not None and request.expected_revision != current_revision:
             raise HTTPException(409, {"code": "analysis_revision_conflict", "message": "参考分析已更新，请比较最新内容后再保存；本次校订未覆盖服务器", "current_revision": current_revision, "expected_revision": request.expected_revision, "retryable": False})
@@ -229,17 +229,17 @@ def update_reverse_timeline(project_id: str, analysis_id: str, segment_id: str, 
             raise HTTPException(404, "参考时间段不存在")
         segment["user_note"] = request.user_note.strip()
         segment["status"] = request.status
-        write_reverse_analysis(document, path)
+        backend.write_reverse_analysis(document, path)
         return {"segment": segment, "analysis": document}
 
 
 @ROUTER.post("/api/projects/{project_id}/reverse-analyses/{analysis_id}/semantic", status_code=202)
 def run_reverse_semantic_analysis(project_id: str, analysis_id: str) -> dict[str, Any]:
-    return start_semantic_job(project_id, analysis_id)
+    return backend.start_semantic_job(project_id, analysis_id)
 
 
 def reserve_reverse_semantic(project_id: str, analysis_id: str) -> Path:
-    _, path = read_reverse_analysis(project_id, analysis_id)
+    _, path = backend.read_reverse_analysis(project_id, analysis_id)
     if not backend.PRIMARY_MODEL.is_file() or not backend.PRIMARY_MMPROJ.is_file():
         raise HTTPException(409, "27B 多模态主模型或视觉投影尚未就绪")
     with backend.GPU_ADMISSION_LOCK:
@@ -267,11 +267,11 @@ def merge_semantic_result(project_id: str, analysis_id: str, result_path: Path) 
         raise HTTPException(502, "内容分析未产生有效结果，已有校订保持不变") from exc
     from tools.reference_semantic import apply_result
     with backend.REVERSE_DOCUMENT_LOCK:
-        document, path = read_reverse_analysis(project_id, analysis_id)
+        document, path = backend.read_reverse_analysis(project_id, analysis_id)
         if document.get("semantic_result") != backend.root_relative_path(result_path):
             apply_result(document, result)
             document["semantic_result"] = backend.root_relative_path(result_path)
-            write_reverse_analysis(document, path)
+            backend.write_reverse_analysis(document, path)
     return document
 
 
@@ -287,15 +287,15 @@ def execute_reverse_semantic(project_id: str, analysis_id: str, path: Path, job:
             timeout=10800, label="参考内容分析", **({'task_id': job['task_id']} if job and job.get('task_id') else {}),
         )
         if job and (backend.get_task(job.get('task_id', '')) or {}).get('stop_requested'):
-            return read_reverse_analysis(project_id, analysis_id)[0]
-        return merge_semantic_result(project_id, analysis_id, result_path)
+            return backend.read_reverse_analysis(project_id, analysis_id)[0]
+        return backend.merge_semantic_result(project_id, analysis_id, result_path)
     finally:
         backend.REVERSE_SEMANTIC_LOCK.release()
 
 
 @ROUTER.get("/api/projects/{project_id}/reverse-analyses/{analysis_id}/semantic-jobs/current")
 def current_semantic_job(project_id: str, analysis_id: str) -> dict[str, Any]:
-    document, path = read_reverse_analysis(project_id, analysis_id)
+    document, path = backend.read_reverse_analysis(project_id, analysis_id)
     with background_jobs.LOCK:
         job = next((job for job in background_jobs.records(backend.analysis_job_root()) if job["project_id"] == project_id and job["analysis_id"] == analysis_id), None)
     public_job = background_jobs.public(job)
@@ -324,7 +324,7 @@ def current_semantic_job(project_id: str, analysis_id: str) -> dict[str, Any]:
 
 @ROUTER.post("/api/projects/{project_id}/reverse-analyses/{analysis_id}/semantic-jobs", status_code=202)
 def start_semantic_job(project_id: str, analysis_id: str) -> dict[str, Any]:
-    document, path = read_reverse_analysis(project_id, analysis_id)
+    document, path = backend.read_reverse_analysis(project_id, analysis_id)
     root = backend.analysis_job_root()
     with backend.GPU_ADMISSION_LOCK, background_jobs.LOCK:
         previous = next((job for job in background_jobs.records(root) if job["project_id"] == project_id and job["analysis_id"] == analysis_id and job["status"] in background_jobs.ACTIVE), None)
@@ -333,7 +333,7 @@ def start_semantic_job(project_id: str, analysis_id: str) -> dict[str, Any]:
             if task and task['status'] in {'succeeded', 'failed', 'stopped'}:
                 previous = None
         if previous:
-            return current_semantic_job(project_id, analysis_id)
+            return backend.current_semantic_job(project_id, analysis_id)
         if document.get('import_task_id') and (backend.get_task(document['import_task_id']) or {}).get('status') != 'succeeded':
             raise HTTPException(422, {'code': 'reference_import_not_ready', 'message': '请先等待参考素材拆分完成，再开始内容分析', 'action': 'inspect_task'})
         if not backend.PRIMARY_MODEL.is_file() or not backend.PRIMARY_MMPROJ.is_file():
@@ -356,12 +356,12 @@ def start_semantic_job(project_id: str, analysis_id: str) -> dict[str, Any]:
                                (job['id'], payload['asset_id'], 'scheduler_waiting', now, now, json.dumps(payload, ensure_ascii=False), project_id))
             connection.commit()
         backend.TASK_SCHEDULER.wake()
-        return current_semantic_job(project_id, analysis_id)
+        return backend.current_semantic_job(project_id, analysis_id)
 
 
 @ROUTER.post("/api/projects/{project_id}/reverse-analyses/{analysis_id}/semantic-jobs/reconcile")
 def reconcile_semantic_job(project_id: str, analysis_id: str) -> dict[str, Any]:
-    _, analysis_path = read_reverse_analysis(project_id, analysis_id)
+    _, analysis_path = backend.read_reverse_analysis(project_id, analysis_id)
     with backend.GPU_ADMISSION_LOCK, background_jobs.LOCK:
         job = next((item for item in background_jobs.records(backend.analysis_job_root()) if item['project_id'] == project_id and item['analysis_id'] == analysis_id), None)
         if not job:
@@ -384,7 +384,7 @@ def reconcile_semantic_job(project_id: str, analysis_id: str) -> dict[str, Any]:
         expected = {'job_id': job['id'], 'analysis_path': str(input_path.resolve()), 'result_path': str(result_path.resolve()), 'status': 'succeeded'}
         if not isinstance(receipt, dict) or any(receipt.get(key) != value for key, value in expected.items()):
             raise HTTPException(409, '完成回执与原任务不匹配，保留待核对状态')
-        merge_semantic_result(project_id, analysis_id, result_path)
+        backend.merge_semantic_result(project_id, analysis_id, result_path)
         job = background_jobs.update(backend.analysis_job_root(), job, status='succeeded', error=None, recovered_at=time.time())
         if job.get('task_id'):
             backend.set_task(job['task_id'], status='succeeded', error=None)
@@ -397,15 +397,15 @@ def reconcile_semantic_job(project_id: str, analysis_id: str) -> dict[str, Any]:
 def convert_reverse_analysis(project_id: str, analysis_id: str, request: ReverseConvertRequest | None = None) -> dict[str, Any]:
     with backend.REVERSE_DOCUMENT_LOCK:
         if request is not None:
-            document, _ = read_reverse_analysis(project_id, analysis_id)
+            document, _ = backend.read_reverse_analysis(project_id, analysis_id)
             current_revision = int(document.get('revision', 0))
             if request.expected_revision != current_revision:
                 raise HTTPException(409, {'code': 'analysis_revision_conflict', 'message': '参考拆解已更新，请重新读取并核对后再转为制作草案', 'current_revision': current_revision, 'retryable': False})
-        return _convert_reverse_analysis(project_id, analysis_id)
+        return backend._convert_reverse_analysis(project_id, analysis_id)
 
 
 def _convert_reverse_analysis(project_id: str, analysis_id: str) -> dict[str, Any]:
-    document, analysis_path = read_reverse_analysis(project_id, analysis_id)
+    document, analysis_path = backend.read_reverse_analysis(project_id, analysis_id)
     if not document.get("timeline"):
         raise HTTPException(422, "参考拆解尚无时间段，请先完成拆解")
     manifest = backend.load_project_manifest(project_id)
@@ -495,5 +495,5 @@ def _convert_reverse_analysis(project_id: str, analysis_id: str) -> dict[str, An
         if isinstance(stage, dict) and stage.get("id") == "production":
             stage["status"] = "done"
     document["production_seed"] = backend.root_relative_path(seed_path)
-    write_reverse_analysis(document, analysis_path)
+    backend.write_reverse_analysis(document, analysis_path)
     return {"analysis": document, "created_segments": created, "plan": plan, "production_seed": backend.root_relative_path(seed_path)}
