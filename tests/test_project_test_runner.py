@@ -56,7 +56,9 @@ def test_failure_keeps_running_other_suite_with_explicit_paths(tmp_path, monkeyp
     assert receipt['suites']['core']['status'] == 'failed'
     assert receipt['suites']['auk']['status'] == 'passed'
     specs = runner.suite_specs(project, Path(receipt['run_root']), tmp_path)
-    # Two probes and two interpreter suites, plus one node command per browser driver.
+    # Two probes and two interpreter suites, plus one command per browser driver. This fake
+    # fails every pytest command, so the three drivers in BROWSER_PYTEST_FIXTURES contribute
+    # their failed producer instead of a node command and the total is unchanged.
     assert len(calls) == 4 + len(specs['browser']['scripts'])
     for index, name in ((0, 'core'), (2, 'auk')):
         command, kwargs = calls[index + 1]
@@ -89,6 +91,47 @@ def test_check_probes_metadata_only_and_missing_module_fails(tmp_path, monkeypat
     assert len(commands) == 2
     assert result['suites']['auk']['errors'] == ['Missing modules: soundfile']
     assert result['suites']['core']['test_exit_code'] is None
+
+
+def test_pytest_backed_drivers_receive_produced_fixtures(tmp_path, monkeypatch):
+    """media_qc, guide_joins and creative_review read a tree an earlier pytest run wrote and
+    refuse to invent one, so the suite produces it first: one --basetemp per producer, handed
+    on as the driver's argv[2] (guide_joins recurses the run root rather than its basetemp)."""
+    project = setup_project(tmp_path)
+    calls = []
+
+    def execute(command, **kwargs):
+        calls.append(command)
+        if '-c' in command:
+            return fake_probe(command)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(runner.subprocess, 'run', execute)
+    report = tmp_path / 'produced.json'
+    assert runner.run(report_path=report, project=project, **host_roots(tmp_path)) == 0
+    receipt = json.loads(report.read_text(encoding='utf-8'))
+    browser = receipt['suites']['browser']
+    run_root = Path(receipt['run_root'])
+    interpreter = str(project / '.venv/Scripts/python.exe')
+    assert browser['errors'] == [] and browser['status'] == 'passed'
+    assert sorted(browser['fixture_producers']) == sorted(runner.BROWSER_PYTEST_FIXTURES)
+    for name, (module, handed) in runner.BROWSER_PYTEST_FIXTURES.items():
+        basetemp = run_root / f'pytest-{name}'
+        assert browser['fixture_producers'][name] == {
+            'module': module, 'basetemp': str(basetemp), 'exit_code': 0}
+        expected = basetemp if handed == 'basetemp' else run_root
+        assert browser['fixture_roots'][name] == str(expected)
+        produced = calls.index([interpreter, '-m', 'pytest', module, '-q', '--basetemp', str(basetemp)])
+        driver = next(index for index, command in enumerate(calls)
+                      if command[1:] == [f'tests/{name}.browser.mjs', str(expected)])
+        assert produced < driver
+    # The two class-2 drivers take the project interpreter and a runtime path that does not
+    # exist yet, and user_context.path() rejects asset paths past 240 characters on Windows.
+    for name in runner.BROWSER_FIXTURE_TESTS:
+        fixture = Path(browser['fixture_roots'][name])
+        assert fixture.parent == run_root and not fixture.exists()
+        assert [interpreter, str(fixture)] in [
+            command[2:] for command in calls if f'tests/{name}.browser.mjs' in command]
 
 
 def test_missing_interpreter_is_failure_not_skip(tmp_path):
