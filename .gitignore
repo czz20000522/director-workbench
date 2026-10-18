@@ -242,20 +242,11 @@
 !/tests/test_task_reconciliation.py
 !/tests/test_task_scheduler.py
 !/tests/test_user_context.py
-!/tools/batch_h3_segments.py
-!/tools/batch_keyframes.py
 !/tools/build_assembly_workflow.py
-!/tools/build_exact_ui_workflow.py
 !/tools/build_video_finish_workflow.py
-# Work-specific creation script stays outside source control
-!/tools/create_ui_workflow_snapshot.py
 !/tools/export_public_source.py
 !/tools/generate_auk_flash.py
 !/tools/generate_speech.py
-!/tools/krea_text_image.py
-!/tools/master_seedvc_smoke.py
-!/tools/mix_vocal_with_instrumental.py
-!/tools/prepare_full_audio_segments.py
 !/tools/private_accounts.py
 !/tools/process_media.py
 !/tools/qwen_image_edit.py
@@ -266,7 +257,6 @@
 !/tools/run_project_tests.py
 !/tools/test_build_video_finish_workflow.py
 !/tools/validate_exact_ui_workflow.py
-!/tools/verify_delivery.py
 !/tsconfig.json
 !/vite.config.ts
 !/README.md
