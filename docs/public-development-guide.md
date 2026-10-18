@@ -73,6 +73,25 @@ npm run build
 
 优先运行与修改相关的回归，再按交付范围执行完整入口。离线回归、在线业务、真实 GPU 输出与跨设备访问分别记录。
 
+### 浏览器验收组
+
+`-Suite` 还接受 `browser`，运行 [tests](../tests) 下的 `*.browser.mjs` 真实浏览器验收：用系统 Edge 打开实际页面并操作真实界面。该组需要 node 与系统 Edge，浏览器自动化库 `playwright` 已在 `package.json` 声明；缺少 node 或项目解释器时该组判为失败而不是跳过。
+
+```powershell
+.\run_tests.ps1 -Suite browser
+```
+
+驱动通过命令行参数取得夹具，契约如下。运行目录必须是绝对路径且尚不存在：相对路径或已存在的目录会在 `backend/user_context.py` 触发 `AccessDenied`。多数驱动不需要额外参数，其余按下表取值，由套件自行准备，不需要手工素材。
+
+| 驱动 | `argv[2]` 起 |
+| --- | --- |
+| `enhancement`、`quick_generation` | 项目解释器绝对路径，然后一个尚不存在的绝对运行目录 |
+| `client_restore` | 可解码的 MP4，由 `tests/client_restore_media.py` 先编码 |
+| `media_qc`、`creative_review` | pytest `--basetemp` 目录，由对应 `tests/test_*.py` 先写入 |
+| `guide_joins` | 运行目录，其夹具由 `tests/test_guide_joins.py` 先写入 |
+
+浏览器验收覆盖真实界面与真实媒体解码，但不覆盖真实 GPU 生成，也不替代跨设备访问验收。
+
 依赖已安装节点源码的主机探针还需相应 ComfyUI 安装；缺少主机资源导致的跳过须在结果中说明。通过其余测试不能替代该探针或真实 GPU 验证。
 
 ## 账号与服务启动
