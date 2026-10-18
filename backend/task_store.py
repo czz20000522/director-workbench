@@ -7,7 +7,7 @@ import threading
 from pathlib import Path
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 _MIGRATION_LOCK = threading.RLock()
 
 
@@ -91,10 +91,15 @@ def _migrate(connection: sqlite3.Connection) -> None:
         )"""
     )
     _backfill_idempotency(connection)
+    connection.execute("DROP TRIGGER IF EXISTS tasks_idempotency_after_insert")
+    connection.execute("DROP TRIGGER IF EXISTS tasks_idempotency_after_payload_update")
     connection.execute(
         """CREATE TRIGGER IF NOT EXISTS tasks_idempotency_after_insert
         AFTER INSERT ON tasks
         WHEN json_extract(NEW.payload, '$.submission_receipt.key') IS NOT NULL
+             AND (NEW.batch_id IS NULL OR NOT EXISTS (
+                 SELECT 1 FROM tasks WHERE id <> NEW.id AND batch_id = NEW.batch_id
+             ))
         BEGIN
             INSERT INTO task_idempotency(project_id, idempotency_key, task_id)
             VALUES (COALESCE(NEW.project_id, ''), json_extract(NEW.payload, '$.submission_receipt.key'), NEW.id);
@@ -104,6 +109,9 @@ def _migrate(connection: sqlite3.Connection) -> None:
         """CREATE TRIGGER IF NOT EXISTS tasks_idempotency_after_payload_update
         AFTER UPDATE OF payload, project_id ON tasks
         WHEN json_extract(NEW.payload, '$.submission_receipt.key') IS NOT NULL
+             AND (NEW.batch_id IS NULL OR NOT EXISTS (
+                 SELECT 1 FROM tasks WHERE id <> NEW.id AND batch_id = NEW.batch_id
+             ))
         BEGIN
             INSERT INTO task_idempotency(project_id, idempotency_key, task_id)
             VALUES (COALESCE(NEW.project_id, ''), json_extract(NEW.payload, '$.submission_receipt.key'), NEW.id)
