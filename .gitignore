@@ -89,11 +89,13 @@
 !/backend/private_workspaces.py
 !/backend/production_presets.py
 !/backend/readiness.py
+!/backend/schemas.py
 !/backend/shot_creation.py
 !/backend/speech.py
 !/backend/storage.py
 !/backend/task_scheduler.py
 !/backend/user_context.py
+!/backend/workbench_config.py
 !/contracts/h3-guided-api.json
 !/contracts/pipeline-inputs.json
 !/docs/github-collaboration.md
