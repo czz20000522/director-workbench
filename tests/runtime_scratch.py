@@ -1,14 +1,15 @@
-"""Scratch directories for tests that have to write inside the machine runtime tree.
+"""Scratch directories for tests that have to write outside their own tmp_path.
 
-The machine runtime tree also holds live roots — accounts, the checkout's relocation
-backup — so a test does not invent a directory there on its own: it asks here and gets
-a directory this module owns and prunes.  Both ways in are bounded:
+A test does not invent a directory on its own: it asks here and gets a directory this
+module owns and prunes.  Both ways in are bounded:
 
 * Under the suite harness the caller exports ``DIRECTOR_TEST_RUNTIME``, that run's run
   root.  Scratch directories land inside it and go away with the run root, which
   ``tools/run_project_tests.py`` prunes as a unit.
-* A hand-run interpreter has no run root, so the historical fixed directory under
-  ``paths.RUNTIME_ROOT`` is used and it keeps only the newest entries.
+* A hand-run interpreter has no run root, so scratch lands in a directory of this
+  module's own under the system temporary directory.  It deliberately does not land in
+  the machine runtime tree: that tree holds live roots — accounts, the checkout's
+  relocation backup — and a hand-run pytest would leave its scratch sitting beside them.
 
 Pruning touches entries whose name starts with the caller's prefix, so anything else
 dropped in the same directory — and any entry another run created moments ago — is
@@ -20,6 +21,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -29,6 +31,8 @@ from tools.remove_tree import remove_tree
 # Exported by tools/run_project_tests.py for the suites that run the project's own
 # pytest suite, where the scratch directories are a subset of that run's artifacts.
 OVERRIDE = 'DIRECTOR_TEST_RUNTIME'
+# Only ever used when no run root was exported; it is a name, not a root.
+FALLBACK_DIRNAME = 'director-workbench-test-runtime'
 KEEP = 4
 # Long enough to outlive one case rather than one session: this only has to protect a
 # directory another run created seconds ago, and every minute it covers is another run's
@@ -38,15 +42,21 @@ MIN_AGE_SECONDS = 60.0
 
 
 def base_root() -> Path:
-    """Where scratch directories go: this run's run root, else the runtime tree.
+    """Where scratch directories go: this run's run root, else a temporary directory.
 
-    The checkout is refused because test artifacts must never enter the published
-    tree, and a stray exported variable is a cheap way for them to do exactly that.
+    The fallback is resolved now rather than frozen at import so an exported location is
+    honoured whenever the variable was set, and the machine runtime tree is never a
+    fallback: a hand-run pytest has no run root and would otherwise leave its scratch in
+    among the live roots the operator keeps there.
+
+    The checkout is refused because test artifacts must never enter the published tree,
+    and a stray exported variable is a cheap way for them to do exactly that.
     """
     value = os.environ.get(OVERRIDE)
-    root = Path(value).resolve() if value else Path(paths.RUNTIME_ROOT)
-    if root == Path(paths.PROJECT_ROOT).resolve() or root.is_relative_to(Path(paths.PROJECT_ROOT).resolve()):
-        raise ValueError(f'{OVERRIDE} points inside the checkout ({root}); '
+    root = Path(value).resolve() if value else (Path(tempfile.gettempdir()) / FALLBACK_DIRNAME).resolve()
+    checkout = Path(paths.PROJECT_ROOT).resolve()
+    if root == checkout or root.is_relative_to(checkout):
+        raise ValueError(f'scratch root {root} is inside the checkout ({checkout}); '
                          'test artifacts must not enter the published tree')
     return root
 

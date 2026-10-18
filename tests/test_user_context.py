@@ -110,6 +110,27 @@ class ContextTests(unittest.TestCase):
             m.verify_receipt(self.a, owner, {**receipt, 'output': str(other)})
 
 
+class PermittedRootTests(unittest.TestCase):
+    """The account-storage allowlist root, which is the one machine root read per call."""
+
+    def test_no_override_keeps_the_recorded_machine_root(self):
+        # A deployment that sets nothing must behave exactly as it did when the root was a
+        # module constant, so an empty environment is asserted rather than assumed.
+        self.assertEqual(m.permitted_root({}), m.PERMITTED_ROOT)
+
+    def test_an_override_becomes_the_root(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        elsewhere = Path(tmp.name)
+        self.assertEqual(m.permitted_root({'DIRECTOR_PERMITTED_ROOT': str(elsewhere)}),
+                         elsewhere.resolve())
+
+    def test_a_relative_or_linked_override_is_refused(self):
+        for value in ('relative/root', str(Path(m.PERMITTED_ROOT) / '..' / 'escape')):
+            with self.assertRaises(m.AccessDenied):
+                m.permitted_root({'DIRECTOR_PERMITTED_ROOT': value})
+
+
 class RealJunctionTests(unittest.TestCase):
     fixture_root = None
 

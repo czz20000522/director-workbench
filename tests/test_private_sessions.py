@@ -16,12 +16,13 @@ from backend.user_context import Layout, from_session
 
 class SessionsTests(unittest.TestCase):
     def setUp(self):
-        # p.PERMITTED_ROOT is the workspace root, which contains the runtime tree that
-        # both the run root and the historical fixed directory live under.
         root = scratch_root('private-session-tests')
         self.root = Path(tempfile.mkdtemp(dir=root))
         self.path = self.root / 'accounts-hashed.json'
-        self.store = p.AccountStore(self.path)
+        # The permitted root is the machine workspace root, which says nothing about where
+        # this case's scratch directory landed, so name the case's own directory as the
+        # allowlist rather than depending on the two happening to nest.
+        self.store = p.AccountStore(self.path, permitted_root=self.root)
         self.password = secrets.token_urlsafe(24)
         self.now = 1000.
         self.manager = p.SessionManager(self.store, ttl_seconds=60, clock=lambda: self.now)
@@ -64,7 +65,8 @@ class SessionsTests(unittest.TestCase):
         self.assertTrue(token not in repr(self.manager._sessions))
         self.assertIsNone(self.manager.lookup('user001'))
         self.assertIsNone(self.manager.lookup(secrets.token_urlsafe(32)))
-        context = from_session(token, self.manager.lookup, Layout(self.root / 'users'), now=self.now)
+        context = from_session(token, self.manager.lookup,
+                               Layout(self.root / 'users', permitted_roots=(self.root,)), now=self.now)
         self.assertEqual(context.username, 'user001')
 
     def test_expiry_and_logout(self):

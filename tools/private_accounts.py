@@ -6,19 +6,22 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from backend.private_sessions import AccountStore
-from backend.user_context import PERMITTED_ROOT
+from backend.user_context import permitted_root
 
 
 def main(argv=None, password_prompt=getpass):
+    # Resolved per call rather than at import, so the command follows the same override the
+    # server does instead of freezing whichever root was current when this module loaded.
+    root = permitted_root()
     parser = argparse.ArgumentParser(description='本地私人工作台账号管理，不读取旧明文账号文件')
     parser.add_argument('operation', choices=('create', 'password'))
     parser.add_argument('username')
-    parser.add_argument('--accounts-file', type=Path, default=PERMITTED_ROOT / 'runtime/director-private/accounts-hashed.json')
+    parser.add_argument('--accounts-file', type=Path, default=root / 'runtime/director-private/accounts-hashed.json')
     args = parser.parse_args(argv)
     password = password_prompt('密码（不回显）: ')
     if password != password_prompt('再次输入密码: '):
         parser.error('两次输入不一致，未修改账号')
-    store = AccountStore(args.accounts_file)
+    store = AccountStore(args.accounts_file, permitted_root=root)
     try:
         if args.operation == 'create':
             store.create_account(args.username, password)

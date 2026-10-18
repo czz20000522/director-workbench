@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import runtime_scratch as scratch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import paths
 from tools import run_project_tests as harness
 from tools.remove_tree import remove_tree
 
@@ -89,6 +90,22 @@ class ScratchRootTests(unittest.TestCase):
         with patch.dict(os.environ, {scratch.OVERRIDE: str(inside)}):
             with self.assertRaises(ValueError):
                 scratch.scratch_root('audio-edit-tests')
+
+    def test_a_hand_run_fallback_leaves_the_machine_runtime_tree_alone(self):
+        # A hand-run pytest exports no run root.  The fallback used to be the machine runtime
+        # tree itself, so a module's scratch landed in among the live roots the operator keeps
+        # there — accounts, the checkout's relocation backup — and stayed there unreclaimed.
+        # The suite sandboxes TMP into its own run root, so the assertion is against the fixed
+        # legacy location rather than against the tree the run root happens to sit in.
+        with patch.dict(os.environ):
+            os.environ.pop(scratch.OVERRIDE, None)
+            root = scratch.base_root()
+            created = scratch.scratch_root('audio-edit-tests')
+        legacy = Path(paths.RUNTIME_ROOT).resolve()
+        self.assertEqual(root.name, scratch.FALLBACK_DIRNAME)
+        self.assertNotEqual(root, legacy)
+        self.assertNotEqual(created, legacy / 'audio-edit-tests')
+        self.assertTrue(created.is_relative_to(Path(tempfile.gettempdir()).resolve()))
 
     def test_prune_keeps_the_newest_and_leaves_foreign_names(self):
         root = self.elsewhere / 'audio-edit-tests'

@@ -10,6 +10,11 @@ from tools.private_accounts import main
 
 
 def test_account_command_and_authenticated_entry(tmp_path, monkeypatch):
+    # Account storage is only accepted under the permitted root, and the startup path reads
+    # that root from the environment rather than from an argument this case could pass, so
+    # point it at the case's own directory instead of letting the outcome depend on where
+    # pytest happened to put tmp_path.
+    monkeypatch.setenv('DIRECTOR_PERMITTED_ROOT', str(tmp_path))
     path = tmp_path / 'accounts.json'
     values = iter(('synthetic-password', 'synthetic-password'))
     main(['create', 'user001', '--accounts-file', str(path)], password_prompt=lambda _: next(values))
@@ -32,6 +37,7 @@ def test_account_command_and_authenticated_entry(tmp_path, monkeypatch):
 
 
 def test_missing_accounts_do_not_start_anonymous_service(tmp_path, monkeypatch):
+    monkeypatch.setenv('DIRECTOR_PERMITTED_ROOT', str(tmp_path))
     monkeypatch.setenv('DIRECTOR_ACCOUNTS_FILE', str(tmp_path / 'missing.json'))
     with pytest.raises(RuntimeError, match='创建账号'):
         runpy.run_module('backend.private_app')
