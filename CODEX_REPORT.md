@@ -6,11 +6,11 @@
 
 ## Phase B3：SQLite 基础设施与幂等唯一性
 
-- 提交：`5f8ab08`、`a88ac6a`
+- 提交：`5f8ab08`、`a88ac6a`、`5b88573`
 - 文件：`backend/task_store.py`（新文件）、`backend/app.py`、`backend/routers/task_entry.py`、`tests/test_submission_idempotency.py`
 - 行为变化：无；保留现有幂等回执、批量共享幂等键和任务冻结语义。
 - 实现：统一 WAL、`synchronous=NORMAL`、`busy_timeout`；可重复迁移；独立幂等映射表与触发器；旧库重复键保留最早任务作为 canonical 回执，同 batch 任务继续共享键。
-- 验证：`ruff check` 通过；`tests/test_submission_idempotency.py` 4 passed，覆盖迁移回填和并发同键只落一条任务。
+- 验证：`ruff check` 通过；`tests/test_submission_idempotency.py` 4 passed，覆盖迁移回填、并发 bootstrap 和并发同键只落一条任务。
 
 ## Phase B1：读路径缓存与批量 queue 读取
 
