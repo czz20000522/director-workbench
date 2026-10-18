@@ -3,10 +3,10 @@
  * Each hook owns one concern that used to live inline in `App.tsx`: the persisted sidebar
  * width and its drag handlers, the per-project draft store, and the engine status poll.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
-import { loadDrafts } from './helpers';
-import type { Draft, Drafts } from './types';
+import { loadDrafts, normalizeLiveTaskState } from './helpers';
+import type { Draft, Drafts, TaskRecord } from './types';
 
 const SIDEBAR_WIDTH_KEY = 'director-workbench:sidebar-width';
 const DRAFTS_KEY = (projectId: string) => `director-workbench:${projectId}:drafts:v1`;
@@ -155,4 +155,196 @@ export function useComfyStatus() {
   }, []);
 
   return { comfyOnline, comfyInfo };
+}
+
+type ProjectTasksOptions = {
+  projectId?: string;
+  assemblyAssetId?: string;
+  currentAssetId: string;
+  batchId: string;
+  onTaskSucceeded?: () => void;
+};
+
+/** Owns the HTTP snapshot and reconnecting SSE stream for one project. */
+export function useProjectTasks({ projectId, assemblyAssetId, currentAssetId, batchId, onTaskSucceeded }: ProjectTasksOptions) {
+  const [taskState, setTaskState] = useState('');
+  const [taskId, setTaskId] = useState('');
+  const [currentTask, setCurrentTask] = useState<TaskRecord | null>(null);
+  const [projectTasks, setProjectTasks] = useState<TaskRecord[]>([]);
+  const [assemblyTaskState, setAssemblyTaskState] = useState('');
+  const [assemblyTaskId, setAssemblyTaskId] = useState('');
+  const succeededTaskRef = useRef('');
+  const callbackRef = useRef(onTaskSucceeded);
+  callbackRef.current = onTaskSucceeded;
+
+  const applyTasks = useCallback((records: TaskRecord[]) => {
+    const scoped = records.filter(task => task.project_id === projectId);
+    setProjectTasks(scoped);
+    const selected = scoped.find(task => task.asset_id === currentAssetId) ?? null;
+    setCurrentTask(selected);
+    setTaskId(selected?.id ?? '');
+    setTaskState(normalizeLiveTaskState(selected?.status ?? ''));
+    const assembly = assemblyAssetId ? scoped.find(task => task.asset_id === assemblyAssetId) : undefined;
+    setAssemblyTaskId(assembly?.id ?? '');
+    setAssemblyTaskState(assembly?.status ?? '');
+    const completed = scoped.find(task => task.status === 'succeeded');
+    if (completed?.id && completed.id !== succeededTaskRef.current) {
+      succeededTaskRef.current = completed.id;
+      callbackRef.current?.();
+    }
+  }, [assemblyAssetId, currentAssetId, projectId]);
+
+  useEffect(() => {
+    succeededTaskRef.current = '';
+    setTaskId(''); setTaskState(''); setCurrentTask(null); setProjectTasks([]); setAssemblyTaskId(''); setAssemblyTaskState('');
+  }, [projectId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!projectId) return () => { cancelled = true; };
+    fetch(`/api/projects/${encodeURIComponent(projectId)}/tasks?limit=100`)
+      .then(response => response.ok ? response.json() : Promise.reject(new Error('tasks')))
+      .then(({ tasks: records }: { tasks: TaskRecord[] }) => { if (!cancelled) applyTasks(Array.isArray(records) ? records : []); })
+      .catch(() => { /* the reconnecting SSE stream remains the live source */ });
+    return () => { cancelled = true; };
+  }, [applyTasks, projectId]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    let source: EventSource | null = null;
+    let reconnectTimer: number | null = null;
+    let delay = 500;
+    const connect = () => {
+      if (cancelled) return;
+      source = new EventSource(`/api/projects/${encodeURIComponent(projectId)}/events`);
+      source.onopen = () => { delay = 500; };
+      source.onmessage = event => {
+        try {
+          const data = JSON.parse(event.data) as { tasks?: TaskRecord[] };
+          applyTasks(Array.isArray(data.tasks) ? data.tasks : []);
+        } catch { /* malformed transient events do not affect the review UI */ }
+      };
+      source.onerror = () => {
+        source?.close();
+        source = null;
+        if (cancelled || reconnectTimer !== null) return;
+        reconnectTimer = window.setTimeout(() => { reconnectTimer = null; delay = Math.min(delay * 2, 10000); connect(); }, delay);
+      };
+    };
+    connect();
+    return () => {
+      cancelled = true;
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      source?.close();
+    };
+  }, [applyTasks, batchId, projectId]);
+
+  return { taskState, setTaskState, taskId, setTaskId, currentTask, setCurrentTask, projectTasks, setProjectTasks, assemblyTaskState, setAssemblyTaskState, assemblyTaskId, setAssemblyTaskId };
+}
+
+type PlaybackAsset = { id: string; ready?: boolean };
+type PlaybackOptions = {
+  mediaKey: string;
+  start: number;
+  duration: number;
+  kind: string;
+  currentEnd?: number;
+  mediaElement: HTMLMediaElement | null;
+  mediaRef: { current: HTMLMediaElement | null };
+  autoplayRef: { current: boolean };
+  advancing: { current: boolean };
+  ready: boolean;
+  continuous: boolean;
+  focusList: PlaybackAsset[];
+  focusIndex: number;
+  onAdvance: (asset: PlaybackAsset) => void;
+  onNotice: (message: string) => void;
+};
+
+/** Isolates media lifecycle, transport state and continuous preview behavior. */
+export function usePlayback(options: PlaybackOptions) {
+  const { mediaKey, start, duration, kind, currentEnd, mediaElement, mediaRef, autoplayRef, advancing, ready, continuous, focusList, focusIndex, onAdvance, onNotice } = options;
+  const [playing, setPlaying] = useState(false);
+  const [mediaLoad, setMediaLoad] = useState<{ key: string; status: 'loading' | 'ready' | 'error' }>({ key: '', status: 'loading' });
+  const noticeRef = useRef(onNotice);
+  noticeRef.current = onNotice;
+  const epoch = useRef(0);
+
+  useLayoutEffect(() => {
+    epoch.current += 1;
+    return () => { epoch.current += 1; };
+  }, [mediaElement, mediaKey, start]);
+
+  useEffect(() => {
+    advancing.current = false;
+    setPlaying(false);
+    const media = mediaElement;
+    if (!media) return;
+    let cancelled = false;
+    let initialized = false;
+    const mediaEpoch = epoch.current;
+    setMediaLoad({ key: mediaKey, status: 'loading' });
+    const initialize = () => {
+      if (cancelled || mediaRef.current !== media || epoch.current !== mediaEpoch) return;
+      if (media.error) { setMediaLoad({ key: mediaKey, status: 'error' }); return; }
+      if (media.readyState < 3) return;
+      setMediaLoad({ key: mediaKey, status: 'ready' });
+      if (initialized) return;
+      initialized = true;
+      media.currentTime = start;
+      if (autoplayRef.current) {
+        autoplayRef.current = false;
+        void media.play().catch(error => { if (!cancelled && epoch.current === mediaEpoch && mediaRef.current === media && error?.name !== 'AbortError') noticeRef.current('浏览器暂停了自动播放，请点击播放继续。'); });
+      } else media.pause();
+    };
+    const events = ['loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough', 'progress', 'playing'];
+    for (const event of events) media.addEventListener(event, initialize);
+    initialize();
+    return () => { cancelled = true; for (const event of events) media.removeEventListener(event, initialize); };
+  }, [advancing, autoplayRef, mediaElement, mediaKey, mediaRef, start]);
+
+  const finish = useCallback(() => {
+    if (advancing.current) return;
+    advancing.current = true;
+    mediaRef.current?.pause();
+    setPlaying(false);
+    const next = focusList[focusIndex + 1];
+    if (continuous && next?.ready) {
+      autoplayRef.current = true;
+      onAdvance(next);
+    } else {
+      autoplayRef.current = false;
+      noticeRef.current(continuous && next ? '下一段尚未生成，连续预览已暂停。' : '本次播放结束。');
+    }
+  }, [advancing, autoplayRef, continuous, focusIndex, focusList, mediaRef, onAdvance]);
+
+  const togglePlay = useCallback(async () => {
+    const media = mediaRef.current;
+    const playbackDisabled = !ready || (kind !== 'image' && mediaLoad.key !== mediaKey ? true : mediaLoad.status !== 'ready');
+    if (!media || playbackDisabled) return;
+    const mediaEpoch = epoch.current;
+    if (!media.paused) { media.pause(); return; }
+    advancing.current = false;
+    if (media.ended || (duration > 0 && media.currentTime >= start + duration - 0.08)) media.currentTime = start;
+    try {
+      await media.play();
+      if (epoch.current === mediaEpoch && mediaRef.current === media && media.isConnected) noticeRef.current('');
+    } catch (error) {
+      if (epoch.current === mediaEpoch && mediaRef.current === media && media.isConnected && !(error instanceof DOMException && error.name === 'AbortError')) noticeRef.current('暂时无法播放，请检查素材是否可读取。');
+    }
+  }, [advancing, duration, kind, mediaKey, mediaLoad, mediaRef, ready, start]);
+
+  const mediaProps = useMemo(() => ({
+    controls: true,
+    preload: 'metadata' as const,
+    onPlay: () => { setPlaying(true); advancing.current = false; },
+    onPause: () => setPlaying(false),
+    onEnded: finish,
+    onError: (event: { currentTarget: HTMLMediaElement }) => { if (mediaRef.current !== event.currentTarget) return; setMediaLoad({ key: mediaKey, status: 'error' }); noticeRef.current('素材加载失败，请检查本机作品文件。'); },
+    onTimeUpdate: () => { const media = mediaRef.current; if (media && kind === 'audio' && !media.paused && media.currentTime >= (currentEnd ?? Infinity) - 0.04) finish(); },
+  }), [advancing, currentEnd, finish, kind, mediaKey, mediaRef]);
+
+  const playbackDisabled = !ready || (kind !== 'image' && (mediaLoad.key !== mediaKey || mediaLoad.status !== 'ready'));
+  return { playing, mediaLoad, mediaStatus: mediaLoad.key === mediaKey ? mediaLoad.status : 'loading', playbackDisabled, togglePlay, finish, mediaProps };
 }

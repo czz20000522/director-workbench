@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, InputHTMLAttributes, MouseEvent as ReactMouseEvent } from 'react';
 import { ArrowDownToLine, ArrowUpRight, Check, ChevronLeft, ChevronRight, Film, FolderOpen, Image as ImageIcon, Layers3, Maximize2, Music2, Pause, Play, Radio, Sparkles, Square, Workflow, X } from 'lucide-react';
 import { assets as fallbackAssets, labels, pipelineStages as defaultPipelineStages, range, type Asset, type Kind, type PipelineInput, type PipelineStage, type Variant } from './data';
@@ -35,7 +35,7 @@ import './quick-create.css';
 import ResolutionPicker from './ResolutionPicker';
 const CandidateComparison = lazy(() => import('./CandidateComparison'));
 import { downloadName, mediaUrl, workflowUrl } from './api/client';
-import { useComfyStatus, useDrafts, useSidebarWidth } from './app/hooks';
+import { useComfyStatus, useDrafts, usePlayback, useProjectTasks, useSidebarWidth } from './app/hooks';
 
 import type { BatchTask, CheckpointRecord, CreativeConflict, CreativeDraft, CreativeProfile, PipelineValidation, PlanAssembly, PlanSegment, ProductionStep, ProductionStepState, ProjectManifest, ProjectState, QuickAspect, ReusableTemplate, ReviewRecord, SegmentDraft, SegmentEdit, ShotGenerationSettings, ShotVersion, TaskRecord, WorkflowCatalogEntry } from './app/types';
 import { ASPECT_LABEL, QUICK_SERIES, adultVideoProfileNote, blankCreativeDraft, candidateOutputFacts, checkpointLabel, hasCreativeDraftContent, loadCreativeDraft, localSystemTime, measureStillAspect, normalizeCreativeDraft, normalizeLiveTaskState, normalizeManifestAsset, outputMethodLabel, outputResolutionLabel, readNewSegmentDraft, reviewLabel, sameCreativeDraft, taskStateLabel, taskStateLabels, versionMaterial } from './app/helpers';
@@ -82,8 +82,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const [savingMaterialTitle, setSavingMaterialTitle] = useState(false);
   const [variant, setVariant] = useState<Variant>('A');
   const [continuous, setContinuous] = useState(false);
-  const [playing, setPlaying] = useState(false);
-  const [mediaLoad, setMediaLoad] = useState<{ key: string; status: 'loading' | 'ready' | 'error' }>({ key: '', status: 'loading' });
   const [notice, setNotice] = useState('');
   const pageInteraction = useRef(0);
   useEffect(() => {
@@ -116,14 +114,8 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const [resourceOpen, setResourceOpen] = useState(false);
   const [materialBridgeOpen, setMaterialBridgeOpen] = useState(false);
   const [materialBridgeDevice, setMaterialBridgeDevice] = useState(false);
-  const [taskState, setTaskState] = useState('');
   const submittingShot = useRef(false);
   const regeneratingShot = useRef(false);
-  const [taskId, setTaskId] = useState('');
-  const [currentTask, setCurrentTask] = useState<TaskRecord | null>(null);
-  const [projectTasks, setProjectTasks] = useState<TaskRecord[]>([]);
-  const [assemblyTaskState, setAssemblyTaskState] = useState('');
-  const [assemblyTaskId, setAssemblyTaskId] = useState('');
   const [pendingAssemblyProject, setPendingAssemblyProject] = useState('');
   const [assemblySubmitting, setAssemblySubmitting] = useState(false);
   const submittingAssembly = useRef(false);
@@ -246,10 +238,9 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
     mediaRef.current = node;
     setMediaElement(node);
   }, []);
-  const mediaEpoch = useRef(0);
   const autoplayRef = useRef(false);
   const advancing = useRef(false);
-  const refreshedPlanTaskRef = useRef('');
+  const refreshPlanRef = useRef<(() => Promise<void>) | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const planVideoAssets: Asset[] = useMemo(() => planSegments.map(segment => {
     const base = baseAssets.find(asset => asset.id === segment.id);
@@ -303,6 +294,14 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
     ? [assemblyAsset]
     : library.filter(asset => asset.kind === kind && (kind !== 'video' || asset.id !== assemblyAsset?.id)), [assemblyAsset, kind, library, selected]);
   const current = list.find(asset => asset.id === selected) ?? list[0] ?? emptyAsset;
+  const taskModel = useProjectTasks({
+    projectId: project?.id,
+    assemblyAssetId: project?.assembly_asset_id,
+    currentAssetId: current.id,
+    batchId,
+    onTaskSucceeded: () => { void refreshPlanRef.current?.().catch(() => { /* a later stream update can retry the plan refresh */ }); },
+  });
+  const { taskState, setTaskState, taskId, setTaskId, currentTask, setCurrentTask, projectTasks, setProjectTasks, assemblyTaskState, setAssemblyTaskState, assemblyTaskId, setAssemblyTaskId } = taskModel;
   useEffect(() => {
     if (!pendingTreeItem || pendingTreeItem.projectId !== project?.id) return;
     const available = pendingTreeItem.kind === 'video'
@@ -320,8 +319,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   // and download link so a newly registered B result is actually inspectable.
   const source = current.sources?.[variant] ?? current.sources?.A;
   const mediaKey = JSON.stringify([project?.id, current.id, source]);
-  const mediaStatus = mediaLoad.key === mediaKey ? mediaLoad.status : 'loading';
-  const playbackDisabled = !current.ready || (kind !== 'image' && mediaStatus !== 'ready');
   const index = list.findIndex(asset => asset.id === current.id);
   const start = kind === 'audio' ? current.start ?? 0 : 0;
   const duration = (current.end ?? 0) - (current.start ?? 0);
@@ -336,6 +333,11 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const isProjectVideoMaterial = kind === 'video' && !currentPlanSegment && !isAssemblyAsset && current.id !== 'empty-project';
   const focusList = useMemo(() => kind === 'video' ? (isProjectVideoMaterial || isAssemblyAsset ? [current] : planVideoAssets) : list, [current, isAssemblyAsset, isProjectVideoMaterial, kind, list, planVideoAssets]);
   const focusIndex = focusList.findIndex(asset => asset.id === current.id);
+  const { playing, mediaStatus, playbackDisabled, togglePlay, mediaProps } = usePlayback({
+    mediaKey, start, duration, kind, currentEnd: current.end, mediaElement, mediaRef, autoplayRef, advancing,
+    ready: current.ready, continuous, focusList, focusIndex,
+    onAdvance: asset => choose(asset as Asset, true), onNotice: setNotice,
+  });
   const editableMaterial = !currentPlanSegment && !isAssemblyAsset ? project?.assets?.find(asset => asset.id === current.id && asset.kind === kind) : undefined;
   useEffect(() => { setMaterialTitle(editableMaterial ? String(editableMaterial.title ?? '') : ''); }, [project?.id, current.id, editableMaterial?.title]);
   const currentTaskTemplate = project?.task_templates?.[current.id];
@@ -475,24 +477,8 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   useEffect(() => {
     void refreshPlan().catch(() => { /* the static pilot remains available while the plan is offline */ });
     void refreshProjectState().catch(() => { /* local drafts remain available while the archive is offline */ });
-    setTaskId(''); setTaskState(''); setCurrentTask(null); setProjectTasks([]); setAssemblyTaskId(''); setAssemblyTaskState(''); setBatchId(''); setBatchTasks([]);
+    setBatchId(''); setBatchTasks([]);
   }, [project?.id]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setTaskId(''); setTaskState(''); setCurrentTask(null);
-    if (!project?.id || !current.id) return () => { cancelled = true; };
-    fetch(`/api/projects/${encodeURIComponent(project.id)}/tasks?limit=100`).then(response => response.ok ? response.json() : Promise.reject(new Error('tasks'))).then(({ tasks: records }: { tasks: TaskRecord[] }) => {
-      if (cancelled) return;
-      const scoped = records.filter(task => task.project_id === project.id);
-      setProjectTasks(scoped);
-      const task = scoped.find(item => item.asset_id === current.id) ?? null;
-      setCurrentTask(task); setTaskId(task?.id ?? ''); setTaskState(normalizeLiveTaskState(task?.status ?? ''));
-      const assemblyTask = project.assembly_asset_id ? scoped.find(item => item.asset_id === project.assembly_asset_id) : undefined;
-      setAssemblyTaskId(assemblyTask?.id ?? ''); setAssemblyTaskState(assemblyTask?.status ?? '');
-    }).catch(() => { /* SSE will retry live task state */ });
-    return () => { cancelled = true; };
-  }, [project?.id, project?.assembly_asset_id, current.id]);
 
   useEffect(() => {
     // Restore presentation from the same persisted tasks used by HTTP and SSE.
@@ -589,69 +575,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   }, [project?.id]);
 
   useEffect(() => {
-    if (!project?.id) return;
-    const sourceEvents = new EventSource(`/api/projects/${encodeURIComponent(project.id)}/events`);
-    sourceEvents.onmessage = event => {
-      try {
-        const data = JSON.parse(event.data);
-        const projectTasks = (data.tasks ?? []).filter((task: TaskRecord) => task.project_id === project?.id);
-        setProjectTasks(projectTasks);
-        const currentTask = projectTasks.find((task: TaskRecord) => task.asset_id === current.id);
-        if (currentTask) { setCurrentTask(currentTask); setTaskState(normalizeLiveTaskState(currentTask.status ?? '')); setTaskId(currentTask.id ?? ''); }
-        else { setCurrentTask(null); setTaskState(''); setTaskId(''); }
-        const assemblyTask = project?.assembly_asset_id ? projectTasks.find((task: TaskRecord) => task.asset_id === project.assembly_asset_id) : undefined;
-        if (assemblyTask) {
-          setAssemblyTaskState(assemblyTask.status);
-          setAssemblyTaskId(assemblyTask.id ?? '');
-        }
-        if (batchId) {
-          const currentBatchTasks = projectTasks.filter((task: BatchTask) => task.batch_id === batchId);
-          if (currentBatchTasks.length) setBatchTasks(currentBatchTasks);
-        }
-        const completedPlanTask = projectTasks.find((task: TaskRecord) => task.asset_id && task.status === 'succeeded');
-        if (completedPlanTask?.id && completedPlanTask.id !== refreshedPlanTaskRef.current) {
-          refreshedPlanTaskRef.current = completedPlanTask.id;
-          void refreshPlan().catch(() => { refreshedPlanTaskRef.current = ''; });
-        }
-      } catch { /* a transient event does not affect the media review UI */ }
-    };
-    return () => sourceEvents.close();
-  }, [batchId, project?.id, project?.assembly_asset_id, current.id]);
-
-  useLayoutEffect(() => {
-    mediaEpoch.current += 1;
-    return () => { mediaEpoch.current += 1; };
-  }, [mediaKey, start, mediaElement]);
-
-  useEffect(() => {
-    advancing.current = false;
-    setPlaying(false);
-    const media = mediaElement;
-    if (!media) return;
-    let cancelled = false;
-    let initialized = false;
-    const epoch = mediaEpoch.current;
-    setMediaLoad({ key: mediaKey, status: 'loading' });
-    const initialize = () => {
-      if (cancelled || mediaRef.current !== media || mediaEpoch.current !== epoch) return;
-      if (media.error) { setMediaLoad({ key: mediaKey, status: 'error' }); return; }
-      if (media.readyState < 3) return;
-      setMediaLoad({ key: mediaKey, status: 'ready' });
-      if (initialized) return;
-      initialized = true;
-      media.currentTime = start;
-      if (autoplayRef.current) {
-        autoplayRef.current = false;
-        void media.play().catch(error => { if (!cancelled && mediaEpoch.current === epoch && mediaRef.current === media && error?.name !== 'AbortError') setNotice('浏览器暂停了自动播放，请点击播放继续。'); });
-      } else { media.pause(); }
-    };
-    const events = ['loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough', 'progress', 'playing'];
-    for (const event of events) media.addEventListener(event, initialize);
-    initialize();
-    return () => { cancelled = true; for (const event of events) media.removeEventListener(event, initialize); };
-  }, [mediaKey, start, mediaElement]);
-
-  useEffect(() => {
     if (lightbox) dialogRef.current?.showModal();
     else dialogRef.current?.close();
   }, [lightbox]);
@@ -659,7 +582,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   function choose(asset: Asset, auto = false) {
     mediaRef.current?.pause();
     autoplayRef.current = auto;
-    setPlaying(false);
     setKind(asset.kind);
     setSelected(asset.id);
     if (!asset.sources?.B) setVariant('A');
@@ -687,32 +609,9 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   function switchKind(next: Kind) {
     mediaRef.current?.pause();
     autoplayRef.current = false;
-    setPlaying(false);
     setKind(next);
     setSelected(next === 'video' ? (planSegments[0]?.id ?? baseAssets.find(asset => asset.kind === 'video')?.id ?? '') : next === 'audio' ? (baseAssets.find(asset => asset.kind === 'audio')?.id ?? '') : (baseAssets.find(asset => asset.kind === 'image')?.id ?? ''));
     setNotice('');
-  }
-
-  function finish() {
-    if (advancing.current) return;
-    advancing.current = true;
-    mediaRef.current?.pause();
-    setPlaying(false);
-    if (continuous && focusList[focusIndex + 1]?.ready) choose(focusList[focusIndex + 1], true);
-    else {
-      autoplayRef.current = false;
-      setNotice(continuous && focusList[focusIndex + 1] ? '下一段尚未生成，连续预览已暂停。' : '本次播放结束。');
-    }
-  }
-
-  async function togglePlay() {
-    const media = mediaRef.current;
-    if (!media || playbackDisabled) return;
-    const epoch = mediaEpoch.current;
-    if (!media.paused) { media.pause(); return; }
-    advancing.current = false;
-    if (media.ended || (duration > 0 && media.currentTime >= start + duration - 0.08)) media.currentTime = start;
-    try { await media.play(); if (mediaEpoch.current === epoch && mediaRef.current === media && media.isConnected) setNotice(''); } catch (error) { if (mediaEpoch.current === epoch && mediaRef.current === media && media.isConnected && !(error instanceof DOMException && error.name === 'AbortError')) setNotice('暂时无法播放，请检查素材是否可读取。'); }
   }
 
   async function persistReview(stage: 'sample' | 'finish' | 'final', status: ReviewRecord['status'], adoptedVariant?: Variant) {
@@ -769,6 +668,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
     setPlanAssembly(data.assembly && typeof data.assembly === 'object' ? data.assembly as PlanAssembly : null);
     void refreshProjectState().catch(() => setNotice('服务器准备度读取失败，请刷新后重试。'));
   }
+  refreshPlanRef.current = refreshPlan;
 
   async function restoreShotVersion(version: ShotVersion) {
     if (!project?.id || !currentPlanSegment || restoringVersion) return;
@@ -1533,19 +1433,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   }
 
   const materialOptions = projectMaterialOptions(project, planSegments);
-
-  const mediaProps = {
-    controls: true, preload: 'metadata',
-    onPlay: () => { setPlaying(true); advancing.current = false; },
-    onPause: () => setPlaying(false),
-    onEnded: finish,
-    onError: (event: { currentTarget: HTMLMediaElement }) => { if (mediaRef.current !== event.currentTarget) return; setMediaLoad({ key: mediaKey, status: 'error' }); setNotice('素材加载失败，请检查本机作品文件。'); },
-    onTimeUpdate: () => {
-      const media = mediaRef.current;
-      if (!media) return;
-      if (kind === 'audio' && !media.paused && media.currentTime >= (current.end ?? Infinity) - 0.04) finish();
-    },
-  };
 
   function workflowEntriesForAsset(asset: Asset): WorkflowCatalogEntry[] {
     const entries = (project?.workflow_catalog ?? []).filter(item => item.asset_id === asset.id);
