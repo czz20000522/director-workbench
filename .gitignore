@@ -27,6 +27,8 @@
 !/backend/routers/reverse_analysis.py
 !/backend/routers/material_library.py
 !/backend/routers/plan_editing.py
+!/backend/routers/private_series.py
+!/backend/routers/project_catalog.py
 !/contracts/
 /contracts/*
 !/docs/
