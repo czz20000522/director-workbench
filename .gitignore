@@ -33,6 +33,7 @@
 !/backend/routers/workbench_status.py
 !/backend/routers/task_entry.py
 !/backend/routers/task_media.py
+!/backend/routers/batch_assembly.py
 !/contracts/
 /contracts/*
 !/docs/
