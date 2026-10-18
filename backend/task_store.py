@@ -7,7 +7,7 @@ import threading
 from pathlib import Path
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 _MIGRATION_LOCK = threading.RLock()
 
 
@@ -18,7 +18,7 @@ def _columns(connection: sqlite3.Connection, table: str) -> set[str]:
 def _backfill_idempotency(connection: sqlite3.Connection) -> None:
     """Keep the oldest legacy row for a duplicate key, matching find_submission_task."""
     rows = connection.execute(
-        "SELECT id, project_id, payload FROM tasks "
+        "SELECT id, project_id, payload, batch_id FROM tasks "
         "WHERE json_extract(payload, '$.submission_receipt.key') IS NOT NULL "
         "ORDER BY project_id, created_at, rowid"
     ).fetchall()
@@ -36,8 +36,8 @@ def _backfill_idempotency(connection: sqlite3.Connection) -> None:
             continue
         seen.add(identity)
         connection.execute(
-            "INSERT OR IGNORE INTO task_idempotency(project_id, idempotency_key, task_id) VALUES (?, ?, ?)",
-            (*identity, row[0]),
+            "INSERT OR IGNORE INTO task_idempotency(project_id, idempotency_key, task_id, batch_id) VALUES (?, ?, ?, ?)",
+            (*identity, row[0], row[3]),
         )
 
 
@@ -87,9 +87,13 @@ def _migrate(connection: sqlite3.Connection) -> None:
             project_id TEXT NOT NULL,
             idempotency_key TEXT NOT NULL,
             task_id TEXT PRIMARY KEY,
+            batch_id TEXT,
             UNIQUE(project_id, idempotency_key)
         )"""
     )
+    if "batch_id" not in _columns(connection, "task_idempotency"):
+        connection.execute("ALTER TABLE task_idempotency ADD COLUMN batch_id TEXT")
+    connection.execute("UPDATE task_idempotency SET batch_id=(SELECT batch_id FROM tasks WHERE tasks.id=task_id) WHERE batch_id IS NULL")
     _backfill_idempotency(connection)
     connection.execute("DROP TRIGGER IF EXISTS tasks_idempotency_after_insert")
     connection.execute("DROP TRIGGER IF EXISTS tasks_idempotency_after_payload_update")
@@ -98,11 +102,14 @@ def _migrate(connection: sqlite3.Connection) -> None:
         AFTER INSERT ON tasks
         WHEN json_extract(NEW.payload, '$.submission_receipt.key') IS NOT NULL
              AND (NEW.batch_id IS NULL OR NOT EXISTS (
-                 SELECT 1 FROM tasks WHERE id <> NEW.id AND batch_id = NEW.batch_id
+                 SELECT 1 FROM task_idempotency
+                 WHERE project_id = COALESCE(NEW.project_id, '')
+                   AND idempotency_key = json_extract(NEW.payload, '$.submission_receipt.key')
+                   AND batch_id IS NEW.batch_id
              ))
         BEGIN
-            INSERT INTO task_idempotency(project_id, idempotency_key, task_id)
-            VALUES (COALESCE(NEW.project_id, ''), json_extract(NEW.payload, '$.submission_receipt.key'), NEW.id);
+            INSERT INTO task_idempotency(project_id, idempotency_key, task_id, batch_id)
+            VALUES (COALESCE(NEW.project_id, ''), json_extract(NEW.payload, '$.submission_receipt.key'), NEW.id, NEW.batch_id);
         END"""
     )
     connection.execute(
@@ -110,11 +117,14 @@ def _migrate(connection: sqlite3.Connection) -> None:
         AFTER UPDATE OF payload, project_id ON tasks
         WHEN json_extract(NEW.payload, '$.submission_receipt.key') IS NOT NULL
              AND (NEW.batch_id IS NULL OR NOT EXISTS (
-                 SELECT 1 FROM tasks WHERE id <> NEW.id AND batch_id = NEW.batch_id
+                 SELECT 1 FROM task_idempotency
+                 WHERE project_id = COALESCE(NEW.project_id, '')
+                   AND idempotency_key = json_extract(NEW.payload, '$.submission_receipt.key')
+                   AND batch_id IS NEW.batch_id
              ))
         BEGIN
-            INSERT INTO task_idempotency(project_id, idempotency_key, task_id)
-            VALUES (COALESCE(NEW.project_id, ''), json_extract(NEW.payload, '$.submission_receipt.key'), NEW.id)
+            INSERT INTO task_idempotency(project_id, idempotency_key, task_id, batch_id)
+            VALUES (COALESCE(NEW.project_id, ''), json_extract(NEW.payload, '$.submission_receipt.key'), NEW.id, NEW.batch_id)
             ON CONFLICT(task_id) DO UPDATE SET project_id=excluded.project_id, idempotency_key=excluded.idempotency_key;
         END"""
     )
@@ -124,10 +134,12 @@ def _migrate(connection: sqlite3.Connection) -> None:
 def configure(connection: sqlite3.Connection, database_path: str | Path | None = None) -> sqlite3.Connection:
     """Configure one connection and run the repeatable schema migration."""
     connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA journal_mode=WAL")
-    connection.execute("PRAGMA synchronous=NORMAL")
-    connection.execute("PRAGMA busy_timeout=5000")
     with _MIGRATION_LOCK:
+        # WAL mode changes the database header and must be serialized before
+        # concurrent worker connections begin their first write.
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA synchronous=NORMAL")
+        connection.execute("PRAGMA busy_timeout=5000")
         version = int(connection.execute("PRAGMA user_version").fetchone()[0])
         if version < SCHEMA_VERSION:
             _migrate(connection)
