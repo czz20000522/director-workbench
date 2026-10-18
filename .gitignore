@@ -30,6 +30,7 @@
 !/backend/routers/private_series.py
 !/backend/routers/project_catalog.py
 !/backend/routers/project_transfer.py
+!/backend/routers/workbench_status.py
 !/contracts/
 /contracts/*
 !/docs/
