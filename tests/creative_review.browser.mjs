@@ -51,7 +51,18 @@ try {
   await page.getByText('参考、时长与版本对照', { exact: true }).click();
   await page.waitForFunction(() => [...document.querySelectorAll('video')].length === 2 && [...document.querySelectorAll('video')].every(v => v.readyState >= 3));
   const align = page.getByRole('button', { name: '定位两侧片段起点' });
-  assert.ok(await align.isEnabled());
+  // The comparison control is enabled by React state fed by the media elements' events, so it
+  // follows their readyState by a render. Waiting for it keeps the coverage without sampling
+  // it in the same tick as readyState; a gate that never recovers still fails here.
+  const alignReady = async () => {
+    const started = Date.now();
+    for (;;) {
+      if (await align.isEnabled()) return;
+      assert.ok(Date.now() - started < 8000, 'The alignment control must become enabled once both sides are decodable');
+      await page.waitForTimeout(10);
+    }
+  };
+  await alignReady();
   await align.click();
   const media = await page.locator('video').evaluateAll(videos => videos.map(v => ({ duration: v.duration, ready: v.readyState, audio: v.mozHasAudio, currentTime: v.currentTime })));
   assert.equal(media[0].duration, .5);
@@ -60,7 +71,7 @@ try {
   assert.ok((await page.locator('body').innerText()).includes('无音轨'));
   await page.getByLabel('右侧对照').selectOption('first');
   await page.waitForFunction(() => [...document.querySelectorAll('video')].every(v => v.readyState >= 3));
-  assert.ok(await align.isEnabled());
+  await alignReady();
   await page.getByLabel('右侧对照').selectOption('reference');
   await page.getByText('重做理由与影响（仅预告，不提交）', { exact: true }).click();
   assert.ok((await page.locator('body').innerText()).includes('需主动核对输入'));
@@ -86,7 +97,7 @@ try {
   await page.evaluate(() => window.mount('inspection', 4));
   await page.getByText('参考、时长与版本对照', { exact: true }).click();
   await page.waitForFunction(() => [...document.querySelectorAll('video')].every(v => v.readyState >= 3));
-  assert.ok(await align.isEnabled());
+  await alignReady();
   await page.evaluate(() => window.mount('sound'));
   await page.locator('.assembly-edit-panel > summary').click();
   await page.getByLabel('音轨方式').selectOption('mute');

@@ -58,29 +58,42 @@ try {
   const batchRestored = !(await batchPanel.textContent()).includes('未运行批次') && await batchPanel.getByRole('button', { name: '启动可执行片段批次' }).isDisabled();
   await page.getByRole('button', { name: '分镜制作', exact: true }).click();
   const preview = page.getByRole('region', { name: '当前片段预览', exact: true });
+  // The player's gate is React state fed by the media element's events, so it follows the
+  // element's own readyState by a render (measured 1-33 ms, never stuck). Waiting for the
+  // control keeps the coverage while not sampling it in the same tick as readyState, which
+  // raced that render; a gate that never opens still fails here, naming the control.
+  const gate = async label => {
+    const started = Date.now();
+    const control = preview.getByRole('button', { name: label, exact: true });
+    for (;;) {
+      if (await control.isEnabled()) return Date.now() - started;
+      assert.ok(Date.now() - started < 8000, `${label} must become enabled once its media is decodable`);
+      await page.waitForTimeout(10);
+    }
+  };
   await preview.locator('video').waitFor();
   await page.waitForFunction(() => { const video=document.querySelector('video[aria-label="S01 视频预览"]');return video?.readyState>=3 && !video.error; });
-  const outerReady = await preview.getByRole('button', { name: '播放当前片段', exact: true }).isEnabled();
-  console.log(JSON.stringify({ reproduced_batch_restore_gap: !batchRestored, reproduced_player_ready_gap: !outerReady, native_media: await preview.locator('video').evaluate(v => ({ readyState: v.readyState, duration: v.duration, width: v.videoWidth, error: v.error?.code })) }));
+  // Mounted decodable media must enable its external player after the deferred plan load.
+  const gateWaitMs = await gate('播放当前片段');
+  console.log(JSON.stringify({ reproduced_batch_restore_gap: !batchRestored, player_gate_wait_ms: gateWaitMs, native_media: await preview.locator('video').evaluate(v => ({ readyState: v.readyState, duration: v.duration, width: v.videoWidth, error: v.error?.code })) }));
   assert.ok(batchRestored, 'Persisted Agent batch must restore its status and stop action after project load');
-  assert.ok(outerReady, 'Mounted decodable media must enable its external player after deferred plan load');
   await preview.getByRole('button', { name: '播放当前片段', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('video[aria-label="S01 视频预览"]')?.currentTime > 0.1);
   await page.evaluate(records => window.streams.forEach(stream => stream.onmessage?.({ data: JSON.stringify({ tasks: records }) })), tasks);
-  assert.ok(await preview.getByRole('button', { name: '暂停当前片段', exact: true }).isEnabled());
+  await gate('暂停当前片段');
   await preview.getByRole('button', { name: '暂停当前片段', exact: true }).click();
   await preview.getByRole('button', { name: '下一段', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('video[aria-label="S02 视频预览"]')?.readyState >= 3);
-  assert.ok(await preview.getByRole('button', { name: '播放当前片段', exact: true }).isEnabled());
+  await gate('播放当前片段');
   await preview.getByRole('button', { name: '上一段', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('video[aria-label="S01 视频预览"]')?.readyState >= 3);
-  assert.ok(await preview.getByRole('button', { name: '播放当前片段', exact: true }).isEnabled());
+  await gate('播放当前片段');
   // Remount same cached source after leaving the page; retain a real ready gate.
   await page.getByRole('button', { name: '任务与成片', exact: true }).click();
   await batchPanel.getByRole('button', { name: '停止批次', exact: true }).waitFor();
   await page.getByRole('button', { name: '分镜制作', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('video[aria-label="S01 视频预览"]')?.readyState >= 3);
-  assert.ok(await preview.getByRole('button', { name: '播放当前片段', exact: true }).isEnabled());
+  await gate('播放当前片段');
   // Polling restores terminal results, rather than retaining an obsolete running batch.
   tasks = tasks.map((row,index) => ({ ...row, status: index ? 'stopped' : 'succeeded' }));
   await page.evaluate(records => window.streams.forEach(stream => stream.onmessage?.({ data: JSON.stringify({ tasks: records }) })), tasks);
@@ -104,12 +117,12 @@ try {
   tasks[0] = { ...tasks[0], id: 'replacement-ok' };
   await page.evaluate(records => window.streams.forEach(stream => stream.onmessage?.({ data: JSON.stringify({ tasks: records }) })), tasks);
   await page.waitForFunction(() => { const v=document.querySelector('video[aria-label="S01 视频预览"]');return v?.readyState>=3 && !v.error; });
-  assert.ok(await preview.getByRole('button', { name: '播放当前片段', exact: true }).isEnabled());
+  await gate('播放当前片段');
   await preview.getByLabel('连续播放', { exact: true }).check();
   await preview.getByRole('button', { name: '播放当前片段', exact: true }).click();
   await preview.locator('video').evaluate(v => { v.currentTime = v.duration - 0.2; });
   await page.waitForFunction(() => { const v=document.querySelector('video[aria-label="S02 视频预览"]');return v?.readyState>=3 && !v.paused; });
-  assert.ok(await preview.getByRole('button', { name: '暂停当前片段', exact: true }).isEnabled());
+  await gate('暂停当前片段');
   assert.deepEqual(errors, []);
   console.log(`Client restoration browser passed: persisted batch/terminal results, deferred mount, real MP4 play/poll/switch/cache/page-reentry/reload/error/change-source/continuous; ${requestCount} reads, zero creative writes`);
 } finally { await browser.close(); }
