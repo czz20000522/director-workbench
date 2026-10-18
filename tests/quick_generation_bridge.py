@@ -17,21 +17,26 @@ from fastapi.testclient import TestClient
 from backend import app as backend
 from test_enhancement import nodes as enhancement_nodes
 from test_private_workbench import private_workbench
-from test_creation_assistant import assistant
-from test_automatic_creation import complete_frozen_task
+from test_automatic_creation import complete_frozen_task, seed_test_models
 from test_keyframe_inputs import reference_image
 
 root = Path(sys.argv[1]).resolve()
 root.mkdir(parents=True, exist_ok=False)
 patch = pytest.MonkeyPatch()
-clients = private_workbench.__wrapped__(root, patch)
-owner, other, queued = assistant.__wrapped__(clients, patch)
+owner, other, _, _ = private_workbench.__wrapped__(root, patch)
+seed_test_models(backend.ROOT)
+queued = []
+patch.setattr(backend, 'queue_task', queued.append)
+patch.setattr(backend, 'require_submission_capacity', lambda: {})
 builder = backend.PROJECT / 'tools' / 'build_assembly_workflow.py'
 builder.parent.mkdir(parents=True, exist_ok=True)
 shutil.copy2(Path(__file__).resolve().parents[1] / 'tools' / builder.name, builder)
 patch.setattr(backend, 'keyframe_capability', lambda **kwargs: {'available': True})
 patch.setattr(backend.keyframes, 'capability', lambda *args, **kwargs: {'available': True})
-engine = backend.request_json
+def engine(path, *args, **kwargs):
+    if path == '/queue': return {'queue_running': [], 'queue_pending': []}
+    if path == '/system_stats': return {'system': {}, 'devices': []}
+    pytest.fail('Quick generation must not contact an engine: ' + path)
 patch.setattr(backend, 'request_json', lambda path, *args, **kwargs: enhancement_nodes(True) if path == '/object_info' else engine(path, *args, **kwargs))
 logging.getLogger('httpx').setLevel(logging.WARNING)
 backend.app.user_middleware[0].kwargs['origins'] = ('http://testserver', 'http://localhost:4197')

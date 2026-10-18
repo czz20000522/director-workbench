@@ -98,7 +98,6 @@ assert backend.CURRENT_PROJECT_ID == ''
 assert not backend.PROJECT_CATALOG_PATH.exists()
 assert not backend.PLAN_PATH.exists()
 client = TestClient(private_app.app)
-assert client.get('/.well-known/director-workbench.json').status_code == 200
 assert client.post('/api/auth/login', json={'username':'user001','password':'synthetic-password'}).status_code == 200
 response = client.get('/api/projects')
 assert response.status_code == 200, response.text

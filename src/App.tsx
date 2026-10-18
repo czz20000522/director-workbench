@@ -24,9 +24,6 @@ import DeleteDirectoryDialog from './DeleteDirectoryDialog';
 import ShotPromptEditor from './ShotPromptEditor';
 import FirstUseGuide from './FirstUseGuide';
 import TaskQueueStatus from './TaskQueueStatus';
-import ConnectAgent from './components/ConnectAgent';
-import AgentPageBridge, { type AgentPageAction, type AgentPageActionReceipt } from './components/AgentPageBridge';
-import CreationAssistant, { type AssistantPresentationEvent } from './components/CreationAssistant';
 import { blockerMessage, readinessStateLabel, type ProjectReadiness, type ReadinessItem } from './readiness';
 import { assetLabel, assetTitle, type TreeKind } from './shotLabels';
 import './quick-create.css';
@@ -244,8 +241,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const [position, setPosition] = useState(0);
   const [notice, setNotice] = useState('');
   const pageInteraction = useRef(0);
-  const agentDraft = useRef<{ projectId: string; draft: SegmentDraft; generation: ShotGenerationSettings; interaction: number } | null>(null);
-  const [agentStep, setAgentStep] = useState('');
   useEffect(() => {
     if (!project?.id) { setReusableTemplates([]); return; }
     const controller = new AbortController();
@@ -258,8 +253,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
 
   useEffect(() => {
     const interacted = (event: Event) => {
-      const target = event.target as HTMLElement | null;
-      if (!event.isTrusted || target?.closest('[aria-label="创作助手"], [aria-label="Agent 标签页引导"], [aria-label="连接你的Agent"], [data-agent-connect]')) return;
+      if (!event.isTrusted) return;
       pageInteraction.current += 1;
     };
     document.addEventListener('input', interacted);
@@ -488,12 +482,8 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const batchActive = batchTasks.some(task => activeTaskStates.includes(task.status));
   const resourceReleaseBlocked = batchActive || activeTaskStates.includes(taskState) || activeTaskStates.includes(assemblyTaskState);
   const currentPlanSegment = planSegments.find(segment => segment.id === current.id);
-  const ownedAgentDraft = agentDraft.current?.projectId === segmentDraftKey &&
-    agentDraft.current.interaction === pageInteraction.current &&
-    JSON.stringify(agentDraft.current.draft) === JSON.stringify(segmentDraft) &&
-    JSON.stringify(agentDraft.current.generation) === JSON.stringify(generationDraft);
-  const agentView = useRef({ projectId: project?.id, assetId: current.id, source });
-  agentView.current = { projectId: project?.id, assetId: current.id, source };
+  const viewContext = useRef({ projectId: project?.id, assetId: current.id, source });
+  viewContext.current = { projectId: project?.id, assetId: current.id, source };
   const savedReadiness = projectState?.readiness;
   const currentReadiness = savedReadiness?.segments.find(segment => segment.asset_id === current.id);
   const isAssemblyAsset = Boolean(project?.assembly_asset_id && current.id === project.assembly_asset_id);
@@ -1217,165 +1207,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
     } catch (error) { if (reportFailure) throw error; setNotice(error instanceof Error ? error.message : '项目切换失败。'); }
   }
 
-  async function presentAgentAction(action: AgentPageAction): Promise<AgentPageActionReceipt> {
-    const startingInteraction = pageInteraction.current;
-    const target = action.target, values = action.values;
-    const savedFields: Partial<SegmentEdit> = currentPlanSegment ? {
-      prompt: currentPlanSegment.prompt ?? '', location: currentPlanSegment.location ?? '', shot_size: currentPlanSegment.shot_size ?? '',
-      camera: currentPlanSegment.camera ?? '', wardrobe: currentPlanSegment.wardrobe ?? '', performance: currentPlanSegment.performance ?? '',
-      workflow: currentPlanSegment.workflow ?? '', first_frame: currentPlanSegment.keyframes?.first ?? '', last_frame: currentPlanSegment.keyframes?.last ?? '',
-      audio_guide: currentPlanSegment.audio?.guide ?? '', delivery_master: currentPlanSegment.audio?.delivery_master ?? '', dependencies: (currentPlanSegment.dependencies ?? []).join(', '),
-    } : {};
-    const savedGeneration = currentPlanSegment?.generation ?? { mode: 'advanced', aspect_ratio: '16:9', sound_mode: 'performance_reference', seed: 42, speed_profile: 'standard', creative_profile: 'general' };
-    const dirty = Boolean(drafts[current.id]?.prompt !== undefined ||
-      (currentPlanSegment && (Object.entries(savedFields).some(([key, value]) => segmentEdit[key as keyof SegmentEdit] !== value) ||
-        Number(segmentEdit.duration_seconds) !== currentPlanSegment.duration_seconds ||
-        (['mode', 'aspect_ratio', 'sound_mode', 'seed', 'speed_profile', 'creative_profile'] as const).some(key => generationEdit[key] !== savedGeneration[key]))) ||
-      (segmentFormOpen && segmentDraft.prompt.trim() && !(ownedAgentDraft && agentDraft.current?.interaction === startingInteraction)));
-    if (dirty) return { status: 'takeover', message: '编辑器有未保存输入；没有覆盖，请先保存或手动接管。' };
-    setAgentStep('Agent正在定位当前操作…');
-    try {
-      const pid = target.project_id ?? project?.id;
-      if (!pid) throw new Error('请先由 Agent 创建作品，再指定真实作品编号。');
-      if (action.kind === 'show_task' && !target.task_id) throw new Error('定位任务需要真实任务编号。');
-      if (!['show_draft', 'locate', 'navigate', 'open_candidate', 'play', 'pause', 'show_preflight', 'show_task'].includes(action.kind)) throw new Error('页面动作不受支持。');
-      if (target.task_id && ['open_candidate', 'play', 'pause'].includes(action.kind)) {
-        if (!target.asset_id) throw new Error('定位任务候选需要明确目标分镜编号。');
-        const response = await fetch(`/api/projects/${encodeURIComponent(pid)}/segments/${encodeURIComponent(target.asset_id)}/versions?limit=100&offset=0`);
-        if (!response.ok) throw new Error('目标候选版本不可读取，未操作播放器。');
-        const versions = await response.json() as { current_version_task_id?: string; items: ShotVersion[] };
-        const currentTaskId = versions.current_version_task_id ?? versions.items.find(version => version.is_current)?.task_id;
-        if (currentTaskId !== target.task_id) return { status: 'not_presented', message: '指定任务未确认为当前候选；请在历史版本中查看，页面没有切换、恢复或播放其他候选。' };
-      }
-      const settled = () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-      let documentPlan: { segments: PlanSegment[]; revision: number; assembly?: PlanAssembly | null } | undefined;
-      if (target.project_id) {
-        const response = await fetch(`/api/projects/${encodeURIComponent(target.project_id)}/plan`);
-        const document = await response.json(); documentPlan = document;
-        if (!response.ok) throw new Error('目标作品不可读取，请核对本人作品。');
-        if (target.revision !== undefined && Number(target.revision) !== (Number(document.revision) || 0)) {
-          return { status: 'not_presented', message: '目标计划版本已变化；没有填入或执行页面动作。' };
-        }
-        if (startingInteraction !== pageInteraction.current) return { status: 'takeover', message: '用户已接管页面，停止后续定位。' };
-        if (target.project_id !== project?.id) await selectProject(target.project_id, true, startingInteraction);
-        else {
-          const manifestResponse = await fetch(`/api/projects/${encodeURIComponent(pid)}`);
-          if (!manifestResponse.ok) throw new Error('目标作品刷新失败。');
-          const manifest = await manifestResponse.json() as ProjectManifest;
-          if (manifest.id !== pid) throw new Error('目标作品回执不一致。');
-          if (startingInteraction !== pageInteraction.current) return { status: 'takeover', message: '用户已接管页面，停止后续定位。' };
-          setProject(manifest);
-        }
-        await settled();
-        if (agentView.current.projectId !== pid) throw new Error('目标作品尚未定位，未执行页面动作。');
-        if (startingInteraction !== pageInteraction.current) return { status: 'takeover', message: '用户已接管页面，停止后续定位。' };
-        setPlanSegments(document.segments); setPlanRevision(Number(document.revision) || 0); setPlanAssembly(document.assembly ?? null);
-      }
-      if (startingInteraction !== pageInteraction.current) return { status: 'takeover', message: '用户已接管页面，停止后续定位。' };
-      setWorkspaceMode('production'); setArchive(null);
-      if (action.kind === 'navigate') {
-        const page = values.page ?? 'shots';
-        if (!['shots', 'script', 'creative', 'delivery'].includes(page)) throw new Error('目标页面不受支持。');
-        setWorkspacePage(page as 'shots' | 'script' | 'creative' | 'delivery');
-      } else if (action.kind === 'show_draft') {
-        const raw = newSegmentDrafts[pid] ?? readNewSegmentDraft(pid);
-        if (raw.prompt.trim() && !(agentDraft.current?.projectId === pid && agentDraft.current.interaction === startingInteraction && JSON.stringify(agentDraft.current.draft) === JSON.stringify(raw))) return { status: 'takeover', message: '目标作品有未保存草稿，没有覆盖。' };
-        const draft = { ...raw,
-          prompt: values.prompt ?? '', segment_id: target.asset_id ?? '', duration_seconds: String(values.duration_seconds ?? 5),
-        };
-        const generation: ShotGenerationSettings = { mode: 'auto', aspect_ratio: '16:9', sound_mode: 'performance_reference', seed: 42, speed_profile: 'standard', creative_profile: 'general', ...(values.generation as Partial<ShotGenerationSettings> | undefined) };
-        agentDraft.current = { projectId: pid, draft, generation, interaction: startingInteraction };
-        setNewSegmentDrafts(previous => ({ ...previous, [pid]: draft }));
-        setGenerationDraft(generation); setAdvancedOpen(false);
-        setQuickMode(false);
-        setWorkspacePage('shots'); setSegmentFormOpen(true);
-        setAgentStep('已在添加分镜编辑器填入草稿；尚未保存或生成。');
-      } else {
-        setSegmentFormOpen(false);
-        const owned = agentDraft.current;
-        if (owned?.projectId === pid && owned.interaction === startingInteraction && documentPlan?.segments.some(segment => segment.id === owned.draft.segment_id && segment.prompt === owned.draft.prompt && segment.duration_seconds === Number(owned.draft.duration_seconds))) {
-          // Clear only this unchanged Agent draft after its actual save is read back from the plan.
-          setNewSegmentDrafts(previous => JSON.stringify(previous[pid] ?? readNewSegmentDraft(pid)) === JSON.stringify(owned.draft) ? { ...previous, [pid]: emptySegmentDraft() } : previous);
-          agentDraft.current = null;
-        }
-        if (target.asset_id && documentPlan && !documentPlan.segments.some(segment => segment.id === target.asset_id) && project?.assembly_asset_id !== target.asset_id) throw new Error('目标分镜不存在，未回退到其他素材。');
-        if (target.asset_id) { mediaRef.current?.pause(); setKind('video'); setSelected(target.asset_id); }
-        setWorkspacePage(action.kind === 'show_task' ? 'delivery' : 'shots');
-        if (action.kind === 'show_task' && target.project_id && target.task_id) {
-          const response = await fetch(`/api/projects/${encodeURIComponent(target.project_id)}/tasks/${encodeURIComponent(target.task_id)}`);
-          const task = await response.json();
-          if (!response.ok || task.id !== target.task_id || task.project_id !== pid || (target.asset_id && task.asset_id !== target.asset_id)) throw new Error('原任务不可读取或目标不一致，未伪造执行状态。');
-          setCurrentTask(task); setTaskId(task.id); setTaskState(task.status);
-          setProjectTasks(previous => [task, ...previous.filter(record => record.id !== task.id)]);
-          setAgentStep(`任务 ${task.id} · ${taskStateLabel(task.status)}；来自原任务回执，没有再次提交。`);
-        }
-        if (action.kind === 'show_preflight') {
-          const stateResponse = await fetch(`/api/projects/${encodeURIComponent(pid)}/state`);
-          if (!stateResponse.ok) throw new Error('原准备度暂不可读取。');
-          const state = await stateResponse.json() as ProjectState;
-          if (state.project_id !== pid || agentView.current.projectId !== pid) throw new Error('准备度作品归属不一致。');
-          setProjectState(state);
-          setAgentStep('已定位原准备度和服务端阻塞原因；页面定位未额外提交生成。');
-        }
-      }
-      await settled();
-      if (startingInteraction !== pageInteraction.current) return { status: 'takeover', message: '用户正在操作，停止后续页面动作。' };
-      if (action.kind === 'locate') { setShotEditTab('prompt'); await settled(); }
-      if (action.kind === 'play' || action.kind === 'pause') {
-        if (!target.asset_id) throw new Error('播放或暂停需要明确目标分镜编号。');
-        const expectedSource = sharedMediaUrl(documentPlan?.segments.find(segment => segment.id === target.asset_id)?.video?.path) ?? agentView.current.source;
-        if (!expectedSource) throw new Error('目标分镜尚无可播放的候选。');
-        const expectedUrl = new URL(expectedSource, location.href).href;
-        const matches = (media: HTMLMediaElement | null) => Boolean(media?.isConnected && agentView.current.projectId === pid && agentView.current.assetId === target.asset_id && media.getAttribute('aria-label') === `${target.asset_id} 视频预览` && media.src === expectedUrl && (!media.currentSrc || media.currentSrc === expectedUrl));
-        const deadline = Date.now() + 5000;
-        while (Date.now() < deadline && (!matches(mediaRef.current) || (mediaRef.current?.readyState ?? 0) < 3)) {
-          if (startingInteraction !== pageInteraction.current) return { status: 'takeover', message: '用户已接管播放器，未继续播放。' };
-          if (matches(mediaRef.current) && mediaRef.current?.error) throw new Error('目标候选加载失败，未播放其他素材。');
-          await settled();
-        }
-        const media = mediaRef.current;
-        if (!matches(media) || !media || media.readyState < 3) return { status: 'not_presented', message: '目标候选尚未载入，请在原播放器点击播放。' };
-        if (action.kind === 'pause') media.pause();
-        else await media.play();
-        if (!matches(media) || mediaRef.current !== media || startingInteraction !== pageInteraction.current) return { status: 'takeover', message: '播放器目标已改变，停止后续操作。' };
-        if (action.kind === 'play' && media.paused) return { status: 'not_presented', message: '浏览器未开始播放，请点击原播放按钮。' };
-        setAgentStep(action.kind === 'play' ? '原播放器已开始播放。' : '原播放器已暂停。');
-      }
-      const editor = document.querySelector<HTMLElement>(action.kind === 'show_draft' ? '[aria-label="添加分镜"]' : '.director-edit, .director-readiness');
-      editor?.scrollIntoView({ block: 'nearest' });
-      if (action.kind === 'show_draft' && !editor) return { status: 'not_presented', message: '添加分镜编辑器未显示，未声称已填入。' };
-      if (action.kind === 'show_draft' && (editor?.querySelector('textarea')?.value !== (values.prompt ?? '') || agentView.current.projectId !== pid)) return { status: 'not_presented', message: '目标编辑器原文尚未显示，未声称已填入。' };
-      return { status: 'presented', message: action.kind === 'show_draft' ? '原编辑器已显示未保存草稿。' : '目标页面已呈现；不代表审核、采用或交付。' };
-    } catch (error) {
-      if (startingInteraction !== pageInteraction.current) return { status: 'takeover', message: '用户已接管页面，没有继续呈现。' };
-      return { status: 'not_presented', message: error instanceof Error ? error.message : '页面未呈现，请使用原控件继续。' };
-    }
-  }
-
-  async function presentAssistantEvent(event: AssistantPresentationEvent): Promise<AgentPageActionReceipt> {
-    const kinds: Record<string, string> = { saved: 'locate', preflight: 'show_preflight', submitted: 'show_task', candidate: 'open_candidate' };
-    return presentAgentAction({ id: `assistant-${event.seq}`, seq: event.seq, status: 'pending',
-      kind: kinds[event.kind] ?? event.kind,
-      target: { project_id: event.project_id, asset_id: event.asset_id, task_id: event.task_id },
-      values: { prompt: event.text, duration_seconds: event.duration_seconds, generation: event.generation, page: 'shots' },
-    });
-  }
-
-  async function openAssistantResult(result: { project_id?: string; asset_id?: string; task_id?: string }) {
-    let kind = result.asset_id ? 'locate' : 'navigate';
-    if (result.task_id && result.project_id) {
-      try {
-        const response = await fetch(`/api/projects/${encodeURIComponent(result.project_id)}/tasks/${encodeURIComponent(result.task_id)}`);
-        if (!response.ok) throw new Error('原任务暂不可读取，请重新登录或查询。');
-        const task = await response.json();
-        kind = task.status === 'succeeded' ? 'open_candidate' : 'show_task';
-      } catch (error) { setNotice(error instanceof Error ? error.message : '原任务读取失败。'); return; }
-    }
-    const receipt = await presentAgentAction({ id: 'assistant-result', seq: 0, status: 'pending', kind,
-      target: result, values: { page: 'shots' } });
-    if (receipt.status !== 'presented') setNotice(receipt.message ?? '页面尚未呈现，请保留原输入后继续。');
-  }
-
   async function importWorkspace() {
     if (!importPath.trim()) { setNotice('请输入 D:\\Comfy-Desktop 内的工作目录路径。'); return; }
     try {
@@ -1636,7 +1467,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
         body: JSON.stringify({ asset_id: target?.assetId ?? current.id, values }),
       });
       const data = await response.json();
-      if (activeProjectId.current !== project.id || agentView.current.assetId !== (target?.assetId ?? current.id)) return null;
+      if (activeProjectId.current !== project.id || viewContext.current.assetId !== (target?.assetId ?? current.id)) return null;
       if (data.readiness || data.detail?.readiness) setDraftReadiness(data.readiness ?? data.detail.readiness);
       if (!response.ok) {
         const reasons = (data.detail?.blockers ?? data.detail?.readiness?.blockers ?? []).map(blockerMessage);
@@ -1717,11 +1548,11 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
       localStorage.removeItem(storageKey); uncertain = false;
       if (activeProjectId.current !== project.id) return;
       setProjectTasks(previous => [data as TaskRecord, ...previous.filter(task => task.id !== data.id)]);
-      if (agentView.current.assetId === assetId) { setCurrentTask(data as TaskRecord); setTaskState(normalizeLiveTaskState(data.status ?? '')); setTaskId(data.id); }
+      if (viewContext.current.assetId === assetId) { setCurrentTask(data as TaskRecord); setTaskState(normalizeLiveTaskState(data.status ?? '')); setTaskId(data.id); }
       setNotice(pending ? '已核对上次提交回执，没有创建重复任务。' : '已收到生成任务回执。');
     } catch (error) {
       if (activeProjectId.current !== project.id) return;
-      if (agentView.current.assetId === assetId) setTaskState('');
+      if (viewContext.current.assetId === assetId) setTaskState('');
       setNotice(uncertain ? '提交结果尚未确认。原请求已保留；再次点击生成会核对同一请求，不会使用新参数重复提交。' : error instanceof Error ? error.message : '提交准备失败。');
     } finally { submittingShot.current = false; }
   }
@@ -2268,9 +2099,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
       {materialBridgeOpen && <MaterialBridge projectId={project?.id ?? ''} initialMode={materialBridgeDevice ? 'device' : 'server'} onClose={() => { setMaterialBridgeOpen(false); setMaterialBridgeDevice(false); }} onRegistered={count => { void refreshRegisteredMaterials(count); }} />}
       {creativeConflictPanel}
       {batchId && <div className="director-batch-note" role="note">批次参数语义：按每个分镜自己的计划与源工作流冻结；当前片段 Inspector 的修改只影响单段重做。需要批量改参时，请先逐段确认后再提交。</div>}
-      <details className="quick-agent-settings" open={panelOpen('agent-connect', !quickShell)}><summary onClick={rememberPanel('agent-connect')}>连接与 Agent 设置</summary><ConnectAgent /></details>
-      {privateMode && <CreationAssistant projectId={project?.id} onPresentation={presentAssistantEvent} onResult={result => void openAssistantResult(result)} />}
-      {privateMode && <>{agentStep && <div className="director-readiness" role="status" aria-label="Agent 页面进度">{agentStep}</div>}<details className="quick-agent-settings" open={panelOpen('agent-page', !quickShell)}><summary onClick={rememberPanel('agent-page')}>Agent 页面操作</summary><AgentPageBridge onAction={presentAgentAction} /></details></>}
       {notice && <div className="director-toast" role="status"><Check size={16} /><span>{notice}</span></div>}
       {deleteDirectory && <DeleteDirectoryDialog target={deleteDirectory} onClose={() => setDeleteDirectory(null)} onDeleted={() => { void afterDirectoryDeleted(); }} />}
       {deleteShotOpen && currentPlanSegment && <div className="director-delete-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setDeleteShotOpen(false); }}><section className="director-delete-dialog" role="dialog" aria-modal="true" aria-label="删除分镜"><h2>删除分镜 {currentPlanSegment.id}？</h2><p>会从本作品的制作计划移除这一段，并重排后续时间轴。生成记录与可能被其他分镜共用的素材仍保留。</p><div className="director-delete-actions"><button type="button" className="button secondary compact" onClick={() => setDeleteShotOpen(false)}>取消</button><button type="button" className="button danger compact" disabled={deletingShot} onClick={() => void deleteCurrentShot()}>{deletingShot ? '删除中…' : '删除分镜'}</button></div></section></div>}

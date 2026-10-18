@@ -3,7 +3,6 @@ import { Clapperboard } from 'lucide-react';
 import App from './App';
 import './login.css';
 import { bindSessionUser } from './sessionFetch';
-import ConnectAgent from './components/ConnectAgent';
 
 type WorkspaceUser = { username: string; workspace: string };
 
@@ -86,7 +85,6 @@ export default function LoginGate() {
       <div className="workspace-login-mark"><Clapperboard size={25} aria-hidden="true" /></div>
       <h1 id="workspace-login-title">登录导演工作台</h1>
       <p className="workspace-login-intro">进入你的创作空间</p>
-      <ConnectAgent />
       <form onSubmit={login}>
         <label htmlFor="workspace-username">用户名</label>
         <input id="workspace-username" name="username" autoComplete="username" autoCapitalize="none" spellCheck={false} required autoFocus value={username} onChange={event => setUsername(event.target.value)} disabled={busy} placeholder="例如 user001" />

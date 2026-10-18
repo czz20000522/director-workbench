@@ -1,8 +1,8 @@
 """Scratch directories for tests that have to write inside the machine runtime tree.
 
-The machine runtime tree also holds live roots — accounts, agent pages, the checkout's
-relocation backup — so a test does not invent a directory there on its own: it asks
-here and gets a directory this module owns and prunes.  Both ways in are bounded:
+The machine runtime tree also holds live roots — accounts, the checkout's relocation
+backup — so a test does not invent a directory there on its own: it asks here and gets
+a directory this module owns and prunes.  Both ways in are bounded:
 
 * Under the suite harness the caller exports ``DIRECTOR_TEST_RUNTIME``, that run's run
   root.  Scratch directories land inside it and go away with the run root, which

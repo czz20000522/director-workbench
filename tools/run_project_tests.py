@@ -17,16 +17,16 @@ from tools.remove_tree import remove_tree
 
 PROJECT = paths.PROJECT_ROOT
 BROWSER_TESTS = (
-    'agent_access', 'agent_page_bridge', 'assembly_edit', 'automatic_creation',
-    'enhancement', 'generation_stage', 'guide_queue', 'guide_review',
-    'media_tools_panel', 'queued_panels', 'reference_queue', 'speech_panel',
+    'assembly_edit', 'automatic_creation', 'enhancement', 'generation_stage',
+    'guide_queue', 'guide_review', 'media_tools_panel', 'queued_panels',
+    'reference_queue', 'speech_panel',
 )
 # These drivers additionally need the project interpreter and a fresh absolute runtime
 # directory (relative or pre-existing roots raise AccessDenied in backend/user_context.py).
 BROWSER_FIXTURE_TESTS = ('enhancement',)
 # Run roots are named '<prefix><token>' with the current eight hex digits and the
 # historical twelve.  The match is anchored: the machine runtime tree also holds live
-# roots (accounts, agent pages, the relocation backup) and a prefix test would eat them.
+# roots (accounts, the relocation backup) and a prefix test would eat them.
 RUN_ROOT_NAME = re.compile(r'^t-[0-9a-f]{8}(?:[0-9a-f]{4})?$')
 KEEP_RUNS = 3
 PROBE = """
