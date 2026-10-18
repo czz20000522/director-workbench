@@ -17,13 +17,17 @@ from tools.remove_tree import remove_tree
 
 PROJECT = paths.PROJECT_ROOT
 BROWSER_TESTS = (
-    'assembly_edit', 'automatic_creation', 'enhancement', 'generation_stage',
-    'guide_queue', 'guide_review', 'media_tools_panel', 'queued_panels',
-    'reference_queue', 'speech_panel',
+    'assembly_edit', 'automatic_creation', 'client_restore', 'enhancement',
+    'generation_stage', 'guide_queue', 'guide_review', 'media_tools_panel',
+    'queued_panels', 'reference_queue', 'speech_panel',
 )
 # These drivers additionally need the project interpreter and a fresh absolute runtime
 # directory (relative or pre-existing roots raise AccessDenied in backend/user_context.py).
 BROWSER_FIXTURE_TESTS = ('enhancement',)
+# These drivers take a media fixture after the script name. The producer runs on the
+# project interpreter because it encodes with PyAV, which is a test-time dependency
+# there; the driver then reads the file it wrote instead of being handed one by hand.
+BROWSER_MEDIA_TESTS = {'client_restore': 'tests/client_restore_media.py'}
 # Run roots are named '<prefix><token>' with the current eight hex digits and the
 # historical twelve.  The match is anchored: the machine runtime tree also holds live
 # roots (accounts, the relocation backup) and a prefix test would eat them.
@@ -68,8 +72,9 @@ def suite_specs(project: Path, run_root: Path, desktop: Path | None = None) -> d
         },
         # Browser acceptance drivers bundle the front end themselves and intercept their
         # own HTTP. Those listed in BROWSER_FIXTURE_TESTS also take the project Python and
-        # a fresh absolute runtime directory. Drivers needing an MP4, ffmpeg or a completed
-        # fixture root are not listed yet; see the browser-suite notes in the project docs.
+        # a fresh absolute runtime directory; those listed in BROWSER_MEDIA_TESTS take a
+        # generated media file. Drivers needing ffmpeg or a completed fixture root are not
+        # listed yet; see the browser-suite notes in the project docs.
         'browser': {
             'runner': 'node',
             'scripts': [f'tests/{name}.browser.mjs' for name in BROWSER_TESTS],
@@ -105,6 +110,7 @@ def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: b
     if not check:
         commands = []
         fixtures = {}
+        media = {}
         interpreter = project / '.venv/Scripts/python.exe'
         for script in spec['scripts']:
             if script in missing:
@@ -122,6 +128,21 @@ def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: b
                 fixture = run_root / f'f{len(fixtures) + 1}'
                 fixtures[name] = str(fixture)
                 command += [str(interpreter), str(fixture)]
+            if name in BROWSER_MEDIA_TESTS:
+                if not interpreter.is_file():
+                    result['errors'].append(f'{script} needs the project interpreter; this suite is failed, not skipped.')
+                    continue
+                # The file sits in the run root, so it goes away with the run instead of
+                # joining whatever media a machine happens to keep around.
+                target = run_root / f'{name}.mp4'
+                producer = subprocess.run([str(interpreter), BROWSER_MEDIA_TESTS[name], str(target)],
+                                          cwd=project, env=environment, capture_output=True, text=True,
+                                          encoding='utf-8', errors='replace')
+                if producer.returncode or not target.is_file():
+                    result['errors'].append(f'{BROWSER_MEDIA_TESTS[name]} could not produce the media fixture.')
+                    continue
+                media[name] = str(target)
+                command.append(str(target))
             commands.append(command)
             try:
                 completed = subprocess.run(command, cwd=project, env=environment)
@@ -132,6 +153,7 @@ def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: b
                 result['errors'].append(f'{script} failed (exit {completed.returncode}).')
         result['commands'] = commands
         result['fixture_roots'] = fixtures
+        result['media_fixtures'] = media
         result['test_exit_code'] = int(bool(result['errors']))
     return result
 

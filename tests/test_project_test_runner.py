@@ -14,10 +14,13 @@ def host_roots(tmp_path):
 def setup_project(tmp_path):
     project = tmp_path / 'ComfyUI-Workspace/projects/director-workbench'
     project.mkdir(parents=True)
-    for spec in runner.suite_specs(project, tmp_path, tmp_path).values():
-        for script in spec.get('scripts', ()):  # browser drivers live in the checkout
-            (project / script).parent.mkdir(parents=True, exist_ok=True)
-            (project / script).touch()
+    specs = runner.suite_specs(project, tmp_path, tmp_path)
+    # Browser drivers and the media producers those drivers call live in the checkout.
+    scripts = [script for spec in specs.values() for script in spec.get('scripts', ())]
+    for script in (*scripts, *runner.BROWSER_MEDIA_TESTS.values()):
+        (project / script).parent.mkdir(parents=True, exist_ok=True)
+        (project / script).touch()
+    for spec in specs.values():
         # The browser suite drives node and carries no interpreter path.
         interpreter = spec.get('python')
         if interpreter is None:
@@ -43,6 +46,9 @@ def test_failure_keeps_running_other_suite_with_explicit_paths(tmp_path, monkeyp
         calls.append((command, kwargs))
         if '-c' in command:
             return fake_probe(command)
+        if command[1] in runner.BROWSER_MEDIA_TESTS.values():
+            Path(command[2]).write_bytes(b'')  # the producer writes the media fixture
+            return SimpleNamespace(returncode=0)
         return SimpleNamespace(returncode=2 if 'pytest' in command else 0)
 
     monkeypatch.setattr(runner.subprocess, 'run', execute)
@@ -56,8 +62,9 @@ def test_failure_keeps_running_other_suite_with_explicit_paths(tmp_path, monkeyp
     assert receipt['suites']['core']['status'] == 'failed'
     assert receipt['suites']['auk']['status'] == 'passed'
     specs = runner.suite_specs(project, Path(receipt['run_root']), tmp_path)
-    # Two probes and two interpreter suites, plus one node command per browser driver.
-    assert len(calls) == 4 + len(specs['browser']['scripts'])
+    # Two probes and two interpreter suites, plus one node command per browser driver
+    # and one media producer per driver that reads a generated file.
+    assert len(calls) == 4 + len(specs['browser']['scripts']) + len(runner.BROWSER_MEDIA_TESTS)
     for index, name in ((0, 'core'), (2, 'auk')):
         command, kwargs = calls[index + 1]
         assert command == [str(specs[name]['python']), *specs[name]['args']]
