@@ -23,9 +23,9 @@ import CreationRoutes, { creationRoutes } from './CreationRoutes';
 const ScriptWorkbench = lazy(() => import('./ScriptWorkbench'));
 import WorkbenchSidebar from './components/WorkbenchSidebar';
 import WorkbenchTopbar from './components/WorkbenchTopbar';
+import WorkbenchOverlays from './components/WorkbenchOverlays';
 // Split out of the initial bundle: mounted only in its own workspace mode.
 const ArchiveBrowser = lazy(() => import('./ArchiveBrowser'));
-import DeleteDirectoryDialog from './DeleteDirectoryDialog';
 const ShotPromptEditor = lazy(() => import('./ShotPromptEditor'));
 const FirstUseGuide = lazy(() => import('./FirstUseGuide'));
 import TaskQueueStatus from './TaskQueueStatus';
@@ -1863,9 +1863,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
       {materialBridgeOpen && <Suspense fallback={null}><MaterialBridge projectId={project?.id ?? ''} initialMode={materialBridgeDevice ? 'device' : 'server'} onClose={() => { setMaterialBridgeOpen(false); setMaterialBridgeDevice(false); }} onRegistered={count => { void refreshRegisteredMaterials(count); }} /></Suspense>}
       {creativeConflictPanel}
       {batchId && <div className="director-batch-note" role="note">批次参数语义：按每个分镜自己的计划与源工作流冻结；当前片段 Inspector 的修改只影响单段重做。需要批量改参时，请先逐段确认后再提交。</div>}
-      {notice && <div className="director-toast" role="status"><Check size={16} /><span>{notice}</span></div>}
-      {deleteDirectory && <DeleteDirectoryDialog target={deleteDirectory} onClose={() => setDeleteDirectory(null)} onDeleted={() => { void afterDirectoryDeleted(); }} />}
-      {deleteShotOpen && currentPlanSegment && <div className="director-delete-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setDeleteShotOpen(false); }}><section className="director-delete-dialog" role="dialog" aria-modal="true" aria-label="删除分镜"><h2>删除分镜 {currentPlanSegment.id}？</h2><p>会从本作品的制作计划移除这一段，并重排后续时间轴。生成记录与可能被其他分镜共用的素材仍保留。</p><div className="director-delete-actions"><button type="button" className="button secondary compact" onClick={() => setDeleteShotOpen(false)}>取消</button><button type="button" className="button danger compact" disabled={deletingShot} onClick={() => void deleteCurrentShot()}>{deletingShot ? '删除中…' : '删除分镜'}</button></div></section></div>}
-    <dialog ref={dialogRef} className="lightbox" onCancel={() => setLightbox(false)}><div><span>{current.id} · {current.title}</span><button className="icon-button" onClick={() => setLightbox(false)} aria-label="关闭大图"><X size={22} /></button></div>{lightbox && <img src={current.image} alt={current.title} />}</dialog>
+      <WorkbenchOverlays notice={notice} deleteDirectory={deleteDirectory} onCloseDeleteDirectory={() => setDeleteDirectory(null)} onDeletedDirectory={() => { void afterDirectoryDeleted(); }} deleteShotOpen={deleteShotOpen} deleteShotId={currentPlanSegment?.id} deletingShot={deletingShot} onCloseDeleteShot={() => setDeleteShotOpen(false)} onConfirmDeleteShot={() => void deleteCurrentShot()} dialogRef={dialogRef} lightbox={lightbox} onCloseLightbox={() => setLightbox(false)} current={current} />
   </div>;
 }

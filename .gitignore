@@ -74,6 +74,7 @@
 /src/components/*
 !/src/components/WorkbenchSidebar.tsx
 !/src/components/WorkbenchTopbar.tsx
+!/src/components/WorkbenchOverlays.tsx
 !/.agents/skills/director-workbench/
 /.agents/skills/director-workbench/*
 !/.agents/skills/aigc-video-production/assets/workflows/minimax-h3-current-api.json
