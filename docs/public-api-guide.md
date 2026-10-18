@@ -2,7 +2,7 @@
 
 客户端使用维护者提供的私人工作台 URL 和本人账号，不需要服务器源码、Windows 路径、SSH 管理员凭据或 ComfyUI 地址。服务端部署见[开发指南](public-development-guide.md)，MCP 配置见[连接说明](../mcp_server/README.md)。
 
-本指南描述公开代码的接入合同；实际部署版本、模型就绪和产品验收以当前服务返回值及 [GitHub Issues](https://github.com/czz20000522/director-workbench/issues) 为准。先获取 `/.well-known/director-workbench.json` 和 `/agent/start`，按需读取 `/agent/capabilities?group=creation` 或 `presentation`。这些是不含私人业务数据的发现入口。详细 `/openapi.json`、作品、任务、媒体和 MCP 需要登录。
+本指南描述公开代码的接入合同；实际部署版本、模型就绪和产品验收以当前服务返回值及 [GitHub Issues](https://github.com/czz20000522/director-workbench/issues) 为准。接入先登录取得本人会话，再读取 `/openapi.json` 查看本部署的完整合法输入；服务不提供匿名发现入口。
 
 ## 认证与权限
 
@@ -79,45 +79,9 @@
 
 这些为入口索引，不是免校验的参数模板。制作需通过 UI/API/MCP 完成；客户端不直接运行模型、FFmpeg 或 Whisper 补做产品未接入的步骤。保存剧本、计划、审核或采用时使用各自 schema 的版本字段，不能混用计划 revision 与剧本/审核 revision。审核证据与显式采用分别保存，技术报告不能替代画面、音色和表演验收。
 
-## 页面引导
-
-用户在目标浏览器标签页允许 Agent 引导后，客户端可通过 `/api/agent/pages` 列出本人可引导页面，再向 `/api/agent/page-actions` 提交带唯一 `action_id` 和目标 `page_id` 的受控动作。可显示未保存草稿、定位、导航、打开当前候选或播放/暂停；该层不替业务保存或生成。
-
-用 `/api/agent/pages/{page_id}/actions` 查询实际回执。`pending` 只说明已发送，没有附属页面或呈现失败时不能声称已点击/播放。手工接管、刷新和版本变化不重放旧动作。客户端报告的呈现回执不是用户已听看或审核的证明；不能自行 ACK 伪造呈现。
-
-## 页面创作助手
-
-私人模式登录后，页面右下角提供创作助手。第一版支持解释、原文草稿、保存并预检，以及明确授权后新增一段自动小样。没有选中作品时，草稿只保留在助手会话中；预检或生成指令可通过原创建接口建立独立作品。现有作品中的生成指令新增分镜，不覆盖已有分镜。修改、删除、审核采用及多镜制作仍使用原页面；助手会明确说明支持范围。
-
-“只写草稿”不保存业务计划，“先预检”保存原文并预检但不生成；“生成一个看看”或“生成一段5秒视频”才授权一次任务。否定、未授权、引用与解释教学不会授权生成。默认 5 秒、16:9、seed 42；文字中的明确时长、画幅和 seed 优先，合法范围仍由原业务服务校验。页面有未保存输入或被手动接管时保留输入，停止后续助手准备。
-
-配置由服务器从源码根下 `.config/director-workbench/cloud-agent.json` 读取，可用服务器环境变量 `DIRECTOR_CLOUD_ASSISTANT_CONFIG` 指定其他私人文件。每次云端请求重读配置。兼容 Chat Completions 的配置格式如下，文件和实际凭据不能提交：
-
-```json
-{"schema_version":1,"provider":"openai-compatible","base_url":"https://provider.example/v1","model":"本人选择的模型","api_key":"本人凭据","api_mode":"chat_completions","request_headers":{},"timeout_seconds":35}
-```
-
-云端只收到本轮文字、必要状态投影和可用动作说明，不收到业务 token、配置 key、媒体、设备路径或整份素材库。模型回复是文字建议；业务动作由服务器绑定的用户指令控制，不执行模型返回的任意工具调用。配置缺失、云端失败或取消时保留输入和已取得的业务回执，不自动重试付费请求。
-
-认证 HTTP 入口：
-
-| 操作 | 路径 |
-| --- | --- |
-| 读取/创建本人会话 | `GET/POST /api/assistant/sessions` |
-| 开始请求 | `POST /api/assistant/sessions/{session_id}/requests` |
-| 读取原请求回执 | `GET /api/assistant/sessions/{session_id}/requests/{request_id}` |
-| 取消助手后续准备 | `POST /api/assistant/sessions/{session_id}/requests/{request_id}/cancel` |
-| 发起标签页呈现回执 | `POST /api/assistant/sessions/{session_id}/requests/{request_id}/presentation` |
-
-创建会话接受可选 `project_id`。开始请求需唯一 `request_id` 和原文 `text`，可指定本人 `project_id`；可选 `controls` 仅接受该作品中的 `first_frame/last_frame/audio_guide` 素材 ID。网页额外绑定 `presentation_target`，先等待原编辑器、保存结果和准备度的真实呈现回执再继续；纯 HTTP 调用可以不请求页面呈现。完整字段以认证 OpenAPI 为准。
-
-请求编号绑定文字、作品、素材和标签页，相同编号不重复执行，变更参数返回 409。任务提交使用由原请求编号派生的同键回执，未知提交只查原任务；尚未找到时保持 `needs_reconcile`，不能换编号重发。刷新或服务重启保留步骤、已保存输入和原任务，不重放云端请求、页面动作或业务步骤。取消助手不会停止已经提交的 GPU 任务，原任务继续从原队列查询或显式停止。候选读取复用原版本与媒体入口，不自动审核采用。
-
-本机集成回归使用假云端提供方、隔离鉴权 HTTP 和 CPU 视频；生产云端配置、受控发布及跨设备真实小样仍需分别验收。
-
 ## MCP 和验证边界
 
-远程 MCP 使用同一私人 URL 的 `/mcp/`，要求可配置 Bearer 的 Streamable HTTP 客户端。目前远程端只开放能力发现中的创作/页面子集及读取指南；完整适配工具可通过本机 stdio 使用，其他业务使用认证 HTTP。没有 OAuth 登录发现；只能 OAuth 且不能配置现有 Bearer 的宿主尚未支持。
+远程 MCP 使用同一私人 URL 的 `/mcp/`，要求可配置 Bearer 的 Streamable HTTP 客户端。目前远程端只开放创作子集及读取指南；完整适配工具可通过本机 stdio 使用，其他业务使用认证 HTTP。没有 OAuth 登录发现；只能 OAuth 且不能配置现有 Bearer 的宿主尚未支持。
 
 MCP 默认保留官方 SDK 的 loopback Host/Origin 限制和 DNS rebinding 防护。经本机 SSH 隧道可使用原 loopback 入口；私人网络直接访问须由服务器维护者在进程启动前配置允许列表，不能由客户端请求或 `Forwarded`/`X-Forwarded-Host` 决定：
 
@@ -129,7 +93,7 @@ MCP 默认保留官方 SDK 的 loopback Host/Origin 限制和 DNS rebinding 防�
 
 外部配置不接受通配符、URL 凭据、路径、查询参数或片段；默认 loopback 入口仍保留。客户端不发送 Origin 时仍检查 Host 与本人会话；发送 Origin 时须同时符合 MCP 和私人业务允许列表。未知 Host 返回 421，未知 Origin 返回 403，失效会话返回 401。允许入口不授予账号或作品权限。真实地址与配置只保存在服务器，不写入公开发现、Issue 或 Git；配置变更的部署另按授权处理。
 
-接入验证先完成发现、登录、本人作品列表、权限拒绝和无生成预检。MCP schema/HTTP 回归、服务部署、干净跨设备接入与真实 GPU 输出分别验收。只读连通测试不授权生成，已实现的接口也不证明其对应制作方案全部通过。反馈采用[GitHub 协作约定](github-collaboration.md)，公开记录仅保留脱敏步骤和结论。
+接入验证先完成登录、本人作品列表、权限拒绝和无生成预检。MCP schema/HTTP 回归、服务部署、干净跨设备接入与真实 GPU 输出分别验收。只读连通测试不授权生成，已实现的接口也不证明其对应制作方案全部通过。反馈采用[GitHub 协作约定](github-collaboration.md)，公开记录仅保留脱敏步骤和结论。
 
 ## 审核可写值与诊断结果
 

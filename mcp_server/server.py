@@ -116,27 +116,6 @@ def create_server(base_url: str, transport: httpx.AsyncBaseTransport | None = No
         return await request('POST',project_path(project_id)+'/upload',files=[('files',(filename,content))])
 
     @server.tool(annotations=read_only)
-    async def list_agent_pages() -> dict[str, Any]:
-        """列本人明确允许引导的浏览器页，不含页面凭据。没有附属页仍可HTTP/MCP创作。"""
-        return await request('GET','/api/agent/pages')
-
-    @server.tool(annotations=write_record)
-    async def present_page_action(action_id:str, kind:Literal['show_draft','locate','navigate','open_candidate','play','pause','show_preflight','show_task'],
-            page_id:str|None=None, target:dict[str,Any]|None=None, values:dict[str,Any]|None=None) -> dict[str,Any]:
-        """向本人允许的目标页发受控表现动作，不执行生成／保存。原业务只调用一次。
-        target可含project_id/asset_id/revision；values可含prompt/duration_seconds/generation/page。
-        无页返回未呈现；pending仅表示已发送，必须read_page_actions核实实际呈现。
-        不自ACK／冒称已播放；用户接管或刷新不重放。相同action_id/参数返回原回执。
-        """
-        return await request('POST','/api/agent/page-actions',json={'action_id':action_id,'kind':kind,'page_id':page_id,
-                            'target':target or {},'values':values or {}})
-
-    @server.tool(annotations=read_only)
-    async def read_page_actions(page_id:str, after:int=0) -> dict[str,Any]:
-        """读取本人该页动作实际回执；不含浏览器ACK凭据，不改变页面或重放业务。"""
-        return await request('GET','/api/agent/pages/'+path_id(page_id,'页面')+'/actions',params={'after':after})
-
-    @server.tool(annotations=read_only)
     async def read_guide_settings(project_id: str | None = None) -> dict[str, Any]:
         """读取当前账号的创作指南、可继续进度和作品准备度；不会创建作品或生成。"""
         return await request('GET', '/api/settings/guide', params={'project_id': project_id} if project_id else {})

@@ -65,9 +65,9 @@ def install(backend, *, accounts: AccountStore, layout: Layout, origins: tuple[s
 
     def authorize(request, principal):
         path = request.url.path
-        if path in {'/mcp','/mcp/'} or path.startswith(('/api/agent/', '/api/assistant/')):
-            # Presentation checks owner/tab inside its service; MCP forwards
-            # each real bearer to the existing project HTTP authorization.
+        if path in {'/mcp','/mcp/'}:
+            # The remote MCP entry forwards each real bearer to the existing
+            # project HTTP authorization instead of checking a second time.
             return None
         if path == '/api/private/series' or path.startswith('/api/private/series/'):
             return None

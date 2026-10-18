@@ -60,7 +60,6 @@
 !/src/QuickStudioPrototype.tsx
 !/src/quick-studio-prototype.css
 !/tests/quick_generation.browser.mjs
-!/tests/quick_mode_panels.browser.mjs
 !/tests/quick_generation_bridge.py
 !/AGENTS.md
 !/CONTRIBUTING.md
@@ -68,17 +67,14 @@
 !/.agents/skills/director-workbench/SKILL.md
 # Retired local issue ledger is excluded
 !/backend/__init__.py
-!/backend/agent_access.py
 !/backend/mcp_access_config.py
-!/backend/agent_pages.py
+!/backend/remote_mcp.py
 !/backend/app.py
 !/backend/assembly_edit.py
 !/backend/atomic_files.py
 !/backend/audio_edit.py
 !/backend/audio_edit_tasks.py
 !/backend/background_jobs.py
-!/backend/cloud_assistant_provider.py
-!/backend/creation_assistant.py
 !/backend/creative_inspection.py
 !/backend/gpu_idle_release.py
 !/backend/guide.py
@@ -138,9 +134,6 @@
 !/src/SpeechPanel.tsx
 !/src/TaskQueueStatus.tsx
 !/src/WorkspaceExplorer.tsx
-!/src/components/AgentPageBridge.tsx
-!/src/components/ConnectAgent.tsx
-!/src/components/CreationAssistant.tsx
 !/src/data.ts
 !/src/generationStage.ts
 !/src/login.css
@@ -154,10 +147,9 @@
 !/start_backend.ps1
 !/start_private_workbench.ps1
 !/start_workbench.ps1
-!/tests/agent_access_bridge.py
 !/tests/automatic_creation_bridge.py
-!/tests/test_agent_access.py
 !/tests/test_mcp_access_config.py
+!/tests/test_remote_mcp.py
 !/tests/test_analysis_recovery.py
 !/tests/test_artifact_review_history.py
 !/tests/test_assembly_builder.py
@@ -169,7 +161,6 @@
 !/tests/test_audio_edit_tasks.py
 !/tests/test_automatic_creation.py
 !/tests/test_candidate_adoption.py
-!/tests/test_cloud_assistant_provider.py
 !/tests/test_comfy_execution_reporting.py
 !/tests/test_comfy_media_staging.py
 !/tests/test_creative_inspection.py
@@ -295,9 +286,6 @@
 !/tools/restore_comfy_engine.py
 !/tests/test_engine_recovery.py
 !/tests/test_candidate_review_invalidation.py
-!/tests/test_creation_assistant.py
-!/tests/creation_assistant_bridge.py
-!/tests/creation_assistant.browser.mjs
 !/backend/output_resolution.py
 !/src/ResolutionPicker.tsx
 !/tests/test_output_resolution.py
@@ -316,12 +304,10 @@
 
 # Browser acceptance driven by tools/run_project_tests.py --suite browser.
 # Most listed drivers bundle the front end, intercept their own HTTP and use
-# isolated synthetic media. automatic_creation and agent_access instead drive
+# isolated synthetic media. automatic_creation instead drives
 # the real local ASGI app through their bridge with seeded synthetic accounts
 # and fixtures, writing only under the runtime directory. None reads a private
 # path, personal account or work asset.
-!/tests/agent_access.browser.mjs
-!/tests/agent_page_bridge.browser.mjs
 !/tests/assembly_edit.browser.mjs
 !/tests/automatic_creation.browser.mjs
 !/tests/generation_stage.browser.mjs

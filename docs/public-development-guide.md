@@ -13,7 +13,7 @@
 | [backend/app.py](../backend/app.py) | HTTP 业务、作品登记、计划版本、任务/回执和队列接线 |
 | [backend/private_auth.py](../backend/private_auth.py)、[private_workspaces.py](../backend/private_workspaces.py) | Cookie/Bearer 会话、账号与作品归属 |
 | [backend/task_scheduler.py](../backend/task_scheduler.py) | 同一服务进程的持久任务调度 |
-| [backend/agent_access.py](../backend/agent_access.py)、[agent_pages.py](../backend/agent_pages.py) | 公开发现、远程 MCP 子集、受控页面动作与回执 |
+| [backend/remote_mcp.py](../backend/remote_mcp.py) | 远程 MCP 入口，只开放固定的创作工具子集 |
 | [mcp_server/server.py](../mcp_server/server.py) | HTTP 业务的 MCP 薄适配，不另建执行队列 |
 | [tools](../tools)、[共享制作脚本](../.agents/skills/aigc-video-production/scripts) | 后端受控执行器；外部客户端通过工作台入口使用 |
 | [storage_layout.py](../production/storage_layout.py) | 读取本机存储根；路径配置不由客户端传入 |
