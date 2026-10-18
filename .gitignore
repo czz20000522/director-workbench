@@ -21,6 +21,10 @@
 /.agents/skills/aigc-video-production/scripts/*
 !/backend/
 /backend/*
+!/backend/routers/
+/backend/routers/*
+!/backend/routers/__init__.py
+!/backend/routers/reverse_analysis.py
 !/contracts/
 /contracts/*
 !/docs/
@@ -162,6 +166,7 @@
 !/tests/test_audio_edit_api.py
 !/tests/test_audio_edit_tasks.py
 !/tests/test_automatic_creation.py
+!/tests/test_backend_module_split.py
 !/tests/test_candidate_adoption.py
 !/tests/test_comfy_execution_reporting.py
 !/tests/test_comfy_media_staging.py
