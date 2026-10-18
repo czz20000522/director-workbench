@@ -35,7 +35,13 @@ def fake_probe(command, missing=None, base_prefix=None):
         'executable': command[0], 'version': 'test', 'base_prefix': str(base_prefix or Path(command[0]).parents[3]),
         'enable_user_site': False, 'stdlib_path': 'base/Lib/os.py',
         'modules': {name: {'available': name != missing, 'version': 'test'} for name in command[3:]},
-    }))
+    }), stderr='')
+
+
+def fake_output(returncode=0, stdout='', stderr=''):
+    """A child result shaped like CompletedProcess: the harness reads the streams it asked
+    for, so a fake that omits them would pass here and fail against a real subprocess."""
+    return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
 
 
 def test_failure_keeps_running_other_suite_with_explicit_paths(tmp_path, monkeypatch):
@@ -48,8 +54,8 @@ def test_failure_keeps_running_other_suite_with_explicit_paths(tmp_path, monkeyp
             return fake_probe(command)
         if command[1] in runner.BROWSER_MEDIA_TESTS.values():
             Path(command[2]).write_bytes(b'')  # the producer writes the media fixture
-            return SimpleNamespace(returncode=0)
-        return SimpleNamespace(returncode=2 if 'pytest' in command else 0)
+            return fake_output()
+        return fake_output(2 if 'pytest' in command else 0)
 
     monkeypatch.setattr(runner.subprocess, 'run', execute)
     monkeypatch.setenv('PYTHONHOME', 'external-home')
@@ -111,9 +117,11 @@ def test_pytest_backed_drivers_receive_produced_fixtures(tmp_path, monkeypatch):
         calls.append(command)
         if '-c' in command:
             return fake_probe(command)
+        if '-m' in command:
+            return fake_output(stdout='3 passed in 1.2s\n')
         if command[1] in runner.BROWSER_MEDIA_TESTS.values():
             Path(command[2]).write_bytes(b'')  # the producer writes the media fixture
-        return SimpleNamespace(returncode=0)
+        return fake_output()
 
     monkeypatch.setattr(runner.subprocess, 'run', execute)
     report = tmp_path / 'produced.json'
@@ -127,7 +135,8 @@ def test_pytest_backed_drivers_receive_produced_fixtures(tmp_path, monkeypatch):
     for name, (module, handed) in runner.BROWSER_PYTEST_FIXTURES.items():
         basetemp = run_root / f'pytest-{name}'
         assert browser['fixture_producers'][name] == {
-            'module': module, 'basetemp': str(basetemp), 'exit_code': 0}
+            'module': module, 'basetemp': str(basetemp), 'exit_code': 0,
+            'output': '3 passed in 1.2s'}
         expected = basetemp if handed == 'basetemp' else run_root
         assert browser['fixture_roots'][name] == str(expected)
         produced = calls.index([interpreter, '-m', 'pytest', module, '-q', '--basetemp', str(basetemp)])
@@ -187,3 +196,53 @@ def test_base_installation_boundary_and_audit_fields(tmp_path, monkeypatch):
                       **host_roots(tmp_path)) == 0
     result = json.loads(report.read_text(encoding='utf-8'))
     assert all(len(result['suites'][name]['warnings']) == 1 for name in probed)
+
+
+def test_failing_driver_output_reaches_the_report(tmp_path, monkeypatch):
+    """A report outlives the console it was printed to. An exit code alone cannot tell a flake
+    apart from a broken driver, so the driver's own output is kept, truncated to its tail --
+    and repeated in the error line, which is what a reader sees first."""
+    project = setup_project(tmp_path)
+    noise = '\n'.join(f'line {index}' for index in range(runner.OUTPUT_TAIL_LINES + 5))
+
+    def execute(command, **kwargs):
+        if command[1] in runner.BROWSER_MEDIA_TESTS.values():
+            Path(command[2]).write_bytes(b'')  # the producer writes the media fixture
+        elif command[1].endswith('.browser.mjs'):
+            return fake_output(1, stdout=noise + '\nError: locator timed out')
+        return fake_output()
+
+    monkeypatch.setattr(runner.subprocess, 'run', execute)
+    report = tmp_path / 'output.json'
+    assert runner.run('browser', report_path=report, project=project, **host_roots(tmp_path)) == 1
+    browser = json.loads(report.read_text(encoding='utf-8'))['suites']['browser']
+    script = 'tests/assembly_edit.browser.mjs'
+    kept = browser['driver_output'][script]
+    assert browser['status'] == 'failed'
+    assert kept.splitlines()[-1] == 'Error: locator timed out'
+    assert len(kept.splitlines()) == runner.OUTPUT_TAIL_LINES and 'line 0' not in kept
+    failure = next(error for error in browser['errors'] if error.startswith(script))
+    assert failure.startswith(f'{script} failed (exit 1).')
+    assert 'Error: locator timed out' in failure
+
+
+def test_failing_suite_output_reaches_the_report(tmp_path, monkeypatch):
+    """The same for an interpreter suite: its exit code stays in test_exit_code and what the
+    runner said is kept beside it, so the report explains itself without the console."""
+    project = setup_project(tmp_path)
+
+    def execute(command, **kwargs):
+        if '-c' in command:
+            return fake_probe(command)
+        return fake_output(2, stdout='1 failed, 3 passed\nAssertionError: frame count differs\n',
+                           stderr='short test summary info')
+
+    monkeypatch.setattr(runner.subprocess, 'run', execute)
+    report = tmp_path / 'core.json'
+    assert runner.run('core', report_path=report, project=project, **host_roots(tmp_path)) == 1
+    core = json.loads(report.read_text(encoding='utf-8'))['suites']['core']
+    assert core['test_exit_code'] == 2
+    assert 'AssertionError: frame count differs' in core['output']
+    assert 'short test summary info' in core['output']
+    assert core['errors'] == ['Test suite failed (exit 2).\n1 failed, 3 passed\n'
+                              'AssertionError: frame count differs\nshort test summary info']
