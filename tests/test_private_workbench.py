@@ -17,6 +17,7 @@ from backend.private_mode import install
 from backend.private_auth import Principal, current_principal
 from backend.private_sessions import AccountStore
 from backend.user_context import Layout, SessionIdentity, UserContext
+from support import create
 
 
 def test_supported_private_media_extensions_create_asset_records():
@@ -54,12 +55,6 @@ def private_workbench(tmp_path, monkeypatch):
     a.headers['Authorization'] = 'Bearer ' + sessions.login('user001', 'one')
     b.headers['Authorization'] = 'Bearer ' + sessions.login('user002', 'two')
     return a, b, ownership, project
-
-
-def create(client):
-    response = client.post('/api/projects/create', json={'title': '同名作品', 'series': '同系列', 'project_id': 'same', 'select': True, 'creation_mode': 'advanced'})
-    assert response.status_code == 200, response.text
-    return response.json()['project']
 
 
 def test_same_name_project_identity_selection_and_listing(private_workbench):

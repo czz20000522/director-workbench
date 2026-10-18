@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from backend import app as backend
-from test_production_presets import add_shot
+from support import add_shot
 
 
 def test_assembly_uses_target_plan_current_video_without_review(preset_client, monkeypatch):

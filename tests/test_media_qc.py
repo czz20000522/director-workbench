@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from backend import app as backend, media_operations
-from test_keyframe_inputs import reference_image
 from test_production_presets import preset_client as base_client
+from support import reference_image
 
 ROOT = '/api/projects/preset-test'
 REAL_THREAD = threading.Thread

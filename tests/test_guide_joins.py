@@ -8,8 +8,7 @@ from mcp import Client
 
 from backend import app as backend
 from mcp_server.server import create_server
-from test_assembly_edit import edit_client
-from test_private_workbench import create
+from support import create
 
 
 @pytest.mark.parametrize(('case', 'expected_state', 'completed'), [

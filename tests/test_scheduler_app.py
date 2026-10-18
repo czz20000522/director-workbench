@@ -6,7 +6,8 @@ import pytest
 
 from backend import app as backend
 from backend.task_scheduler import TaskScheduler
-from test_private_workbench import create
+from support import create
+from support import prepare
 
 
 @pytest.fixture
@@ -35,21 +36,6 @@ def queued_private_app(private_workbench, monkeypatch):
     monkeypatch.setattr(backend, 'TASK_SCHEDULER', scheduler)
     yield a, b, ownership, scheduler, executed
     scheduler.stop()
-
-
-def prepare(client, shots):
-    project_id = create(client)['id']
-    base = '/api/projects/' + project_id
-    result = client.post(base + '/production-presets/h3-first-native-landscape')
-    assert result.status_code == 200, result.text
-    uploaded = client.post(base + '/upload', files=[('files', ('first.png', b'fixture-image', 'image/png'))])
-    assert uploaded.status_code == 200, uploaded.text
-    reference = uploaded.json()['uploaded'][0]
-    for shot in shots:
-        result = client.post(base + '/plan/segments', json={'segment_id': shot, 'duration_seconds': 5,
-                                                          'prompt': shot + ' moves', 'first_frame': reference})
-        assert result.status_code == 200, result.text
-    return project_id, base
 
 
 def test_private_http_batches_dispatch_fairly_from_frozen_owned_requests(queued_private_app):

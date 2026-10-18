@@ -3,7 +3,6 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from backend import app as backend
-from test_task_reconciliation import reconcile_client
 
 REAL_THREAD = threading.Thread
 REAL_REQUEST = backend.request_json

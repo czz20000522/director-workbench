@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from backend import app as backend
-from test_scheduler_app import queued_private_app, prepare
+from support import prepare
 
 
 @pytest.fixture

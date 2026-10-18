@@ -10,7 +10,6 @@ from mcp import Client
 from backend import app as backend
 from backend.task_scheduler import TaskScheduler
 from mcp_server.server import create_server
-from test_reverse_workbench import reverse_client
 
 
 def test_mcp_import_streams_local_reference_to_backend(reverse_client, tmp_path, monkeypatch):

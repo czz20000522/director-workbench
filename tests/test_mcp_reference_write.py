@@ -7,7 +7,6 @@ pytest.importorskip('mcp')
 from mcp import Client
 from backend import app as backend
 from mcp_server.server import create_server
-from test_reverse_workbench import reverse_client
 
 
 def test_mcp_timeline_write_uses_real_revision_guard(reverse_client):

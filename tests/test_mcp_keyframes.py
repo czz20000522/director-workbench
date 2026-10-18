@@ -8,7 +8,7 @@ pytest.importorskip('mcp')
 from mcp import Client
 from backend import app as backend
 from mcp_server.server import create_server
-from test_keyframe_inputs import reference_image
+from support import reference_image
 
 REAL_THREAD = threading.Thread
 

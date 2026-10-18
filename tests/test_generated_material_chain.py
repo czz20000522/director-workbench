@@ -4,8 +4,7 @@ import wave
 from pathlib import Path
 
 from backend import app as backend
-from test_keyframe_inputs import reference_image
-from test_production_presets import install
+from support import install, reference_image
 
 
 def test_generated_candidates_feed_shot_without_manual_workflow(preset_client, monkeypatch):

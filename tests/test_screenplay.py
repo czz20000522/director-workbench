@@ -1,7 +1,7 @@
 import pytest
 
 from backend import app as backend
-from test_private_workbench import create
+from support import create
 
 
 BASE = '/api/projects/preset-test'

@@ -14,7 +14,7 @@ from backend.task_scheduler import TaskScheduler
 from backend.private_auth import Principal, current_principal
 from backend.user_context import UserContext, SessionIdentity
 from mcp_server.server import create_server
-from test_private_workbench import create
+from support import create
 
 
 @pytest.fixture

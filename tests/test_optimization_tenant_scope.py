@@ -13,7 +13,7 @@ import pytest
 from backend import app as backend
 from backend.private_auth import Principal, current_principal
 from backend.user_context import SessionIdentity, UserContext
-from test_private_workbench import create
+from support import create
 
 
 def install_tasks(tmp_path, monkeypatch, tasks):

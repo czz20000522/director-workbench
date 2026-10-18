@@ -63,6 +63,7 @@
 !/tests/
 /tests/*
 !/tests/conftest.py
+!/tests/support.py
 !/tools/
 /tools/*
 !/tools/qwen_image_t2i.py

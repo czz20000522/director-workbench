@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from backend import app as backend
 from backend import production_presets, h3_duration
+from support import install, add_shot
 
 
 @pytest.fixture
@@ -29,23 +30,6 @@ def preset_client(tmp_path, monkeypatch):
     response = client.post('/api/projects/create', json={'series': '测试', 'title': '新作', 'project_id': 'preset-test', 'creation_mode': 'advanced'})
     assert response.status_code == 200, response.text
     return client, project
-
-
-def install(client):
-    response = client.post('/api/projects/preset-test/production-presets/h3-guided')
-    assert response.status_code == 200, response.text
-    return response.json()['project']
-
-
-def add_shot(client, project, shot_id, with_audio=True):
-    assets = project / 'workspaces' / 'preset-test' / 'assets'
-    for name in (f'{shot_id}.png', f'{shot_id}.wav'):
-        (assets / name).write_bytes(b'test asset')
-    image = str(assets / f'{shot_id}.png')
-    response = client.post('/api/projects/preset-test/plan/segments', json={'segment_id': shot_id, 'duration_seconds': 5, 'prompt': f'{shot_id} waves', 'first_frame': image, 'last_frame': image})
-    assert response.status_code == 200, response.text
-    if with_audio:
-        assert client.patch(f'/api/projects/preset-test/plan/segments/{shot_id}', json={'audio_guide': str(assets / f'{shot_id}.wav')}).status_code == 200
 
 
 def test_recipe_has_no_work_specific_inputs_and_only_connected_nodes():

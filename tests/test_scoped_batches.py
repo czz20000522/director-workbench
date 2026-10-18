@@ -1,5 +1,5 @@
 from backend import app as backend
-from test_production_presets import install, add_shot
+from support import add_shot, install
 
 
 def setup(client, project):

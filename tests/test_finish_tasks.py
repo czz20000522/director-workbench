@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 from backend import app as backend
-from test_production_presets import add_shot
+from support import add_shot
 
 
 def test_finish_task_requires_explicit_sample_approval(preset_client):

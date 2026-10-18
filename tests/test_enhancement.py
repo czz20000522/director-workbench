@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from backend import app as backend, enhancement
-from test_keyframe_inputs import reference_image
+from support import reference_image
 
 
 def nodes(combo=False):
