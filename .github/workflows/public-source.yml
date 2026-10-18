@@ -45,11 +45,6 @@ jobs:
         run: npm run build
   core-tests:
     runs-on: windows-latest
-    env:
-      # The machine roots are overridden so a runner without a Comfy-Desktop install can
-      # still import the backend; tests that freeze the real host paths are marked windows.
-      DIRECTOR_DESKTOP_ROOT: ${{ runner.temp }}/Comfy-Desktop
-      PYTHONNOUSERSITE: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -60,6 +55,11 @@ jobs:
       - name: Install runtime test dependencies
         run: python -m pip install -r requirements.txt
       - name: Run the fast core layer
+        env:
+          # The machine roots are overridden so a runner without a Comfy-Desktop install can
+          # still import the backend; tests that freeze the real host paths are marked windows.
+          DIRECTOR_DESKTOP_ROOT: ${{ runner.temp }}/Comfy-Desktop
+          PYTHONNOUSERSITE: "1"
         run: >-
           python -m pytest tests tools/test_build_video_finish_workflow.py
           --ignore=tests/test_generate_auk_flash.py -q
