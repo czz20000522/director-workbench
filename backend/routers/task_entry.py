@@ -29,8 +29,9 @@ def tasks() -> list[dict[str, Any]]:
     with backend.DB_LOCK, backend.db() as connection:
         rows = connection.execute("SELECT * FROM tasks WHERE project_id = ? ORDER BY created_at DESC LIMIT 100", (backend.CURRENT_PROJECT_ID,)).fetchall()
     result = [backend.task_row(row) for row in rows]
+    queue_values = backend.TASK_SCHEDULER.queue_info_many([task['id'] for task in result])
     for task in result:
-        task['queue'] = backend.TASK_SCHEDULER.queue_info(task['id'])
+        task['queue'] = queue_values.get(task['id'], {})
     return result
 
 
@@ -200,8 +201,9 @@ def project_enhancements(project_id: str, offset: int = Query(0, ge=0)) -> dict[
     with backend.DB_LOCK, backend.db() as connection:
         rows = connection.execute("SELECT * FROM tasks WHERE project_id=? AND json_extract(payload, '$.pipeline_stage_id')='media-enhancement' ORDER BY created_at DESC, id DESC LIMIT 21 OFFSET ?", (project_id, offset)).fetchall()
     tasks = [backend.task_row(row) for row in rows[:20]]
+    queue_values = backend.TASK_SCHEDULER.queue_info_many([task['id'] for task in tasks])
     for task in tasks:
-        task['queue'] = backend.TASK_SCHEDULER.queue_info(task['id'])
+        task['queue'] = queue_values.get(task['id'], {})
     return {'sources': sources, 'tasks': tasks, 'next_offset': offset + 20 if len(rows) > 20 else None}
 
 

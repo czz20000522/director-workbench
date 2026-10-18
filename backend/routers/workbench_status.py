@@ -8,6 +8,8 @@ monkeypatch（setattr(backend, "X", ...)）语义完全不变。
 from __future__ import annotations
 
 import json
+import copy
+import threading
 import time
 from typing import Any
 from fastapi import APIRouter, HTTPException
@@ -19,6 +21,8 @@ from .. import app as backend
 
 
 ROUTER = APIRouter()
+_READINESS_CACHE_LOCK = threading.RLock()
+_READINESS_CACHE: dict[tuple[str, str], tuple[tuple[Any, ...], dict[str, Any]]] = {}
 
 
 def validate_pipeline_values(stage: dict[str, Any], values: dict[str, Any], manifest: dict[str, Any] | None = None, *, collect_errors: bool = False) -> dict[str, Any]:
@@ -324,14 +328,21 @@ def segment_dependency_blockers(document: dict[str, Any], segment: dict[str, Any
 
 
 def project_readiness(project_id: str, state: dict[str, Any]) -> dict[str, Any]:
+    signature = backend.project_cache_signature(project_id)
+    cache_key = (backend.project_cache_scope(), str(project_id))
+    with _READINESS_CACHE_LOCK:
+        cached = _READINESS_CACHE.get(cache_key)
+        if cached and cached[0] == signature:
+            return copy.deepcopy(cached[1])
     manifest = backend.require_project_manifest(project_id)
     document, _ = backend.load_project_plan(project_id)
     stages = manifest.get('pipeline', [])
     with backend.DB_LOCK, backend.db() as connection:
         raw_tasks = connection.execute('SELECT * FROM tasks WHERE project_id=? ORDER BY created_at DESC', (project_id,)).fetchall()
     task_values = [backend.task_row(row) for row in raw_tasks]
+    queue_values = backend.TASK_SCHEDULER.queue_info_many([task['id'] for task in task_values])
     for task in task_values:
-        task['queue'] = backend.TASK_SCHEDULER.queue_info(task['id'])
+        task['queue'] = queue_values.get(task['id'], {})
     def select_stage(segment, available):
         workflow = segment.get('workflow') or (manifest.get('production_preset') or {}).get('workflow')
         _, selected = backend.select_preset_execution(manifest, workflow, None)
@@ -353,4 +364,6 @@ def project_readiness(project_id: str, state: dict[str, Any]) -> dict[str, Any]:
         selected_stages = {select_stage({}, stages)}
     result['input_requirements'] = [spec for stage in stages if stage.get('id') in selected_stages
                                     for spec in backend.pipeline_contract(stage, manifest).get('input_specs', [])]
+    with _READINESS_CACHE_LOCK:
+        _READINESS_CACHE[cache_key] = (signature, copy.deepcopy(result))
     return result

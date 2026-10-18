@@ -317,34 +317,49 @@ class TaskScheduler:
             self.wake()
 
     def queue_info(self, task_id: str) -> dict[str, Any]:
+        values = self.queue_info_many([task_id])
+        return values.get(task_id, {})
+
+    def queue_info_many(self, task_ids: list[str] | set[str]) -> dict[str, dict[str, Any]]:
+        """Build queue views from one task snapshot and one in-memory grouping pass."""
+        requested = {str(task_id) for task_id in task_ids}
+        if not requested:
+            return {}
         with self.admission_lock, self.db_lock, self.connect() as connection:
             tasks = self._rows(connection)
-            task = next((row for row in tasks if row["id"] == task_id), None)
-            if not task:
-                return {}
-            queued = task["status"] in WAITING
-            ordered = self._ordered(connection, tasks, resource(task))
-            row = connection.execute("SELECT value FROM scheduler_meta WHERE key=?", ("reason:" + task_id,)).fetchone()
+            by_id = {row["id"]: row for row in tasks}
+            ordered = {kind: self._ordered(connection, tasks, kind) for kind in ("gpu", "cpu")}
+            rows = connection.execute(
+                "SELECT key, value FROM scheduler_meta WHERE key LIKE 'reason:%'"
+            ).fetchall()
+            reasons = {str(row["key"])[7:]: row["value"] for row in rows}
             connection.commit()
-            dependency_reason, _ = self._dependency_reason(task, tasks)
-            if dependency_reason:
-                reason = normalize_reason(dependency_reason)
-            elif row:
-                try:
-                    reason = normalize_reason(json.loads(row[0]))
-                except (ValueError, TypeError):
-                    reason = normalize_reason(row[0])
-            else:
-                reason = normalize_reason("waiting_execution_slot")
-            if queued:
-                state = "waiting_dependency" if reason["code"] in {"waiting_dependency", "dependency_unresolved", "dependency_missing", "dependency_failed"} else "waiting_resource"
-            else:
-                state = "needs_reconcile" if task["status"] == "needs_reconcile" else "terminal" if task["status"] in TERMINAL else "executing"
-            return {"state": state, "reason": reason if queued else None,
-                    "queued": queued, "resource": resource(task),
-                    "position": next((i + 1 for i, item in enumerate(ordered) if item["id"] == task_id), None) if queued else None,
-                    "reason_code": reason["code"] if queued else None,
-                    "global_limit": self.global_limit, "user_limit": self.user_limit}
+            result = {}
+            for task_id in requested:
+                task = by_id.get(task_id)
+                if not task:
+                    continue
+                queued = task["status"] in WAITING
+                dependency_reason, _ = self._dependency_reason(task, tasks)
+                if dependency_reason:
+                    reason = normalize_reason(dependency_reason)
+                elif task_id in reasons:
+                    try:
+                        reason = normalize_reason(json.loads(reasons[task_id]))
+                    except (ValueError, TypeError):
+                        reason = normalize_reason(reasons[task_id])
+                else:
+                    reason = normalize_reason("waiting_execution_slot")
+                if queued:
+                    state = "waiting_dependency" if reason["code"] in {"waiting_dependency", "dependency_unresolved", "dependency_missing", "dependency_failed"} else "waiting_resource"
+                else:
+                    state = "needs_reconcile" if task["status"] == "needs_reconcile" else "terminal" if task["status"] in TERMINAL else "executing"
+                position = next((i + 1 for i, item in enumerate(ordered[resource(task)]) if item["id"] == task_id), None) if queued else None
+                result[task_id] = {"state": state, "reason": reason if queued else None,
+                                   "queued": queued, "resource": resource(task),
+                                   "position": position, "reason_code": reason["code"] if queued else None,
+                                   "global_limit": self.global_limit, "user_limit": self.user_limit}
+            return result
 
     def summary(self) -> dict[str, Any]:
         with self.admission_lock, self.db_lock, self.connect() as connection:

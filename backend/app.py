@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import math
 import os
@@ -89,6 +90,14 @@ PRIVATE_WORKSPACES = None
 
 ASSEMBLY_BUILDER = PROJECT / "tools" / "build_assembly_workflow.py"
 REFERENCE_DECOMPOSE_ACTIVE = 0
+
+_PROJECT_CACHE_LOCK = threading.RLock()
+_PROJECT_STATE_CACHE: dict[tuple[str, str], tuple[tuple[Any, ...], dict[str, Any]]] = {}
+
+
+def project_cache_scope() -> str:
+    principal = current_principal.get()
+    return str(principal.identity.username) if principal is not None else "__legacy__"
 
 
 def catalog_transaction(function):
@@ -821,6 +830,30 @@ def project_records(project_id: str | None = None) -> list[dict[str, Any]]:
             (target_project,),
         ).fetchall()
     return [record_row(row) for row in rows]
+
+
+def project_cache_signature(project_id: str) -> tuple[Any, ...]:
+    """Return cheap revision tokens for project state and task queue reads."""
+    try:
+        manifest = load_project_manifest(project_id)
+        plan_path = resolve_registered_path(str(manifest.get("plan_path", "")))
+    except (RuntimeError, HTTPException, OSError, ValueError):
+        plan_path = PLAN_PATH if project_id == CURRENT_PROJECT_ID else Path("")
+    try:
+        stat = plan_path.stat()
+        plan_token = (stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        plan_token = (0, 0)
+    with DB_LOCK, db() as connection:
+        record = connection.execute(
+            "SELECT COALESCE(MAX(revision), 0), COUNT(*), COALESCE(MAX(id), 0) FROM project_records WHERE project_id=?",
+            (project_id,),
+        ).fetchone()
+        task = connection.execute(
+            "SELECT COALESCE(MAX(updated_at), 0), COUNT(*), COALESCE(MAX(rowid), 0) FROM tasks WHERE project_id=?",
+            (project_id,),
+        ).fetchone()
+    return (project_cache_scope(), str(project_id), *plan_token, *(record or (0, 0, 0)), *(task or (0, 0, 0)))
 
 
 def resolve_workflow_path(value: str | Path) -> Path:
@@ -1979,6 +2012,12 @@ def current_project() -> dict[str, Any]:
 @plan_transaction
 def build_project_state(project_id: str | None = None) -> dict[str, Any]:
     target_project = project_id or CURRENT_PROJECT_ID
+    signature = project_cache_signature(target_project)
+    cache_key = (project_cache_scope(), str(target_project))
+    with _PROJECT_CACHE_LOCK:
+        cached = _PROJECT_STATE_CACHE.get(cache_key)
+        if cached and cached[0] == signature:
+            return copy.deepcopy(cached[1])
     records = project_records(target_project)
     latest: dict[tuple[str, str], dict[str, Any]] = {}
     for record in records:
@@ -2012,7 +2051,7 @@ def build_project_state(project_id: str | None = None) -> dict[str, Any]:
                     valid = False
                 if not valid:
                     review.update(status='stale', stale_reason='审核未绑定当前候选版本，请重新查看并确认；原审核保留在历史中')
-    return {
+    result = {
         "schema_version": 1,
         "project_id": target_project,
         "creative": ({**creative_record["data"], "revision": creative_record["revision"], "source": creative_record["source"], "created_at": creative_record["created_at_iso"]} if creative_record else None),
@@ -2021,6 +2060,9 @@ def build_project_state(project_id: str | None = None) -> dict[str, Any]:
         "artifacts": sorted(artifacts, key=lambda item: (item.get("kind", ""), item.get("asset_id", ""))),
         "history": records,
     }
+    with _PROJECT_CACHE_LOCK:
+        _PROJECT_STATE_CACHE[cache_key] = (signature, copy.deepcopy(result))
+    return result
 
 
 @app.get("/api/project-state")
