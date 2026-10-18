@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { loadDrafts, normalizeLiveTaskState } from './helpers';
-import type { Draft, Drafts, TaskRecord } from './types';
+import type { Draft, Drafts, PlanAssembly, PlanSegment, ProjectManifest, TaskRecord } from './types';
 
 const SIDEBAR_WIDTH_KEY = 'director-workbench:sidebar-width';
 const DRAFTS_KEY = (projectId: string) => `director-workbench:${projectId}:drafts:v1`;
@@ -347,4 +347,60 @@ export function usePlayback(options: PlaybackOptions) {
 
   const playbackDisabled = !ready || (kind !== 'image' && (mediaLoad.key !== mediaKey || mediaLoad.status !== 'ready'));
   return { playing, mediaLoad, mediaStatus: mediaLoad.key === mediaKey ? mediaLoad.status : 'loading', playbackDisabled, togglePlay, finish, mediaProps };
+}
+
+type ProjectSessionOptions = {
+  privateMode: boolean;
+  onProjectLoaded: (project: ProjectManifest) => void;
+  onOffline: () => void;
+};
+
+/** Loads the active project once and leaves private-mode recovery to the caller. */
+export function useProjectSession({ privateMode, onProjectLoaded, onOffline }: ProjectSessionOptions) {
+  const [loading, setLoading] = useState(true);
+  const callbacks = useRef({ onProjectLoaded, onOffline });
+  callbacks.current = { onProjectLoaded, onOffline };
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetch('/api/project')
+      .then(response => response.ok ? response.json() : Promise.reject(new Error('project')))
+      .then(data => { if (!cancelled) callbacks.current.onProjectLoaded(data as ProjectManifest); })
+      .catch(() => { if (!cancelled) callbacks.current.onOffline(); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [privateMode]);
+  return { loading };
+}
+
+type PlanOptions = {
+  projectId?: string;
+  privateMode: boolean;
+  onRefreshState?: () => void;
+};
+
+/** Owns the active plan snapshot and its revision-bound refresh request. */
+export function usePlan({ projectId, privateMode, onRefreshState }: PlanOptions) {
+  const [planSegments, setPlanSegments] = useState<PlanSegment[]>([]);
+  const [planRevision, setPlanRevision] = useState(0);
+  const [planAssembly, setPlanAssembly] = useState<PlanAssembly | null>(null);
+  const projectRef = useRef(projectId);
+  projectRef.current = projectId;
+  const stateCallback = useRef(onRefreshState);
+  stateCallback.current = onRefreshState;
+
+  const refreshPlan = useCallback(async () => {
+    if (privateMode && !projectId) return;
+    const requestedProjectId = projectId;
+    const response = await fetch(projectId ? `/api/projects/${encodeURIComponent(projectId)}/plan` : '/api/plan');
+    if (!response.ok) throw new Error('plan');
+    const data = await response.json();
+    if (projectRef.current !== requestedProjectId) return;
+    if (Array.isArray(data.segments)) setPlanSegments(data.segments as PlanSegment[]);
+    setPlanRevision(Number(data.revision) || 0);
+    setPlanAssembly(data.assembly && typeof data.assembly === 'object' ? data.assembly as PlanAssembly : null);
+    stateCallback.current?.();
+  }, [privateMode, projectId]);
+
+  return { planSegments, setPlanSegments, planRevision, setPlanRevision, planAssembly, setPlanAssembly, refreshPlan };
 }

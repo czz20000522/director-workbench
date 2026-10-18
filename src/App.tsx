@@ -35,9 +35,9 @@ import './quick-create.css';
 import ResolutionPicker from './ResolutionPicker';
 const CandidateComparison = lazy(() => import('./CandidateComparison'));
 import { downloadName, mediaUrl, workflowUrl } from './api/client';
-import { useComfyStatus, useDrafts, usePlayback, useProjectTasks, useSidebarWidth } from './app/hooks';
+import { useComfyStatus, useDrafts, usePlan, usePlayback, useProjectSession, useProjectTasks, useSidebarWidth } from './app/hooks';
 
-import type { BatchTask, CheckpointRecord, CreativeConflict, CreativeDraft, CreativeProfile, PipelineValidation, PlanAssembly, PlanSegment, ProductionStep, ProductionStepState, ProjectManifest, ProjectState, QuickAspect, ReusableTemplate, ReviewRecord, SegmentDraft, SegmentEdit, ShotGenerationSettings, ShotVersion, TaskRecord, WorkflowCatalogEntry } from './app/types';
+import type { BatchTask, CheckpointRecord, CreativeConflict, CreativeDraft, CreativeProfile, PipelineValidation, ProductionStep, ProductionStepState, ProjectManifest, ProjectState, QuickAspect, ReusableTemplate, ReviewRecord, SegmentDraft, SegmentEdit, ShotGenerationSettings, ShotVersion, TaskRecord, WorkflowCatalogEntry } from './app/types';
 import { ASPECT_LABEL, QUICK_SERIES, adultVideoProfileNote, blankCreativeDraft, candidateOutputFacts, checkpointLabel, hasCreativeDraftContent, loadCreativeDraft, localSystemTime, measureStillAspect, normalizeCreativeDraft, normalizeLiveTaskState, normalizeManifestAsset, outputMethodLabel, outputResolutionLabel, readNewSegmentDraft, reviewLabel, sameCreativeDraft, taskStateLabel, taskStateLabels, versionMaterial } from './app/helpers';
 
 export default function App({ privateMode = false, onLogout, logoutBusy = false, sessionError = '' }: { privateMode?: boolean; onLogout?: () => void; logoutBusy?: boolean; sessionError?: string } = {}) {
@@ -63,7 +63,8 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const [quickBusy, setQuickBusy] = useState(false);
   const quickWorking = useRef(false);
   const [quickError, setQuickError] = useState('');
-  const [projectLoading, setProjectLoading] = useState(true);
+  const refreshProjectsRef = useRef<(() => Promise<Array<{ id: string; title: string; series?: string; selected?: boolean }>>) | null>(null);
+  const selectProjectRef = useRef<((projectId: string) => Promise<void>) | null>(null);
   const [referenceTarget, setReferenceTarget] = useState<{ projectId: string; analysisId: string } | null>(null);
   const [workspaceMode, setWorkspaceMode] = useState<'production' | 'reverse'>('production');
   const [workspacePage, setWorkspacePage] = useState<'creative' | 'script' | 'shots' | 'delivery' | 'enhance'>('shots');
@@ -116,6 +117,8 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const [materialBridgeDevice, setMaterialBridgeDevice] = useState(false);
   const submittingShot = useRef(false);
   const regeneratingShot = useRef(false);
+  const refreshProjectStateRef = useRef<(() => Promise<void>) | null>(null);
+  const refreshPlanRef = useRef<(() => Promise<void>) | null>(null);
   const [pendingAssemblyProject, setPendingAssemblyProject] = useState('');
   const [assemblySubmitting, setAssemblySubmitting] = useState(false);
   const submittingAssembly = useRef(false);
@@ -216,17 +219,44 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const [creativeOpen, setCreativeOpen] = useState(false);
   const [creativeDraft, setCreativeDraft] = useState<CreativeDraft>(blankCreativeDraft());
   const [creativeConflict, setCreativeConflict] = useState<CreativeConflict | null>(null);
+  const { loading: projectLoading } = useProjectSession({
+    privateMode,
+    onProjectLoaded: data => {
+      setProject(data);
+      setSelected('');
+      setPipelineStageId('');
+      loadDraftsForProject(String(data.id));
+      setCreativeDraft(loadCreativeDraft(`director-workbench:${String(data.id)}:creative:v1`));
+      setCreativeConflict(null);
+      void refreshProjectsRef.current?.().catch(() => {});
+    },
+    onOffline: () => {
+      setNotice(privateMode ? '正在读取你的作品…' : '项目清单暂时不可用，当前仅显示离线占位。');
+      if (!privateMode) return;
+      const request = refreshProjectsRef.current?.();
+      if (!request) return;
+      void request.then(async items => {
+        const last = localStorage.getItem('director-workbench:last-project');
+        const initial = items.find(item => item.id === last) ?? items[0];
+        if (initial) await selectProjectRef.current?.(initial.id);
+        else setNotice('还没有作品。可以使用上方“新建作品”开始创作。');
+      }).catch(() => setNotice('作品列表读取失败，请刷新重试。'));
+    },
+  });
   const [reviewConflict, setReviewConflict] = useState<{ projectId: string; assetId: string; stage: ReviewRecord['stage']; state: ProjectState } | null>(null);
   const [projectState, setProjectState] = useState<ProjectState | null>(null);
   const [stateSaving, setStateSaving] = useState(false);
   const [segmentEdit, setSegmentEdit] = useState<SegmentEdit>({ duration_seconds: '', location: '', shot_size: '', camera: '', wardrobe: '', performance: '', prompt: '', workflow: '', first_frame: '', last_frame: '', audio_guide: '', delivery_master: '', dependencies: '' });
   useEffect(() => { setDraftReadiness(null); }, [project?.id, selected, segmentEdit]);
-  const [planSegments, setPlanSegments] = useState<PlanSegment[]>([]);
-  const [planRevision, setPlanRevision] = useState(0);
   const [mergeEnd, setMergeEnd] = useState('');
   useEffect(() => { setMergeEnd(''); }, [project?.id, selected]);
   const creatingSegment = useRef(false);
-  const [planAssembly, setPlanAssembly] = useState<PlanAssembly | null>(null);
+  const { planSegments, setPlanSegments, planRevision, setPlanRevision, planAssembly, setPlanAssembly, refreshPlan } = usePlan({
+    projectId: project?.id,
+    privateMode,
+    onRefreshState: () => { void refreshProjectStateRef.current?.().catch(() => { /* the plan remains usable while state is offline */ }); },
+  });
+  refreshPlanRef.current = refreshPlan;
   const creativeStorageKey = `director-workbench:${project?.id ?? 'loading'}:creative:v1`;
   const baseAssets = useMemo(() => project ? (Array.isArray(project.assets) ? project.assets.filter(isCreativeMaterial).map(normalizeManifestAsset) : []) : privateMode ? [] : fallbackAssets, [privateMode, project]);
   const diagnosticPaths = useMemo(() => diagnosticMaterialPaths(project), [project]);
@@ -240,7 +270,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   }, []);
   const autoplayRef = useRef(false);
   const advancing = useRef(false);
-  const refreshPlanRef = useRef<(() => Promise<void>) | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const planVideoAssets: Asset[] = useMemo(() => planSegments.map(segment => {
     const base = baseAssets.find(asset => asset.id === segment.id);
@@ -427,32 +456,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   ];
   const checkpointSummary = productionRail.map(step => `${step.label}:${step.detail}`).join(' · ');
   const timelineCountLabel = planSegments.length ? `${planSegments.length} 个分镜${assemblyAsset ? ' · 含完整版候选' : ''}` : `${timelineAssets.length} 个${labels[kind]}`;
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/project').then(response => response.ok ? response.json() : Promise.reject(new Error('project'))).then(data => {
-      if (cancelled) return;
-      setProject(data as ProjectManifest);
-      setSelected('');
-      // Open the production page in a quiet overview state. Parameter controls
-      // appear only after the reviewer chooses a concrete step.
-      setPipelineStageId('');
-      loadDraftsForProject(String(data.id));
-      setCreativeDraft(loadCreativeDraft(`director-workbench:${String(data.id)}:creative:v1`));
-      setCreativeConflict(null);
-      void refreshProjects();
-    }).catch(() => { if (!cancelled) {
-      setNotice(privateMode ? '正在读取你的作品…' : '项目清单暂时不可用，当前仅显示离线占位。');
-      if (privateMode) return refreshProjects().then(async items => {
-        if (cancelled) return;
-        const last = localStorage.getItem('director-workbench:last-project');
-        const initial = items.find(item => item.id === last) ?? items[0];
-        if (initial) await selectProject(initial.id);
-        else setNotice('还没有作品。可以使用上方“新建作品”开始创作。');
-      }).catch(() => { if (!cancelled) setNotice('作品列表读取失败，请刷新重试。'); });
-    } }).finally(() => { if (!cancelled) setProjectLoading(false); });
-    return () => { cancelled = true; };
-  }, []);
 
   useEffect(() => {
     if (!project) return;
@@ -656,20 +659,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
     await persistReview('sample', 'approved', variant);
   }
 
-  async function refreshPlan() {
-    if (privateMode && !project?.id) return;
-    const requestedProjectId = project?.id;
-    const response = await fetch(project?.id ? `/api/projects/${encodeURIComponent(project.id)}/plan` : '/api/plan');
-    if (!response.ok) throw new Error('plan');
-    const data = await response.json();
-    if (activeProjectId.current !== requestedProjectId) return;
-    if (Array.isArray(data.segments)) setPlanSegments(data.segments as PlanSegment[]);
-    setPlanRevision(Number(data.revision) || 0);
-    setPlanAssembly(data.assembly && typeof data.assembly === 'object' ? data.assembly as PlanAssembly : null);
-    void refreshProjectState().catch(() => setNotice('服务器准备度读取失败，请刷新后重试。'));
-  }
-  refreshPlanRef.current = refreshPlan;
-
   async function restoreShotVersion(version: ShotVersion) {
     if (!project?.id || !currentPlanSegment || restoringVersion) return;
     const projectId = project.id;
@@ -713,6 +702,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
       setCreativeConflict(null);
     }
   }
+  refreshProjectStateRef.current = refreshProjectState;
 
   async function saveCreativeSettings(status: 'pending_review' | 'approved') {
     if (!project?.id) return;
@@ -844,6 +834,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
     setProjectList(items);
     return items;
   }
+  refreshProjectsRef.current = refreshProjects;
 
   async function afterDirectoryDeleted() {
     setDeleteDirectory(null);
@@ -901,6 +892,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
       return data as ProjectManifest;
     } catch (error) { if (reportFailure) throw error; setNotice(error instanceof Error ? error.message : '项目切换失败。'); }
   }
+  selectProjectRef.current = async projectId => { await selectProject(projectId); };
 
   async function createProject() {
     if (creatingProject) return;
