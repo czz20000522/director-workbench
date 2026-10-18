@@ -6,6 +6,8 @@ The caller installs a project authorization callback before enabling this layer.
 from contextvars import ContextVar
 from dataclasses import dataclass
 import json
+import threading
+import time
 from typing import Callable
 
 from starlette.requests import Request
@@ -16,6 +18,41 @@ from .user_context import SessionIdentity
 
 COOKIE = 'director_session'
 SAFE_METHODS = {'GET', 'HEAD', 'OPTIONS'}
+# Failed logins are remembered per account and client source, so a slow PBKDF2 verifier
+# cannot be turned into an online guessing loop.  Both values are module constants so a
+# deployment or test can tighten them in one place.
+LOGIN_FAILURE_LIMIT = 5
+LOGIN_FAILURE_WINDOW_SECONDS = 300
+
+
+class SecurityHeaders:
+    """Add browser-hardening headers to every response, including the static shell.
+
+    Installed as the outermost middleware on the application: the authentication layer
+    deliberately lets the unauthenticated page and its assets pass through untouched.
+    """
+    HEADERS = (
+        (b'x-content-type-options', b'nosniff'),
+        (b'x-frame-options', b'DENY'),
+        (b'referrer-policy', b'no-referrer'),
+    )
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope['type'] != 'http':
+            return await self.app(scope, receive, send)
+
+        async def send_with_headers(message):
+            if message['type'] == 'http.response.start':
+                headers = list(message.get('headers', []))
+                present = {name.lower() for name, _ in headers}
+                headers.extend((name, value) for name, value in self.HEADERS if name not in present)
+                message = {**message, 'headers': headers}
+            await send(message)
+
+        return await self.app(scope, receive, send_with_headers)
 
 
 class _RevokedStream(Exception):
@@ -42,6 +79,30 @@ class PrivateAuth:
         self.authorize = authorize
         self.administrators = frozenset(administrators)
         self.secure_cookie = secure_cookie
+        # (account, source) -> monotonic timestamps of recent failures, under a lock.
+        self.login_failures: dict[tuple[str, str], list[float]] = {}
+        self.login_lock = threading.Lock()
+
+    def login_allowed(self, username: str, source: str) -> bool:
+        key = (username.lower(), source or '')
+        now = time.monotonic()
+        with self.login_lock:
+            attempts = [at for at in self.login_failures.get(key, ())
+                        if now - at < LOGIN_FAILURE_WINDOW_SECONDS]
+            if attempts:
+                self.login_failures[key] = attempts
+            else:
+                self.login_failures.pop(key, None)
+            return len(attempts) < LOGIN_FAILURE_LIMIT
+
+    def record_login_failure(self, username: str, source: str) -> None:
+        key = (username.lower(), source or '')
+        with self.login_lock:
+            self.login_failures.setdefault(key, []).append(time.monotonic())
+
+    def clear_login_failures(self, username: str, source: str) -> None:
+        with self.login_lock:
+            self.login_failures.pop((username.lower(), source or ''), None)
 
     def authenticate(self, request):
         authorization = request.headers.get('authorization')
@@ -120,9 +181,18 @@ class PrivateAuth:
                 values = json.loads(body)
                 if not isinstance(values, dict) or set(values) != {'username', 'password'}:
                     raise ValueError()
+            except (ValueError, TypeError, UnicodeError):
+                return await respond(401, '用户名或密码错误')
+            source = request.client.host if request.client is not None else ''
+            username = values['username'] if isinstance(values['username'], str) else ''
+            if not self.login_allowed(username, source):
+                return await respond(429, '登录尝试过多，请稍后再试')
+            try:
                 token = self.sessions.login(values['username'], values['password'])
             except (ValueError, TypeError, UnicodeError, AuthenticationError):
+                self.record_login_failure(username, source)
                 return await respond(401, '用户名或密码错误')
+            self.clear_login_failures(username, source)
             old_token = request.cookies.get(COOKIE, '')
             if old_token:
                 self.sessions.logout(old_token)

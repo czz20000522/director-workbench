@@ -110,7 +110,8 @@ def health() -> dict[str, Any]:
 
 @ROUTER.get("/api/status")
 def status() -> dict[str, Any]:
-    return {"comfy": backend.comfy_status(), "runtime": str(backend.RUNTIME)}
+    """Engine status only: the runtime root is a machine path the browser never needs."""
+    return {"comfy": backend.comfy_status()}
 
 
 @ROUTER.get("/api/plan")
