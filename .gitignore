@@ -31,6 +31,7 @@
 !/backend/routers/project_catalog.py
 !/backend/routers/project_transfer.py
 !/backend/routers/workbench_status.py
+!/backend/routers/task_entry.py
 !/contracts/
 /contracts/*
 !/docs/
