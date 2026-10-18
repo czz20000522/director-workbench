@@ -60,6 +60,9 @@ jobs:
           # still import the backend; tests that freeze the real host paths are marked windows.
           DIRECTOR_DESKTOP_ROOT: ${{ runner.temp }}/Comfy-Desktop
           PYTHONNOUSERSITE: "1"
+          # Windows runners default to the legacy locale code page; the fixtures are UTF-8.
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: "utf-8"
         run: >-
           python -m pytest tests tools/test_build_video_finish_workflow.py
           --ignore=tests/test_generate_auk_flash.py -q

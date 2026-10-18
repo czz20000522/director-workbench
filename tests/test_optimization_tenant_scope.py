@@ -89,6 +89,7 @@ def test_gpu_only_ignores_cpu_tasks(tmp_path, monkeypatch):
         current_principal.reset(token)
 
 
+@pytest.mark.host_tool
 def test_deleting_own_work_is_not_blocked_by_another_accounts_task(private_workbench):
     a, b, ownership, _ = private_workbench
     mine = create(a)

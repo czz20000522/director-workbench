@@ -96,6 +96,7 @@ def test_physical_series_visible_and_isolated(private_workbench):
     assert {item['name'] for item in a.get('/api/private/series').json()['series']} == {'东方美学', '新系列'}
 
 
+@pytest.mark.host_tool
 def test_delete_preview_and_apply_stay_within_owner(private_workbench):
     a, b, ownership, _ = private_workbench
     item = create(a)
@@ -134,6 +135,7 @@ def test_delete_segment_updates_plan_without_erasing_shared_assets(private_workb
     assert after['segments'][0]['start_seconds'] == 0
 
 
+@pytest.mark.host_tool
 def test_series_delete_rejects_another_target_plan(private_workbench):
     a, _, ownership, _ = private_workbench
     assert a.post('/api/private/series', json={'name': '甲系列'}).status_code == 201
