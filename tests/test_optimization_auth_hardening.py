@@ -4,8 +4,9 @@ from fastapi.testclient import TestClient
 
 from backend import app as backend
 from backend import private_auth
-from backend.private_auth import SecurityHeaders
+from backend.private_auth import PrivateAuth, SecurityHeaders
 from backend.routers import workbench_status
+from backend.private_sessions import AccountStore, SessionManager
 
 
 def test_security_headers_cover_the_page_and_the_api():
@@ -53,3 +54,18 @@ def test_repeated_login_failures_are_throttled(private_workbench, monkeypatch):
     monkeypatch.setattr(private_auth, 'LOGIN_FAILURE_WINDOW_SECONDS', 0)
     assert client.post('/api/auth/login', json=right).status_code == 200
 
+
+def test_login_failure_keys_expire_and_are_bounded(tmp_path, monkeypatch):
+    store = AccountStore(tmp_path / 'accounts.json', permitted_root=tmp_path)
+    store.create_account('user001', 'one')
+    auth = PrivateAuth(FastAPI(), sessions=SessionManager(store), origins=('http://testserver',), authorize=lambda request, principal: None)
+    monkeypatch.setattr(private_auth, 'LOGIN_FAILURE_MAX_KEYS', 2)
+    monkeypatch.setattr(private_auth, 'LOGIN_FAILURE_WINDOW_SECONDS', 10)
+    monkeypatch.setattr(private_auth.time, 'monotonic', lambda: 105.0)
+    auth.login_failures = {('expired', 'source'): [90.0], ('fresh', 'source'): [100.0]}
+    assert auth.login_allowed('fresh', 'source')
+    assert ('expired', 'source') not in auth.login_failures
+    for username in ('one', 'two', 'three'):
+        auth.record_login_failure(username, 'source')
+    assert len(auth.login_failures) == 2
+    assert ('three', 'source') in auth.login_failures
