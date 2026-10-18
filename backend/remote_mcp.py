@@ -5,6 +5,8 @@ the same tools over the SDK's Streamable HTTP transport, so a client that keeps
 its own workbench bearer reaches the existing authenticated business routes
 instead of an alternate implementation.
 """
+from contextlib import AsyncExitStack, asynccontextmanager
+
 import httpx
 
 from mcp_server.server import create_server
@@ -41,16 +43,48 @@ def install(app, *, http_app_provider, token_provider, environ=None):
     app.mount('/mcp', mcp_app, name='director-mcp')
     app.state.remote_mcp = remote
 
-    @app.on_event('startup')
-    async def start_mcp():
+    @asynccontextmanager
+    async def serve_mcp():
         await prepare(remote)
         context = remote.session_manager.run()
         await context.__aenter__()
         app.state.remote_mcp_context = context
-
-    @app.on_event('shutdown')
-    async def stop_mcp():
-        context = getattr(app.state, 'remote_mcp_context', None)
-        if context is not None:
+        try:
+            yield
+        finally:
+            app.state.remote_mcp_context = None
             await context.__aexit__(None, None, None)
+
+    # The session manager only stays open while the app's lifespan is running, so the app
+    # owns entering and exiting this; see the lifespan in backend/app.py.
+    lifespan_subsystems(app).append(serve_mcp)
     return remote
+
+
+def lifespan_subsystems(app):
+    """The list of context managers this app's lifespan enters, one per mounted subsystem.
+
+    The workbench app builds this list and enters it from its own lifespan (backend/app.py).
+    An app assembled somewhere else -- a test fixture mounting this entry onto a bare
+    FastAPI, say -- has no such lifespan and would leave the session manager closed, so it
+    gets one that enters whatever is appended here.
+    """
+    if hasattr(app.state, 'lifespan_subsystems'):
+        return app.state.lifespan_subsystems
+    subsystems = []
+    app.state.lifespan_subsystems = subsystems
+    inner = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(app_):
+        stack = AsyncExitStack()
+        await stack.enter_async_context(inner(app_))
+        for factory in subsystems:
+            await stack.enter_async_context(factory())
+        try:
+            yield
+        finally:
+            await stack.aclose()
+
+    app.router.lifespan_context = lifespan
+    return subsystems
