@@ -30,6 +30,7 @@ def access(tmp_path_factory, monkeypatch, request):
     environ = getattr(request, 'param', {})
     for name, value in environ.items():
         monkeypatch.setenv(name, value)
+    # This bridge invokes the fixture as a plain factory outside pytest's resolver.
     a,b,ownership,root=private_workbench.__wrapped__(tmp_path_factory.mktemp('access'),monkeypatch)
     if 'DIRECTOR_PRIVATE_ORIGINS' in environ:
         backend.app.user_middleware[0].kwargs['origins'] = tuple(environ['DIRECTOR_PRIVATE_ORIGINS'].split(','))
