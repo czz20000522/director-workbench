@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from backend import app as backend
 from backend import production_presets
-from test_private_workbench import private_workbench, create as create_private
+from test_private_workbench import create as create_private
 
 
 class _NoopThread:

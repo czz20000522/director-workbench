@@ -1,5 +1,4 @@
 from backend import app as backend
-from test_production_presets import preset_client
 
 
 def test_create_without_selection_preserves_active_and_default_project(preset_client):

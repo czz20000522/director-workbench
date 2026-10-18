@@ -1,7 +1,6 @@
 import json
 
 from backend import app as backend
-from test_production_presets import preset_client
 
 
 def setup_source(client, project):

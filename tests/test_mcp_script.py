@@ -7,7 +7,6 @@ import pytest
 pytest.importorskip('mcp')
 from mcp import Client
 from mcp_server.server import create_server
-from test_production_presets import preset_client
 import threading
 
 REAL_THREAD = threading.Thread

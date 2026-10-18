@@ -1,8 +1,8 @@
 import json
 
 from backend import app as backend
-from test_private_workbench import create, private_workbench
-from test_production_presets import add_shot, preset_client
+from test_private_workbench import create
+from test_production_presets import add_shot
 
 
 BASE = "/api/projects/preset-test/segments/S01/versions"

@@ -9,7 +9,6 @@ from mcp import Client
 from backend import app as backend
 from mcp_server.server import create_server
 from test_keyframe_inputs import reference_image
-from test_production_presets import preset_client
 
 REAL_THREAD = threading.Thread
 

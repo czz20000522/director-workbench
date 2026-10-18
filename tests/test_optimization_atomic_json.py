@@ -4,7 +4,7 @@ import json
 import pytest
 
 from backend import app as backend
-from test_private_workbench import create, private_workbench  # noqa: F401  (pytest fixture)
+from test_private_workbench import create
 
 
 def failing_replace(*args, **kwargs):

@@ -6,7 +6,6 @@ import pytest
 
 from backend import app as backend
 from test_scheduler_app import queued_private_app, prepare
-from test_private_workbench import private_workbench
 
 
 @pytest.fixture

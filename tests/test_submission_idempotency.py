@@ -1,5 +1,5 @@
 from backend import app as backend
-from test_production_presets import preset_client, install, add_shot
+from test_production_presets import install, add_shot
 
 
 def test_retry_returns_original_before_capacity_or_snapshot(preset_client, monkeypatch):

@@ -17,7 +17,7 @@ from backend import app as backend, creative_inspection, h3_duration, media_oper
 from mcp_server.server import create_server
 from test_production_presets import preset_client as base_preset_client, add_shot
 from test_assembly_edit import edit_client
-from test_private_workbench import private_workbench, create
+from test_private_workbench import create
 from test_segment_versions import generated_version
 
 # Real FFmpeg/ASR and the host media pipeline are required by this module.

@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from backend import app as backend
 from backend.user_context import UserContext
-from test_private_workbench import create, private_workbench  # noqa: F401  (pytest fixture)
+from test_private_workbench import create
 
 
 def test_per_file_limit_returns_413_and_removes_the_partial_file(monkeypatch, private_workbench):

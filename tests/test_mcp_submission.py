@@ -7,7 +7,7 @@ pytest.importorskip('mcp')
 from mcp import Client
 from backend import app as backend
 from mcp_server.server import create_server
-from test_production_presets import preset_client, install, add_shot
+from test_production_presets import install, add_shot
 
 REAL_THREAD = threading.Thread
 

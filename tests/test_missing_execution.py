@@ -3,7 +3,6 @@ import json
 import pytest
 
 from backend import app as backend
-from test_production_presets import preset_client
 
 
 @pytest.fixture

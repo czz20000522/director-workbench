@@ -1,4 +1,3 @@
-from test_production_presets import preset_client
 
 
 def test_series_template_keeps_source_version_without_inheriting_story_or_approval(preset_client):

@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 from backend import app as backend
-from test_production_presets import add_shot, preset_client
+from test_production_presets import add_shot
 
 
 def test_finish_task_requires_explicit_sample_approval(preset_client):
@@ -72,4 +72,3 @@ def test_project_export_includes_candidate_manifest_for_series_handoff(preset_cl
     assert context['current_project_id'] == 'preset-test'
     assert context['works'][0]['id'] == 'preset-test'
     assert context['handoff']['last_segment_id'] == 'S01'
-

@@ -2,7 +2,6 @@
 import pytest
 
 from backend import app as backend
-from test_production_presets import preset_client
 
 
 STATES = ['draft', 'pending_review', 'approved', 'changes_requested', 'stale']

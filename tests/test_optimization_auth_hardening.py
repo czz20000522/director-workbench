@@ -6,7 +6,6 @@ from backend import app as backend
 from backend import private_auth
 from backend.private_auth import SecurityHeaders
 from backend.routers import workbench_status
-from test_private_workbench import private_workbench  # noqa: F401  (pytest fixture)
 
 
 def test_security_headers_cover_the_page_and_the_api():

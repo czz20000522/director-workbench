@@ -6,7 +6,7 @@ import pytest
 
 from backend import app as backend
 from backend.task_scheduler import TaskScheduler
-from test_private_workbench import private_workbench, create
+from test_private_workbench import create
 
 
 @pytest.fixture

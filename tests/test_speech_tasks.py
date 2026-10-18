@@ -1,7 +1,6 @@
 import json
 
 from backend import app as backend
-from test_production_presets import preset_client
 
 
 def test_flash_parameters_and_legacy_submission_identity(preset_client, monkeypatch):

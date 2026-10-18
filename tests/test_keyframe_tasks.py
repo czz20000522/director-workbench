@@ -4,7 +4,6 @@ from pathlib import Path
 
 from backend import app as backend
 from test_keyframe_inputs import reference_image
-from test_production_presets import preset_client
 
 
 def test_text_mode_needs_no_image_and_preserves_submission_identity(preset_client, monkeypatch):
