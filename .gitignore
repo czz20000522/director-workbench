@@ -32,6 +32,7 @@
 !/backend/routers/project_transfer.py
 !/backend/routers/workbench_status.py
 !/backend/routers/task_entry.py
+!/backend/routers/task_media.py
 !/contracts/
 /contracts/*
 !/docs/
