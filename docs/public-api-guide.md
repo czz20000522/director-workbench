@@ -8,6 +8,8 @@
 
 `POST /api/auth/login` 接受 `Content-Type: application/json`，JSON 只能含 `username` 和 `password`。服务端在响应 `Set-Cookie` 设置 `director_session`；登录 JSON 返回身份和过期时间，**不返回 token 字段**。浏览器 Cookie 为 HttpOnly，由页面管理；非浏览器客户端从自己的可信 Cookie 容器取出会话，并以 `Authorization: Bearer <本人的会话>` 调用。凭据仅存于内存或客户端安全会话容器，不放进提示词、共享 MCP 配置、Issue 或日志。
 
+失败登录按“账号 + 客户端来源”记录：默认 5 次失败在 5 分钟窗口内会返回 `429`，窗口过期或成功登录后清除计数。客户端应停止继续猜测密码，等待窗口结束或核对账号配置；该限制不改变成功会话的 Cookie/Bearer 使用方式。
+
 登录后用 `GET /api/auth/me` 核对当前身份，再 `GET /api/projects` 获取本人实际作品 ID。Cookie 写入请求须携带允许的同源 `Origin` 和当前身份 `X-Workspace-User`；Bearer 写入不需要浏览器身份头，但发送的 Origin 仍须符合允许列表。伪造用户名、localhost 来源或 MCP 标签不能获得管理员权限。会话只在当前服务进程内保存，服务重启、过期或密码变化后重新登录；账号切换时更新连接身份。
 
 | 响应 | 接续方式 |
@@ -43,7 +45,7 @@
 
 3. 图片/声音通过 `POST /api/projects/{project_id}/upload` 的 multipart `files` 上传，使用登记回执中实际素材引用。素材存在于库中不等于已绑定为首帧；角色参考、首尾帧、表演声音和完整母版应按对应字段分别指定。远程客户端不能把自身磁盘路径传给服务器路径导入接口。
 
-   上传有服务端上限：单文件默认 2 GiB、单次默认 200 个文件、单请求默认 4 GiB（部署方可用 `DIRECTOR_MAX_UPLOAD_BYTES`、`DIRECTOR_MAX_UPLOAD_FILES`、`DIRECTOR_MAX_UPLOAD_REQUEST_BYTES` 收紧或调整）。超限返回 `413`，不登记素材；客户端应据此拆分批次或压缩素材，而不是重试同一请求。
+   上传有服务端上限：单文件默认 2 GiB、单次默认 200 个文件、单请求默认 4 GiB（部署方可用 `DIRECTOR_MAX_UPLOAD_BYTES`、`DIRECTOR_MAX_UPLOAD_FILES`、`DIRECTOR_MAX_UPLOAD_REQUEST_BYTES` 收紧或调整）。超限返回 `413`，不登记素材；客户端应据此拆分批次或压缩素材，而不是重试同一请求。请求体上限会在 multipart 解析前检查，单文件写入使用分块和临时文件，失败时清理半成品。
 
 4. 无生成预检：`POST /api/projects/{project_id}/pipeline/auto/validate`。
 
@@ -72,6 +74,7 @@
 | 能力 | HTTP 入口 |
 | --- | --- |
 | 完整作品状态与准备度 | `/api/projects/{project_id}/state` |
+| 工作台与 ComfyUI 状态 | `/api/health`、`/api/status`；状态响应不返回服务器运行目录等机器路径 |
 | 剧本与场次，独立 revision | `/api/projects/{project_id}/script` |
 | 图片/声音/媒体工具缺项 | `/api/keyframe-capability`、`/api/speech-capability`、`/api/media-capability` |
 | 图片、声音、音频编辑、媒体处理任务 | `/api/projects/{project_id}/keyframe-tasks`、`speech-tasks`、`audio-edit-tasks`、`media-tasks` |
