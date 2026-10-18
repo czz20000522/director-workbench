@@ -64,6 +64,20 @@ def no_links(path: Path) -> Path:
     return path.resolve()
 
 
+def permitted_root(environ=None) -> Path:
+    """The allowlist root account storage has to sit under.
+
+    ``paths`` resolves every other machine root through an environment override; this one is
+    read here, at the point of use, rather than at import, because the startup path is
+    exercised by tests that cannot import the application inside their own temporary root.
+    Server configuration only: never populate it from a request.  With no override set this
+    is the recorded machine root, so a deployment that sets nothing behaves as before.
+    """
+    env = os.environ if environ is None else environ
+    value = env.get('DIRECTOR_PERMITTED_ROOT')
+    return no_links(Path(value)) if value else PERMITTED_ROOT
+
+
 @dataclass(frozen=True)
 class Layout:
     root: Path = DEFAULT_ROOT
