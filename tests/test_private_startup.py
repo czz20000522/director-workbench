@@ -1,4 +1,5 @@
 import runpy
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
@@ -7,6 +8,16 @@ from fastapi.testclient import TestClient
 from backend import app as backend
 from backend.private_sessions import AccountStore
 from tools.private_accounts import main
+
+
+def test_startup_port_defaults_preserve_the_ssh_mapping():
+    root = Path(__file__).resolve().parents[1]
+    assert '[int]$Port = 4100' in (root / 'start_backend.ps1').read_text(encoding='utf-8')
+    assert '[int]$Port = 4100' in (root / 'start_private_workbench.ps1').read_text(encoding='utf-8')
+    assert '[int]$ApiPort = 4100' in (root / 'start_workbench.ps1').read_text(encoding='utf-8')
+    services = (root / 'start-director-services.ps1').read_text(encoding='utf-8')
+    assert '[int]$WorkbenchPort = 4188' in services
+    assert '14188 -> 4188' in services
 
 
 def test_account_command_and_authenticated_entry(tmp_path, monkeypatch):
