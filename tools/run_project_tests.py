@@ -44,6 +44,10 @@ BROWSER_MEDIA_TESTS = {'client_restore': 'tests/client_restore_media.py'}
 # roots (accounts, the relocation backup) and a prefix test would eat them.
 RUN_ROOT_NAME = re.compile(r'^t-[0-9a-f]{8}(?:[0-9a-f]{4})?$')
 KEEP_RUNS = 3
+# How much of a child's output a report keeps.  A report outlives the console it was
+# printed to, and an exit code alone cannot tell a flake apart from a broken driver, so
+# what the child said is kept; the tail is the part that carries the failure.
+OUTPUT_TAIL_LINES = 40
 PROBE = """
 import importlib.util, importlib.metadata, json, os, site, sys
 modules = {}
@@ -103,6 +107,32 @@ def report_suite(name: str, result: dict) -> None:
         print(f'[{name}] ERROR: {error}', flush=True)
 
 
+def tail_of(output: str, lines: int = OUTPUT_TAIL_LINES) -> str:
+    """The last ``lines`` lines of a child's output, for the report and the error line."""
+    stripped = output.strip().splitlines()
+    return '\n'.join(stripped[-lines:])
+
+
+def with_output(message: str, detail: str) -> str:
+    """A report error line: what failed, then whatever the child said about it."""
+    return f'{message}\n{detail}' if detail else message
+
+
+def captured(command: list[str], *, cwd: Path, env: dict) -> tuple[int, str]:
+    """Run a child, echoing its output and returning its exit code and output tail.
+
+    The echo keeps the console as readable as it was when every child inherited stdio;
+    the tail is what the report keeps, so a failure stays diagnosable after the console
+    it was printed to is gone.
+    """
+    completed = subprocess.run(command, cwd=cwd, env=env, capture_output=True, text=True,
+                               encoding='utf-8', errors='replace')
+    output = (completed.stdout or '') + (completed.stderr or '')
+    if output:
+        print(output, end='' if output.endswith('\n') else '\n', flush=True)
+    return completed.returncode, tail_of(output)
+
+
 def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: bool) -> dict:
     """Run browser acceptance drivers through node, failing rather than skipping when absent."""
     temporary = run_root / name
@@ -128,6 +158,7 @@ def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: b
         commands = []
         fixtures = {}
         media = {}
+        outputs = {}
         producers = {}
         interpreter = project / '.venv/Scripts/python.exe'
         for script in spec['scripts']:
@@ -154,11 +185,12 @@ def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: b
                 # around. The producer is not run through check(): encoding is cheap and
                 # its output is what the driver reads, so a missing file is caught below.
                 target = run_root / f'{name}.mp4'
-                producer = subprocess.run([str(interpreter), BROWSER_MEDIA_TESTS[name], str(target)],
-                                          cwd=project, env=environment, capture_output=True, text=True,
-                                          encoding='utf-8', errors='replace')
-                if producer.returncode or not target.is_file():
-                    result['errors'].append(f'{BROWSER_MEDIA_TESTS[name]} could not produce the media fixture.')
+                code, detail = captured(
+                    [str(interpreter), BROWSER_MEDIA_TESTS[name], str(target)],
+                    cwd=project, env=environment)
+                if code or not target.is_file():
+                    result['errors'].append(with_output(
+                        f'{BROWSER_MEDIA_TESTS[name]} could not produce the media fixture.', detail))
                     continue
                 media[name] = str(target)
                 command.append(str(target))
@@ -169,27 +201,32 @@ def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: b
                 # already exists here. The producer's output is read-only in places (the
                 # ancestor-link fixtures hold a real .git), so retention removes it through
                 # remove_tree rather than a plain rmtree.
-                produced = subprocess.run(
+                code, detail = captured(
                     [str(interpreter), '-m', 'pytest', module, '-q', '--basetemp', str(basetemp)],
                     cwd=project, env=environment)
                 producers[name] = {'module': module, 'basetemp': str(basetemp),
-                                   'exit_code': produced.returncode}
-                if produced.returncode:
-                    result['errors'].append(
-                        f'{module} did not produce fixtures for {script} (exit {produced.returncode}).')
+                                   'exit_code': code, 'output': detail}
+                if code:
+                    result['errors'].append(with_output(
+                        f'{module} did not produce fixtures for {script} (exit {code}).', detail))
                     continue
                 destination = basetemp if handed == 'basetemp' else run_root
                 fixtures[name] = str(destination)
                 command.append(str(destination))
             commands.append(command)
             try:
-                completed = subprocess.run(command, cwd=project, env=environment)
+                code, detail = captured(command, cwd=project, env=environment)
             except OSError as exc:
                 result['errors'].append(f'{script} could not start: {type(exc).__name__}.')
                 continue
-            if completed.returncode:
-                result['errors'].append(f'{script} failed (exit {completed.returncode}).')
+            # A driver prints one summary line when it passes and the reason when it does
+            # not, so the tail is kept even for a pass: a failure on the next run is then
+            # comparable against what the same driver said when it worked.
+            outputs[script] = detail
+            if code:
+                result['errors'].append(with_output(f'{script} failed (exit {code}).', detail))
         result['commands'] = commands
+        result['driver_output'] = outputs
         result['fixture_roots'] = fixtures
         result['fixture_producers'] = producers
         result['media_fixtures'] = media
@@ -289,7 +326,9 @@ def run(suite: str = 'all', check: bool = False, report_path: Path | None = None
                                        cwd=project, env=environment, capture_output=True, text=True,
                                        encoding='utf-8', errors='replace', timeout=60)
                 if probe.returncode:
-                    result['errors'].append(f'Environment probe failed (exit {probe.returncode}).')
+                    result['errors'].append(with_output(
+                        f'Environment probe failed (exit {probe.returncode}).',
+                        tail_of((probe.stdout or '') + (probe.stderr or ''))))
                 else:
                     details = json.loads(probe.stdout)
                     result['environment'] = details
@@ -304,12 +343,14 @@ def run(suite: str = 'all', check: bool = False, report_path: Path | None = None
                 command = [str(interpreter), *spec['args']]
                 result['command'] = command
                 try:
-                    completed = subprocess.run(command, cwd=project, env=environment)
-                    result['test_exit_code'] = completed.returncode
-                    if completed.returncode:
-                        result['errors'].append(f'Test suite failed (exit {completed.returncode}).')
+                    code, detail = captured(command, cwd=project, env=environment)
                 except OSError as exc:
                     result['errors'].append(f'Test suite could not start: {type(exc).__name__}.')
+                else:
+                    result['test_exit_code'] = code
+                    result['output'] = detail
+                    if code:
+                        result['errors'].append(with_output(f'Test suite failed (exit {code}).', detail))
         report_suite(name, result)
     failed = [name for name, result in receipt['suites'].items() if result['status'] == 'failed']
     receipt['exit_code'] = int(bool(failed))
