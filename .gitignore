@@ -3,6 +3,8 @@
 !/start-director-services.ps1
 !/start-director-services.cmd
 !/stop-director-services.cmd
+!/pyproject.toml
+!/requirements-dev.txt
 !/.agents/
 /.agents/*
 !/.github/
@@ -50,6 +52,7 @@
 /src/*
 !/tests/
 /tests/*
+!/tests/conftest.py
 !/tools/
 /tools/*
 !/tools/qwen_image_t2i.py
@@ -232,6 +235,10 @@
 !/tests/test_project_create_selection.py
 !/tests/test_project_reads.py
 !/tests/test_project_test_runner.py
+!/tests/test_optimization_tenant_scope.py
+!/tests/test_optimization_auth_hardening.py
+!/tests/test_optimization_upload_limits.py
+!/tests/test_optimization_atomic_json.py
 !/tests/test_queue_readiness_integration.py
 !/tests/test_qwen_reference_conditioning.py
 !/tests/test_readiness.py

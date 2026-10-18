@@ -20,6 +20,9 @@ from test_assembly_edit import edit_client
 from test_private_workbench import private_workbench, create
 from test_segment_versions import generated_version
 
+# Real FFmpeg/ASR and the host media pipeline are required by this module.
+pytestmark = pytest.mark.host_tool
+
 ROOT = '/api/projects/preset-test'
 BUILDER = Path(__file__).resolve().parents[1] / 'tools/build_assembly_workflow.py'
 REAL_THREAD = threading.Thread

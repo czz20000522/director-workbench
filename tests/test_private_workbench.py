@@ -488,6 +488,7 @@ def test_background_rejects_corrupt_manifest_root_and_relative_comfy_input(priva
     assert error.value.status_code == 409
 
 
+@pytest.mark.windows
 def test_real_junction_range_head_and_long_path_boundary(private_workbench):
     from backend.user_context import UserContext
     a, b, ownership, _ = private_workbench

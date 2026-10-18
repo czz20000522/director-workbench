@@ -13,6 +13,9 @@ from test_production_presets import preset_client as base_client
 ROOT = '/api/projects/preset-test'
 REAL_THREAD = threading.Thread
 
+# QC extraction runs the installed FFmpeg.
+pytestmark = pytest.mark.host_tool
+
 
 @pytest.fixture
 def client(base_client, monkeypatch):

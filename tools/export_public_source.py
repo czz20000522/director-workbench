@@ -12,7 +12,9 @@ import paths
 
 PROJECT = paths.PROJECT_ROOT
 ROOT = paths.REPO_ROOT
-SUFFIXES = {'.py', '.ts', '.tsx', '.json', '.md', '.ps1', '.cmd', '.html', '.css', '.svg', '.txt', '.yml', '.mjs'}
+SUFFIXES = {'.py', '.ts', '.tsx', '.json', '.md', '.ps1', '.cmd', '.html', '.css', '.svg', '.txt', '.yml', '.mjs',
+            # Reviewed tool configuration: lint/pytest settings live in pyproject.toml.
+            '.toml'}
 PRIVATE_PARTS = {'.git', '.config', 'config', '.venv', 'node_modules', 'runtime', 'input', 'output',
                  'workspaces', 'private-workspaces', 'reviews', 'logs', 'dist', '__pycache__'}
 SENSITIVE = re.compile(r'sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|'

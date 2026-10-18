@@ -9,6 +9,9 @@ from backend import app as backend
 from test_keyframe_inputs import reference_image
 from test_production_presets import preset_client
 
+# The real resize/re-encode cases need the installed FFmpeg.
+pytestmark = pytest.mark.host_tool
+
 
 @pytest.mark.parametrize('resolution,aspect,size', [
     ('2k', '16:9', (2048, 1152)), ('4k', '9:16', (2160, 3840)), ('8k', '1:1', (7680, 7680)),

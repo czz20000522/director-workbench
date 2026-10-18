@@ -16,3 +16,52 @@ jobs:
         run: python3 tools/export_public_source.py --check
       - name: Check public syntax and document links
         run: python3 tools/check_public_docs.py
+  python-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install lint tooling
+        run: python -m pip install -r requirements-dev.txt
+      - name: Lint syntax errors and undefined names
+        run: ruff check
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Type-check and build the workbench UI
+        run: npm run build
+  core-tests:
+    runs-on: windows-latest
+    env:
+      # The machine roots are overridden so a runner without a Comfy-Desktop install can
+      # still import the backend; tests that freeze the real host paths are marked windows.
+      DIRECTOR_DESKTOP_ROOT: ${{ runner.temp }}/Comfy-Desktop
+      PYTHONNOUSERSITE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install runtime test dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run the fast core layer
+        run: >-
+          python -m pytest tests tools/test_build_video_finish_workflow.py
+          --ignore=tests/test_generate_auk_flash.py -q
+          --basetemp "${{ runner.temp }}/pytest"
+          -m "not host_tool and not slow and not windows"
