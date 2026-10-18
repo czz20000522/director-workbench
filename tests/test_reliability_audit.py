@@ -4,7 +4,7 @@ import json
 import pytest
 
 from backend import app as backend
-from test_production_presets import preset_client, add_shot
+from support import add_shot
 
 
 def test_submission_freezes_previous_assembly_identity(preset_client, monkeypatch):

@@ -1,4 +1,5 @@
 import { useId } from 'react';
+import { mediaUrl } from './api/client';
 
 export type MaterialOption = { value: string; label: string; kind: 'image' | 'audio' | 'video' };
 
@@ -19,8 +20,8 @@ export default function MaterialSelect({ label, kind, value, options, excludedVa
       {available.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
     </select>
     <button type="button" className="button secondary compact" onClick={onBrowse}>添加素材</button>
-    {value && !excluded && kind === 'image' && <img className="director-material-preview" src={`/media-file?path=${encodeURIComponent(value)}`} alt={`${label}预览`} loading="lazy" />}
-    {value && kind === 'audio' && <audio aria-label={`${label}试听`} src={`/media-file?path=${encodeURIComponent(value)}`} controls preload="none" />}
+    {value && !excluded && kind === 'image' && <img className="director-material-preview" src={mediaUrl(value)} alt={`${label}预览`} loading="lazy" />}
+    {value && kind === 'audio' && <audio aria-label={`${label}试听`} src={mediaUrl(value)} controls preload="none" />}
     <details><summary>高级：文件路径</summary><input aria-label={`${label}文件路径`} value={value} onChange={event => onChange(event.target.value)} /></details>
   </div>;
 }

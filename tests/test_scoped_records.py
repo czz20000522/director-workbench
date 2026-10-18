@@ -3,7 +3,6 @@ import threading
 
 import pytest
 from backend import app as backend
-from test_production_presets import preset_client
 
 REAL_THREAD = threading.Thread
 CASES = [('reviews', {'asset_id': 'S01', 'stage': 'sample'}),

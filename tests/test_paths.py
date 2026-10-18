@@ -10,12 +10,17 @@ import re
 import subprocess
 import sys
 
+import pytest
+
 import paths
 
 HOST_TAIL = 'Comfy' + '-Desktop'
 ABSOLUTE_HOST_PATH = re.compile(r'[A-Za-z]:[\\/][^\'"\s]*' + HOST_TAIL)
 DEPTH_DERIVED_ROOT = re.compile(r'parents\[[2-9]\]')
 SOURCE_DIRECTORIES = ('backend', 'tools', 'mcp_server')
+
+# The frozen expectations name this machine's default D: roots.
+pytestmark = [pytest.mark.windows, pytest.mark.host_tool]
 
 
 def test_machine_roots_are_the_recorded_host_paths():

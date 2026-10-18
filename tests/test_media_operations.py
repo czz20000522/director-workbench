@@ -7,6 +7,9 @@ import pytest
 
 from backend import media_operations as media
 
+# Several cases drive the installed FFmpeg/ASR interpreter and the host Python.
+pytestmark = pytest.mark.host_tool
+
 
 def test_silence_real_pcm_and_receipt(tmp_path):
     payload = media.prepare('silence-1', 'silence', None, tmp_path, {'duration_seconds': .1, 'channels': 2})

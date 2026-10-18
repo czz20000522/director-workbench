@@ -18,8 +18,9 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.exceptions import MCPError
 
 from backend import app as backend, remote_mcp
+# Used as a callable (.__wrapped__), not only as a pytest fixture, so it stays imported.
 from test_private_workbench import private_workbench
-from test_automatic_creation import seed_test_models
+from support import seed_test_models
 
 
 @pytest.fixture

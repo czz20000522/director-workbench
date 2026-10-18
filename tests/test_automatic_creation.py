@@ -9,22 +9,9 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from backend import app as backend, production_presets, guide
-from test_production_presets import preset_client
-from test_private_workbench import private_workbench
+from support import seed_test_models
 
 REAL_THREAD = threading.Thread
-
-
-def seed_test_models(root):
-    # Empty model filenames in the isolated root test availability contracts
-    # only; neither real weights nor model loading is involved.
-    directories = {'unet_name': 'diffusion_models', 'clip_name': 'text_encoders', 'vae_name': 'vae', 'lora_name': 'loras'}
-    for node in production_presets.load_recipe().values():
-        for key, directory in directories.items():
-            if node['inputs'].get(key):
-                path = root / 'ComfyUI-Shared' / 'models' / directory / node['inputs'][key]
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(b'isolated model-availability fixture')
 
 
 @pytest.fixture(autouse=True)

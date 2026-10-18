@@ -1,33 +1,10 @@
 import json
 
 from backend import app as backend
-from test_private_workbench import create, private_workbench
-from test_production_presets import add_shot, preset_client
+from support import add_shot, create, generated_version
 
 
 BASE = "/api/projects/preset-test/segments/S01/versions"
-
-
-def generated_version(client, project, task_id, prompt, when):
-    document, plan_path = backend.load_project_plan("preset-test")
-    segment = document["segments"][0]
-    segment["prompt"] = prompt
-    snapshot = backend.segment_generation_snapshot(segment)
-    plan_path.write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
-    video = project / f"workspaces/preset-test/assets/{task_id}.mp4"
-    video.write_bytes(b"video " + task_id.encode())
-    payload = {"project_id": "preset-test", "segment_snapshot": snapshot,
-               "execution_snapshot": {"prompt": prompt, "materials": {}}}
-    result = {"status": "success", "outputs": [video.name], "published_outputs": [str(video)]}
-    with backend.db() as connection:
-        connection.execute(
-            "INSERT INTO tasks (id,asset_id,status,created_at,updated_at,payload,result,project_id,prompt_id) VALUES (?,?,?,?,?,?,?,?,?)",
-            (task_id, "S01", "succeeded", when - 1, when, json.dumps(payload), json.dumps(result), "preset-test", task_id),
-        )
-        connection.commit()
-    backend.record_segment_result("S01", task_id, "workflow.json", result, plan_path,
-                                  task_id=task_id, payload=payload, generated_at=when)
-    return video
 
 
 def test_latest_generation_is_current_and_history_keeps_system_generation_time(preset_client):

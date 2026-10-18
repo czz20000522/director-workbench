@@ -43,6 +43,8 @@
 
 3. 图片/声音通过 `POST /api/projects/{project_id}/upload` 的 multipart `files` 上传，使用登记回执中实际素材引用。素材存在于库中不等于已绑定为首帧；角色参考、首尾帧、表演声音和完整母版应按对应字段分别指定。远程客户端不能把自身磁盘路径传给服务器路径导入接口。
 
+   上传有服务端上限：单文件默认 2 GiB、单次默认 200 个文件、单请求默认 4 GiB（部署方可用 `DIRECTOR_MAX_UPLOAD_BYTES`、`DIRECTOR_MAX_UPLOAD_FILES`、`DIRECTOR_MAX_UPLOAD_REQUEST_BYTES` 收紧或调整）。超限返回 `413`，不登记素材；客户端应据此拆分批次或压缩素材，而不是重试同一请求。
+
 4. 无生成预检：`POST /api/projects/{project_id}/pipeline/auto/validate`。
 
    ```json

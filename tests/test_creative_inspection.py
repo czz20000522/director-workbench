@@ -15,10 +15,11 @@ from mcp import Client
 
 from backend import app as backend, creative_inspection, h3_duration, media_operations, audio_edit
 from mcp_server.server import create_server
-from test_production_presets import preset_client as base_preset_client, add_shot
-from test_assembly_edit import edit_client
-from test_private_workbench import private_workbench, create
-from test_segment_versions import generated_version
+from test_production_presets import preset_client as base_preset_client
+from support import add_shot, create, generated_version
+
+# Real FFmpeg/ASR and the host media pipeline are required by this module.
+pytestmark = pytest.mark.host_tool
 
 ROOT = '/api/projects/preset-test'
 BUILDER = Path(__file__).resolve().parents[1] / 'tools/build_assembly_workflow.py'

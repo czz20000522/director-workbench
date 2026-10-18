@@ -134,12 +134,7 @@ async def create_reverse_analysis(project_id: str, file: UploadFile = File(...))
     source_dir = output / "source"
     source_dir.mkdir(parents=True, exist_ok=False)
     source = source_dir / f"reference{suffix}"
-    try:
-        with source.open("wb") as handle:
-            while chunk := await file.read(1024 * 1024):
-                handle.write(chunk)
-    finally:
-        await file.close()
+    await backend.stream_upload(file, source)
     command = [
         sys.executable, str(backend.REFERENCE_DECOMPOSER), "--project-id", project_id,
         "--analysis-id", analysis_id, "--source", str(source), "--output", str(output),
@@ -247,7 +242,7 @@ def reserve_reverse_semantic(project_id: str, analysis_id: str) -> Path:
         if not backend.REVERSE_SEMANTIC_LOCK.acquire(blocking=False):
             raise HTTPException(409, "已有参考内容分析正在运行，请等待完成后再试")
         try:
-            backend.ensure_no_release_blocking_tasks("开始参考内容分析", gpu_only=True)
+            backend.ensure_no_release_blocking_tasks("开始参考内容分析", gpu_only=True, project_id=project_id)
             info = backend.comfy_status()
             if info.get("queue_running", 0) or info.get("queue_pending", 0):
                 raise HTTPException(409, "ComfyUI 正在处理任务，请等待完成后再分析参考")

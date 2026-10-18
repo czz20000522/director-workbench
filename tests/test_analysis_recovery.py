@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from backend import app as backend
-from test_reverse_workbench import reverse_client, seed_gpu_waiter, prepare_semantic
+from support import prepare_semantic, seed_gpu_waiter
 
 
 def orphan(path, *, receipt=True):

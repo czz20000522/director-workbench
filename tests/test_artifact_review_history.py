@@ -2,7 +2,6 @@ import asyncio
 import json
 import httpx
 import pytest
-from test_reverse_workbench import reverse_client
 
 
 def test_artifact_history_and_conflict(reverse_client):

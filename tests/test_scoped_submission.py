@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 from backend import app as backend
-from test_production_presets import preset_client, install, add_shot
+from support import add_shot, install
 
 
 def prepare(client, project):

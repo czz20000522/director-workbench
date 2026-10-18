@@ -39,6 +39,17 @@ BROWSER_PYTEST_FIXTURES = {
 # project interpreter because it encodes with PyAV, which is a test-time dependency
 # there; the driver then reads the file it wrote instead of being handed one by hand.
 BROWSER_MEDIA_TESTS = {'client_restore': 'tests/client_restore_media.py'}
+# The drivers import these from the checkout's node_modules. Probing the installed package
+# manifests lets --check name the missing install once instead of one import error per driver.
+BROWSER_NODE_MODULES = ('playwright', 'esbuild')
+BROWSER_PYTHON_TESTS = (
+    *BROWSER_FIXTURE_TESTS, *BROWSER_PYTEST_FIXTURES, *BROWSER_MEDIA_TESTS)
+# The drivers launch the system browser through Playwright's msedge channel. Only the
+# environment probe needs a concrete path; the drivers keep resolving the channel themselves.
+EDGE_PATHS = (
+    Path(r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'),
+    Path(r'C:\Program Files\Microsoft\Edge\Application\msedge.exe'),
+)
 # Run roots are named '<prefix><token>' with the current eight hex digits and the
 # historical twelve.  The match is anchored: the machine runtime tree also holds live
 # roots (accounts, the relocation backup) and a prefix test would eat them.
@@ -133,6 +144,34 @@ def captured(command: list[str], *, cwd: Path, env: dict) -> tuple[int, str]:
     return completed.returncode, tail_of(output)
 
 
+def browser_prerequisite_errors(project: Path, spec: dict) -> list[str]:
+    """What the browser suite needs beyond node and the driver files themselves.
+
+    The drivers import playwright and esbuild from the checkout's node_modules, and some of
+    them spawn the project interpreter; probing those here turns a missing ``npm ci`` or a
+    fresh checkout into one failure line instead of one import error per driver.
+    """
+    errors = []
+    absent = [name for name in BROWSER_NODE_MODULES
+              if not (project / 'node_modules' / name / 'package.json').is_file()]
+    if absent:
+        errors.append('Missing browser dependencies under node_modules: '
+                      + ', '.join(absent) + ' (run npm ci).')
+    names = {Path(script).name.removesuffix('.browser.mjs') for script in spec['scripts']}
+    if names & set(BROWSER_PYTHON_TESTS) and not (project / '.venv/Scripts/python.exe').is_file():
+        errors.append('Browser drivers require the project interpreter; this suite is failed, not skipped.')
+    return errors
+
+
+def system_edge_path() -> Path | None:
+    """Best-effort location of the system Edge the drivers launch by channel name."""
+    for candidate in EDGE_PATHS:
+        if candidate.is_file():
+            return candidate
+    found = shutil.which('msedge') or shutil.which('microsoft-edge')
+    return Path(found) if found else None
+
+
 def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: bool) -> dict:
     """Run browser acceptance drivers through node, failing rather than skipping when absent."""
     temporary = run_root / name
@@ -154,6 +193,10 @@ def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: b
     missing = [script for script in spec['scripts'] if not (project / script).is_file()]
     if missing:
         result['errors'].append('Missing browser tests: ' + ', '.join(missing))
+    result['errors'].extend(browser_prerequisite_errors(project, spec))
+    if system_edge_path() is None:
+        result['warnings'].append(
+            'System Edge (msedge channel) was not found; browser drivers cannot launch.')
     if not check:
         commands = []
         fixtures = {}

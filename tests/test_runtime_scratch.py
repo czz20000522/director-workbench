@@ -82,7 +82,9 @@ class ScratchRootTests(unittest.TestCase):
     def test_override_wins_over_the_runtime_tree(self):
         with patch.dict(os.environ, {scratch.OVERRIDE: str(self.elsewhere)}):
             root = scratch.scratch_root('audio-edit-tests', prefix='case-')
-        self.assertEqual(root, self.elsewhere / 'audio-edit-tests')
+        # scratch_root resolves its root, so a runner whose temp path keeps an 8.3 short name
+        # (RUNNER~1) must be compared after resolving both sides.
+        self.assertEqual(root, (self.elsewhere / 'audio-edit-tests').resolve())
         self.assertTrue(root.is_dir())
 
     def test_override_inside_the_checkout_is_refused(self):

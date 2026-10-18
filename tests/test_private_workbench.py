@@ -17,6 +17,7 @@ from backend.private_mode import install
 from backend.private_auth import Principal, current_principal
 from backend.private_sessions import AccountStore
 from backend.user_context import Layout, SessionIdentity, UserContext
+from support import create
 
 
 def test_supported_private_media_extensions_create_asset_records():
@@ -56,12 +57,6 @@ def private_workbench(tmp_path, monkeypatch):
     return a, b, ownership, project
 
 
-def create(client):
-    response = client.post('/api/projects/create', json={'title': '同名作品', 'series': '同系列', 'project_id': 'same', 'select': True, 'creation_mode': 'advanced'})
-    assert response.status_code == 200, response.text
-    return response.json()['project']
-
-
 def test_same_name_project_identity_selection_and_listing(private_workbench):
     a, b, ownership, _ = private_workbench
     first, second = create(a), create(b)
@@ -96,6 +91,7 @@ def test_physical_series_visible_and_isolated(private_workbench):
     assert {item['name'] for item in a.get('/api/private/series').json()['series']} == {'东方美学', '新系列'}
 
 
+@pytest.mark.host_tool
 def test_delete_preview_and_apply_stay_within_owner(private_workbench):
     a, b, ownership, _ = private_workbench
     item = create(a)
@@ -134,6 +130,7 @@ def test_delete_segment_updates_plan_without_erasing_shared_assets(private_workb
     assert after['segments'][0]['start_seconds'] == 0
 
 
+@pytest.mark.host_tool
 def test_series_delete_rejects_another_target_plan(private_workbench):
     a, _, ownership, _ = private_workbench
     assert a.post('/api/private/series', json={'name': '甲系列'}).status_code == 201
@@ -488,6 +485,7 @@ def test_background_rejects_corrupt_manifest_root_and_relative_comfy_input(priva
     assert error.value.status_code == 409
 
 
+@pytest.mark.windows
 def test_real_junction_range_head_and_long_path_boundary(private_workbench):
     from backend.user_context import UserContext
     a, b, ownership, _ = private_workbench

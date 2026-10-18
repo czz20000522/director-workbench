@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, ArrowDownToLine, ArrowRight, Boxes, BrainCircuit, Check, Film, FileText, LoaderCircle, MapPinned, Mic2, RefreshCw, Search, Upload, Users } from 'lucide-react';
 import TaskQueueStatus, { type QueueReceipt } from './TaskQueueStatus';
+import { mediaUrl } from './api/client';
 
 type Stage = { id: string; label: string; status: string; executor: string };
 type TimelineSegment = { id: string; start_seconds: number; end_seconds: number; frame?: string | null; status: string; facts: string[]; inference: string; user_note: string };
@@ -41,10 +42,6 @@ async function responseError(response: Response) {
     if (body.detail && typeof body.detail === 'object' && 'message' in body.detail) return String(body.detail.message);
   } catch { /* A plain-text backend error is already suitable for display. */ }
   return text || `请求失败（${response.status}）`;
-}
-
-function mediaUrl(path?: string | null) {
-  return path ? `/media-file?path=${encodeURIComponent(path)}` : undefined;
 }
 
 function reviewTime(value: number | string | null) {

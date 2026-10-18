@@ -1,7 +1,6 @@
 import asyncio
 import json
 from backend import app as backend
-from test_production_presets import preset_client
 
 
 def prepare(client, project, monkeypatch, status='needs_reconcile'):

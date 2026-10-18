@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import TaskQueueStatus, { type QueueReceipt } from './TaskQueueStatus';
+import { ApiError, mediaUrl, request as apiRequest } from './api/client';
 
 type Props = { projectId: string; audioAssets: Array<{ id: string; title: string }>; onComplete: () => void; onBrowse: () => void };
 type Draft = { source_asset_id: string; background_asset_id?: string; start_seconds: number; duration_seconds: number | null; pad_silence: boolean;
@@ -63,9 +64,13 @@ function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse }:
     }
   }
   async function request(url: string, init?: RequestInit): Promise<Task> {
-    const response = await fetch(url, init);
-    const data = await response.json();
-    if (!response.ok) throw new RequestError(typeof data.detail === 'string' ? data.detail : data.detail?.message || '请求未获确认，请核对原任务。', response.status);
+    let data: Task;
+    try {
+      data = await apiRequest<Task>(url, { init });
+    } catch (cause) {
+      if (cause instanceof ApiError) throw new RequestError(cause.message, cause.status);
+      throw cause;
+    }
     if (typeof data.id !== 'string' || typeof data.status !== 'string') throw new Error('任务回执不完整，请核对原提交。');
     return data;
   }
@@ -136,7 +141,7 @@ function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse }:
     </div>
     <p className="director-muted">PCM16 WAV，最多 120 秒；混音须同采样率、同声道。保存为新候选，原音频保留。</p>
     {message && <p role="status">{message}</p>}{task?.error && <p role="status">{task.error}</p>}
-    {result?.output && <div><audio controls preload="metadata" aria-label="音频编辑候选试听" src={`/media-file?path=${encodeURIComponent(result.output)}`} /><p>新候选实测 {result.duration_seconds ?? '未知'} 秒；试听后再选择为完整母版，不会自动替换原音。</p></div>}
+    {result?.output && <div><audio controls preload="metadata" aria-label="音频编辑候选试听" src={mediaUrl(result.output)} /><p>新候选实测 {result.duration_seconds ?? '未知'} 秒；试听后再选择为完整母版，不会自动替换原音。</p></div>}
     <div className="director-form-actions">
       <button className="button secondary compact" onClick={onBrowse}>添加素材</button>
       {!locked && <button className="button primary compact" disabled={busy || !valid(draft) || !audioAssets.some(a => a.id === draft.source_asset_id)} onClick={() => void act('submit')}>保存编辑候选</button>}

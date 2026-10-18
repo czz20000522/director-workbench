@@ -1,190 +1,44 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { CSSProperties, InputHTMLAttributes, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react';
-import { ArrowDownToLine, ArrowUpRight, BookOpen, Check, ChevronDown, ChevronLeft, ChevronRight, Clapperboard, ClipboardCheck, Film, FolderOpen, Image as ImageIcon, Layers3, LayoutDashboard, LogOut, Maximize2, Music2, Pause, Play, Plus, Radio, Search, Settings2, Sparkles, Square, Workflow, X } from 'lucide-react';
-import { assets as fallbackAssets, clock, labels, pipelineStages as defaultPipelineStages, range, type Asset, type Kind, type PipelineInput, type PipelineStage, type Variant } from './data';
-import MaterialBridge from './MaterialBridge';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { CSSProperties, InputHTMLAttributes, MouseEvent as ReactMouseEvent } from 'react';
+import { ArrowDownToLine, ArrowUpRight, Check, ChevronLeft, ChevronRight, Film, FolderOpen, Image as ImageIcon, Layers3, Maximize2, Music2, Pause, Play, Radio, Sparkles, Square, Workflow, X } from 'lucide-react';
+import { assets as fallbackAssets, labels, pipelineStages as defaultPipelineStages, range, type Asset, type Kind, type PipelineInput, type PipelineStage, type Variant } from './data';
+// Split out of the initial bundle: mounted only in its own workspace mode.
+const MaterialBridge = lazy(() => import('./MaterialBridge'));
 import MaterialSelect from './MaterialSelect';
-import SpeechPanel from './SpeechPanel';
-import AudioEditPanel from './AudioEditPanel';
-import MediaToolsPanel from './MediaToolsPanel';
-import AssemblyEditPanel from './AssemblyEditPanel';
-import EnhancementPanel from './EnhancementPanel';
-import KeyframePanel from './KeyframePanel';
-import ReferenceOrigin, { type ReferenceOriginData } from './ReferenceOrigin';
-import CreativeInspectionPanel, { ReferenceDifferenceSummary, type Inspection } from './CreativeInspectionPanel';
+const SpeechPanel = lazy(() => import('./SpeechPanel'));
+const AudioEditPanel = lazy(() => import('./AudioEditPanel'));
+const MediaToolsPanel = lazy(() => import('./MediaToolsPanel'));
+const AssemblyEditPanel = lazy(() => import('./AssemblyEditPanel'));
+const EnhancementPanel = lazy(() => import('./EnhancementPanel'));
+const KeyframePanel = lazy(() => import('./KeyframePanel'));
+import ReferenceOrigin from './ReferenceOrigin';
+import CreativeInspectionPanel, { ReferenceDifferenceSummary } from './CreativeInspectionPanel';
 import { diagnosticMaterialPaths, isCreativeMaterial, materialPathKey, projectMaterialOptions } from './materialOptions';
-import ProductionPresetPicker from './ProductionPresetPicker';
+const ProductionPresetPicker = lazy(() => import('./ProductionPresetPicker'));
 import { selectVideoGenerationStage } from './generationStage';
-import ReverseWorkbench from './ReverseWorkbench';
+// Split out of the initial bundle: mounted only in its own workspace mode.
+const ReverseWorkbench = lazy(() => import('./ReverseWorkbench'));
 import CreationRoutes, { creationRoutes } from './CreationRoutes';
-import ScriptWorkbench from './ScriptWorkbench';
-import WorkspaceExplorer from './WorkspaceExplorer';
-import ArchiveBrowser from './ArchiveBrowser';
-import DeleteDirectoryDialog from './DeleteDirectoryDialog';
-import ShotPromptEditor from './ShotPromptEditor';
-import FirstUseGuide from './FirstUseGuide';
+// Split out of the initial bundle: mounted only in its own workspace mode.
+const ScriptWorkbench = lazy(() => import('./ScriptWorkbench'));
+import WorkbenchSidebar from './components/WorkbenchSidebar';
+import WorkbenchTopbar from './components/WorkbenchTopbar';
+import WorkbenchOverlays from './components/WorkbenchOverlays';
+// Split out of the initial bundle: mounted only in its own workspace mode.
+const ArchiveBrowser = lazy(() => import('./ArchiveBrowser'));
+const ShotPromptEditor = lazy(() => import('./ShotPromptEditor'));
+const FirstUseGuide = lazy(() => import('./FirstUseGuide'));
 import TaskQueueStatus from './TaskQueueStatus';
-import { blockerMessage, readinessStateLabel, type ProjectReadiness, type ReadinessItem } from './readiness';
+import { blockerMessage, readinessStateLabel, type ReadinessItem } from './readiness';
 import { assetLabel, assetTitle, type TreeKind } from './shotLabels';
 import './quick-create.css';
-import ResolutionPicker, { type OutputResolution } from './ResolutionPicker';
-import CandidateComparison from './CandidateComparison';
+import ResolutionPicker from './ResolutionPicker';
+const CandidateComparison = lazy(() => import('./CandidateComparison'));
+import { downloadName, mediaUrl, workflowUrl } from './api/client';
+import { useComfyStatus, useDrafts, useSidebarWidth } from './app/hooks';
 
-type Draft = { prompt?: string; note?: string };
-type Drafts = Record<string, Draft>;
-type CreativeProfile = 'general' | 'adult-realism' | 'adult-anime';
-type ShotGenerationSettings = { output_resolution?: OutputResolution; mode: 'auto' | 'advanced'; aspect_ratio: '16:9' | '1:1' | '9:16'; sound_mode: 'performance_reference' | 'locked_dialogue'; seed: number; speed_profile: 'standard' | 'fast'; creative_profile: CreativeProfile };
-type QuickAspect = ShotGenerationSettings['aspect_ratio'];
-type PlanSegment = ReferenceOriginData & { generation?: ShotGenerationSettings; generation_history?: Array<{ task_id?: string; generated_at?: string; snapshot?: Record<string, unknown> }>; id: string; script_scene_id?: string; script_revision?: number; start_seconds: number; end_seconds: number; duration_seconds: number; status: string; location: string; shot_size: string; camera: string; wardrobe: string; performance: string; dependencies?: string[]; audio?: { delivery_master?: string; guide?: string; range_seconds?: [number, number] | string }; keyframes?: { first?: string | null; last?: string | null }; workflow?: string | null; prompt?: string | null; comfyui_task_id?: string | null; current_version_task_id?: string | null; visual_review?: { status?: string; label?: string; reason?: string; reviewed_at?: string; reviewer?: string }; video?: { path?: string; variant?: string; rework_candidate?: { path?: string; variant?: string; workflow?: string; ui_workflow?: string; prompt_id?: string; status?: string; specs?: string }; finish_review?: { path?: string; variant?: string; workflow?: string; prompt_id?: string; task_id?: string; status?: string; specs?: string; processing?: { method?: string; model?: string; output_size?: { width?: number; height?: number } } } } };
-type PlanAssembly = { status?: string; output?: string; workflow?: string; prompt_id?: string; duration_seconds?: number; target_duration_seconds?: number; notes?: string };
-type WorkflowCatalogEntry = { id: string; role?: string; asset_id?: string; path: string; comfyui_import?: 'api' | 'ui'; equivalence?: string };
-type PipelineValidation = { revision?: number; stage_id: string; valid: boolean; values: Record<string, string | number | boolean | string[]>; args: string[]; command_preview: string; binding_count?: number; parameters?: Record<string, unknown>; materials?: Record<string, unknown>; creative_inspection?: Inspection; h3_duration?: { requested_seconds: number; frame_count: number; playback_seconds: number; fps: number; width: number; height: number; aspect_ratio: string; generation_mode?: 'text_to_video' | 'image_to_video'; first_frame: string | null; prompt: string; first_frame_node_id: string | null; prompt_node_id: string } };
-type TaskRecord = { id: string; project_id: string; asset_id: string; status: string; queue?: { state: string; reason?: { code: string; message?: string } | null; position?: number | null }; sequence?: number; batch_id?: string; payload?: { kind?: string; output_size?: { resolution?: OutputResolution; aspect_ratio?: string; width?: number; height?: number; method?: string; native_output?: string }; request?: { prompt?: string; output_resolution?: OutputResolution; width?: number; height?: number; mode?: string }; execution_snapshot?: { api_graph?: string; source_workflow?: string; prompt?: string | null; prompt_node_ids?: string[]; parameters?: Record<string, unknown>; materials?: Record<string, unknown>; pipeline_stage_id?: string; applied_bindings?: Array<Record<string, unknown>>; frozen_at?: number } }; result?: { output?: string; native_output?: string; published_native_output?: string; output_size?: { resolution?: OutputResolution; width?: number; height?: number; method?: string; native_output?: string; note?: string }; width?: number; height?: number }; error?: string | null; created_at?: number };
-type BatchTask = TaskRecord;
-type ReviewRecord = { stage: 'sample' | 'finish' | 'final'; status: 'pending_review' | 'approved' | 'changes_requested' | 'stale'; note?: string; adopted_variant?: Variant; candidate_ref?: string; revision: number; source: string; created_at: string };
-type ReusableTemplate = { id: 'image' | 'text-video' | 'video'; kind: 'image' | 'video'; title: string; description: string; recommended?: boolean; installed?: boolean; preset?: { title?: string; description?: string; available?: boolean; missing_models?: string[] } };
-type CheckpointRecord = { stage_id: string; status: 'draft' | 'pending_review' | 'approved' | 'changes_requested' | 'stale'; note?: string; revision: number; source: string; created_at: string };
-type ProjectState = { readiness?: ProjectReadiness; project_id: string; creative: { values?: Partial<CreativeDraft>; status?: string; revision: number; source: string; created_at: string } | null; reviews: Record<string, Partial<Record<'sample' | 'finish' | 'final', ReviewRecord>>>; checkpoints: Record<string, CheckpointRecord>; artifacts: Array<{ kind: string; asset_id: string; title?: string; status?: string; revision: number; created_at: string }>; history: Array<{ id: number; asset_id: string; record_type: string; revision: number; source: string; created_at_iso: string; data: Record<string, unknown> }> };
-type ProductionStepState = 'done' | 'active' | 'waiting' | 'blocked';
-type ProductionStep = { id: string; label: string; detail: string; state: ProductionStepState; mode: 'manual' | 'auto' | 'hybrid' };
-type CreativeDraft = { creation_mode: string; reference_series: string; adaptation: string; intent: string; world: string; character: string; voice: string; reference_video: string; notes: string };
-type CreativeConflict = { server: CreativeDraft; revision: number; status?: string; created_at: string };
-type PageKey = 'overview' | 'pipeline' | 'review' | 'segment';
-type ProjectManifest = { id: string; default_creation_mode?: 'auto' | 'advanced'; production_preset?: { id: string; title: string; workflow: string }; series?: string; title?: string; tag?: string; eyebrow?: string; subtitle?: string; character_label?: string; workspace_root?: string; assets?: Array<Record<string, unknown>>; media?: Record<string, string>; pipeline?: PipelineStage[]; workflow_catalog?: WorkflowCatalogEntry[]; assembly_asset_id?: string; default_task_asset_id?: string; task_templates?: Record<string, { workflow?: string; prompt?: string; first_frame?: string; last_frame?: string; audio_guide?: string; seed?: number }> };
-type SegmentDraft = { script_scene_id: string; script_revision: string; audio_guide: string; delivery_master: string; segment_id: string; duration_seconds: string; location: string; shot_size: string; camera: string; wardrobe: string; performance: string; prompt: string; workflow: string; first_frame: string; last_frame: string };
-type SegmentEdit = { duration_seconds: string; location: string; shot_size: string; camera: string; wardrobe: string; performance: string; prompt: string; workflow: string; first_frame: string; last_frame: string; audio_guide: string; delivery_master: string; dependencies: string };
-type ShotVersion = { task_id: string; generated_at: string; video_path: string; snapshot?: Record<string, unknown>; processing?: { resolution?: OutputResolution; width?: number; height?: number; method?: string; native_output_available?: boolean }; snapshot_complete?: boolean; is_current: boolean; restored_at?: string | null };
-const kindIcons = { video: Film, audio: Music2, image: ImageIcon };
-const taskStateLabels: Record<string, string> = {
-  preparing: '准备中', submitting: '提交中', queued: '排队中', running: '执行中', succeeded: '已生成', failed: '生成失败',
-  stopped: '已停止', stop_requested: '停止请求中', stopping: '停止中', needs_reconcile: '待核对', batch_waiting: '批次等待中', scheduler_waiting: '等待资源',
-};
-const taskStateLabel = (status: string) => status ? (taskStateLabels[status] ?? `未知状态 · ${status}`) : '尚未提交';
-// A successful task is represented by the generated asset in the review UI;
-// keep the machine status out of the director-facing action labels.
-const normalizeLiveTaskState = (status: string) => status === 'succeeded' ? '' : status;
-const reviewLabel = (status?: string) => status === 'approved' ? '已采用' : status === 'changes_requested' ? '需调整' : status === 'stale' ? '待复核' : '待审核';
-const outputResolutionLabel = (value?: OutputResolution | 'ai') => value === 'ai' ? 'AI 高清候选' : value && value !== 'native' ? value.toUpperCase() : '原生';
-const outputMethodLabel = (value?: string) => value === 'lanczos_resize' ? '尺寸放大（Lanczos）' : value === 'ai_upscale' ? 'AI 高清处理' : '原生生成';
-function candidateOutputFacts(task: TaskRecord | null, segment?: PlanSegment | null, candidate: Variant = 'A'): { resolution?: OutputResolution | 'ai'; width?: number; height?: number; method?: string; nativeOutput?: string } {
-  const outputSize = task?.result?.output_size ?? task?.payload?.output_size;
-  const request = task?.payload?.request;
-  const finishSize = candidate === 'B' ? segment?.video?.finish_review?.processing?.output_size : undefined;
-  const finishProcessing = candidate === 'B' ? segment?.video?.finish_review?.processing : undefined;
-  const resolution: OutputResolution | 'ai' = outputSize?.resolution ?? request?.output_resolution ?? segment?.generation?.output_resolution ?? (finishProcessing ? 'ai' : 'native');
-  const width = finishSize?.width ?? outputSize?.width ?? task?.result?.width ?? request?.width;
-  const height = finishSize?.height ?? outputSize?.height ?? task?.result?.height ?? request?.height;
-  return {
-    resolution,
-    width,
-    height,
-    method: candidate === 'B' && finishProcessing?.method
-      ? finishProcessing.method
-      : outputSize?.method ?? (resolution === 'native' ? 'native_generation' : 'lanczos_resize'),
-    nativeOutput: task?.result?.published_native_output ?? task?.result?.native_output ?? outputSize?.native_output,
-  };
-}
-const checkpointLabel = (checkpoint: CheckpointRecord | undefined, hasContent: boolean) => checkpoint?.status === 'approved' ? '已确认' : checkpoint?.status === 'changes_requested' ? '需修改' : checkpoint?.status === 'stale' ? '上游变化 · 待复核' : hasContent ? '有内容 · 待确认' : '待填写';
-
-// 成人向视频配方只有一个组合（16:9 + 标准步数），其余组合必须说清实际会用什么，
-// 不能把快速预览或别的画幅的原生配方说成成人向配方。
-function adultVideoProfileNote(profile: CreativeProfile, aspect: string, speed: string) {
-  const used = speed === 'fast'
-    ? '本次改用「快速预览」方案（8 步 + Kitchen attention，0.4MP 横屏）'
-    : '本次改用该画幅的 H3 原生配方';
-  if (profile === 'adult-anime') return `动漫质感只在关键帧图像加载 Qwen Anime Consistency，视频生成没有对应的成人向配方；${used}，其中不含成人向配方。`;
-  if (aspect === '16:9' && speed === 'standard') return '成人向视频将使用：H3 Realism People（标准步数）。';
-  return `真人质感配方只在 16:9 + 标准方案下可用；${used}，其中不含成人向配方。`;
-}
-
-// 每个快速分区对应一个系列，成人向内容必须留在「成人向创作」，普通创作也不该被写进去。
-// 归属判定（openQuickTemplate）与「产物存进哪里」的提示共用这一份名称。
-const QUICK_SERIES = { general: '快速草稿', adult: '成人向创作' } as const;
-
-function sharedMediaUrl(path?: string | null) {
-  return path ? `/media-file?path=${encodeURIComponent(path)}` : undefined;
-}
-
-// 视频画幅必须跟着开始画面走：H3 图像转视频对首帧只做缩放铺满（不裁切），
-// 画幅与首帧不一致就会把画面压扁。判定规则与关键帧面板的画幅回显一致。
-function stillAspectRatio(width: number, height: number): QuickAspect {
-  return width === height ? '1:1' : width > height ? '16:9' : '9:16';
-}
-
-const ASPECT_LABEL: Record<QuickAspect, string> = { '16:9': '横屏', '9:16': '竖屏', '1:1': '方形' };
-
-// 素材选项里只有路径、没有尺寸，所以尺寸只能由浏览器读取素材本身；
-// 读不到就返回 null，保持现有默认值，不猜。
-function measureStillAspect(path?: string | null): Promise<QuickAspect | null> {
-  const url = sharedMediaUrl(path);
-  if (!url) return Promise.resolve(null);
-  return new Promise(resolve => {
-    const image = new Image();
-    image.onload = () => resolve(stillAspectRatio(image.naturalWidth, image.naturalHeight));
-    image.onerror = () => resolve(null);
-    image.src = url;
-  });
-}
-
-function workflowDownloadUrl(path: string) {
-  return `/workflow-file?path=${encodeURIComponent(path)}`;
-}
-
-function localSystemTime(value?: string | null) {
-  if (!value) return '生成时间未登记';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '生成时间未登记' : new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(date);
-}
-
-function versionMaterial(version: ShotVersion, field: 'first' | 'last' | 'guide') {
-  const snapshot = version.snapshot;
-  const frames = snapshot?.keyframes as Record<string, unknown> | undefined;
-  const audio = snapshot?.audio as Record<string, unknown> | undefined;
-  const execution = snapshot?.execution_snapshot as Record<string, unknown> | undefined;
-  const materials = execution?.materials as Record<string, unknown> | undefined;
-  return String(field === 'guide' ? snapshot?.audio_guide ?? audio?.guide ?? materials?.guide ?? '' : field === 'first' ? snapshot?.first_frame ?? frames?.first ?? materials?.['first-frame'] ?? '' : snapshot?.last_frame ?? frames?.last ?? materials?.['last-frame'] ?? '');
-}
-
-function normalizeManifestAsset(raw: Record<string, unknown>): Asset {
-  const sources = raw.sources && typeof raw.sources === 'object' ? Object.fromEntries(Object.entries(raw.sources as Record<string, unknown>).map(([key, value]) => [key, sharedMediaUrl(String(value))])) as Partial<Record<Variant, string>> : undefined;
-  const image = raw.image ? (String(raw.image).startsWith('ComfyUI-') ? sharedMediaUrl(String(raw.image)) : String(raw.image)) : sharedMediaUrl(raw.image_path ? String(raw.image_path) : undefined);
-  return {
-    id: String(raw.id ?? `asset-${Math.random().toString(36).slice(2, 8)}`), kind: (raw.kind === 'audio' || raw.kind === 'image' ? raw.kind : 'video') as Kind,
-    title: String(raw.title ?? raw.id ?? '未命名素材'), subtitle: String(raw.subtitle ?? ''),
-    start: typeof raw.start === 'number' ? raw.start : undefined, end: typeof raw.end === 'number' ? raw.end : undefined,
-    ready: Boolean(raw.ready ?? image ?? (sources && Object.keys(sources).length)), image, lastImage: sharedMediaUrl(raw.last_image ? String(raw.last_image) : undefined), sources,
-    intent: String(raw.intent ?? ''), prompt: String(raw.prompt ?? ''), origin: String(raw.origin ?? '项目资源'), specs: String(raw.specs ?? ''), workflow: String(raw.workflow ?? '待登记'),
-  };
-}
-
-function loadDrafts(storageKey: string): Drafts {
-  try { const data = JSON.parse(localStorage.getItem(storageKey) ?? '{}'); return data && typeof data === 'object' && !Array.isArray(data) ? data : {}; }
-  catch { return {}; }
-}
-
-function loadCreativeDraft(storageKey: string): CreativeDraft {
-  const blank: CreativeDraft = { creation_mode: 'original', reference_series: '', adaptation: '', intent: '', world: '', character: '', voice: '', reference_video: '', notes: '' };
-  try {
-    const data = JSON.parse(localStorage.getItem(storageKey) ?? '{}');
-    return data && typeof data === 'object' && !Array.isArray(data) ? { ...blank, ...(data as Partial<CreativeDraft>) } : blank;
-  } catch { return blank; }
-}
-
-const creativeFieldNames: Array<keyof CreativeDraft> = ['creation_mode', 'reference_series', 'adaptation', 'intent', 'world', 'character', 'voice', 'reference_video', 'notes'];
-const blankCreativeDraft = (): CreativeDraft => ({ creation_mode: 'original', reference_series: '', adaptation: '', intent: '', world: '', character: '', voice: '', reference_video: '', notes: '' });
-const normalizeCreativeDraft = (value?: Partial<CreativeDraft> | null): CreativeDraft => Object.fromEntries(creativeFieldNames.map(key => [key, String(value?.[key] ?? blankCreativeDraft()[key])])) as CreativeDraft;
-const hasCreativeDraftContent = (value: CreativeDraft) => creativeFieldNames.some(key => key === 'creation_mode' ? value[key] !== 'original' : value[key].trim().length > 0);
-const sameCreativeDraft = (left: CreativeDraft, right: CreativeDraft) => creativeFieldNames.every(key => left[key] === right[key]);
-
-const emptySegmentDraft = (): SegmentDraft => ({ script_scene_id: '', script_revision: '', audio_guide: '', delivery_master: '', segment_id: '', duration_seconds: '5', location: '', shot_size: '中景', camera: '固定机位', wardrobe: '沿用角色设定', performance: '', prompt: '', workflow: '', first_frame: '', last_frame: '' });
-function readNewSegmentDraft(projectId: string): SegmentDraft {
-  const empty = emptySegmentDraft();
-  if (!projectId) return empty;
-  try {
-    const saved = JSON.parse(localStorage.getItem(`director-workbench:${projectId}:new-segment:v1`) ?? '{}');
-    return Object.fromEntries(Object.entries(empty).map(([key, fallback]) => [key, typeof saved?.[key] === 'string' ? saved[key] : fallback])) as SegmentDraft;
-  } catch { return empty; }
-}
+import type { BatchTask, CheckpointRecord, CreativeConflict, CreativeDraft, CreativeProfile, PipelineValidation, PlanAssembly, PlanSegment, ProductionStep, ProductionStepState, ProjectManifest, ProjectState, QuickAspect, ReusableTemplate, ReviewRecord, SegmentDraft, SegmentEdit, ShotGenerationSettings, ShotVersion, TaskRecord, WorkflowCatalogEntry } from './app/types';
+import { ASPECT_LABEL, QUICK_SERIES, adultVideoProfileNote, blankCreativeDraft, candidateOutputFacts, checkpointLabel, hasCreativeDraftContent, loadCreativeDraft, localSystemTime, measureStillAspect, normalizeCreativeDraft, normalizeLiveTaskState, normalizeManifestAsset, outputMethodLabel, outputResolutionLabel, readNewSegmentDraft, reviewLabel, sameCreativeDraft, taskStateLabel, taskStateLabels, versionMaterial } from './app/helpers';
 
 export default function App({ privateMode = false, onLogout, logoutBusy = false, sessionError = '' }: { privateMode?: boolean; onLogout?: () => void; logoutBusy?: boolean; sessionError?: string } = {}) {
   const [project, setProject] = useState<ProjectManifest | null>(null);
@@ -197,10 +51,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const [deleteShotOpen, setDeleteShotOpen] = useState(false);
   const [deletingShot, setDeletingShot] = useState(false);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(() => {
-    const saved = Number(localStorage.getItem('director-workbench:sidebar-width'));
-    return Number.isFinite(saved) && saved >= 240 ? saved : 286;
-  });
+  const { sidebarWidth, resizeSidebar, beginSidebarResize } = useSidebarWidth();
   const [pendingTreeItem, setPendingTreeItem] = useState<{ projectId: string; kind: TreeKind; id: string } | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [quickMode, setQuickMode] = useState(true);
@@ -213,12 +64,9 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const quickWorking = useRef(false);
   const [quickError, setQuickError] = useState('');
   const [projectLoading, setProjectLoading] = useState(true);
-  const [page, setPage] = useState<PageKey>('overview');
   const [referenceTarget, setReferenceTarget] = useState<{ projectId: string; analysisId: string } | null>(null);
   const [workspaceMode, setWorkspaceMode] = useState<'production' | 'reverse'>('production');
   const [workspacePage, setWorkspacePage] = useState<'creative' | 'script' | 'shots' | 'delivery' | 'enhance'>('shots');
-  const [importPath, setImportPath] = useState('');
-  const [importReport, setImportReport] = useState<Record<string, unknown> | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [newSeries, setNewSeries] = useState('');
   const [newTitle, setNewTitle] = useState('');
@@ -233,12 +81,9 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const [materialTitle, setMaterialTitle] = useState('');
   const [savingMaterialTitle, setSavingMaterialTitle] = useState(false);
   const [variant, setVariant] = useState<Variant>('A');
-  const [expanded, setExpanded] = useState<string[]>([]);
-  const [drafts, setDrafts] = useState<Drafts>({});
   const [continuous, setContinuous] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [mediaLoad, setMediaLoad] = useState<{ key: string; status: 'loading' | 'ready' | 'error' }>({ key: '', status: 'loading' });
-  const [position, setPosition] = useState(0);
   const [notice, setNotice] = useState('');
   const pageInteraction = useRef(0);
   useEffect(() => {
@@ -271,8 +116,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const [resourceOpen, setResourceOpen] = useState(false);
   const [materialBridgeOpen, setMaterialBridgeOpen] = useState(false);
   const [materialBridgeDevice, setMaterialBridgeDevice] = useState(false);
-  const [comfyOnline, setComfyOnline] = useState(false);
-  const [comfyInfo, setComfyInfo] = useState<{ version?: string; gpu_free_mib?: number; queue_running?: number; queue_pending?: number }>({});
   const [taskState, setTaskState] = useState('');
   const submittingShot = useRef(false);
   const regeneratingShot = useRef(false);
@@ -324,6 +167,11 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const [pipelineValues, setPipelineValues] = useState<Record<string, string | number | boolean | string[]>>({});
   const [pipelineValidation, setPipelineValidation] = useState<PipelineValidation | null>(null);
   const [draftReadiness, setDraftReadiness] = useState<ReadinessItem | null>(null);
+  const { drafts, loadDraftsForProject, updateDraft, clearDraft, resetDrafts } = useDrafts(project?.id, {
+    onStorageError: setStorageError,
+    onPromptChange: () => setDraftReadiness(null),
+  });
+  const { comfyOnline, comfyInfo } = useComfyStatus();
   const [pipelineError, setPipelineError] = useState('');
   const [pipelineChecking, setPipelineChecking] = useState(false);
   const [stageFormOpen, setStageFormOpen] = useState(false);
@@ -387,7 +235,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   useEffect(() => { setMergeEnd(''); }, [project?.id, selected]);
   const creatingSegment = useRef(false);
   const [planAssembly, setPlanAssembly] = useState<PlanAssembly | null>(null);
-  const storageKey = `director-workbench:${project?.id ?? 'loading'}:drafts:v1`;
   const creativeStorageKey = `director-workbench:${project?.id ?? 'loading'}:creative:v1`;
   const baseAssets = project ? (Array.isArray(project.assets) ? project.assets.filter(isCreativeMaterial).map(normalizeManifestAsset) : []) : privateMode ? [] : fallbackAssets;
   const diagnosticPaths = diagnosticMaterialPaths(project);
@@ -406,19 +253,19 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const dialogRef = useRef<HTMLDialogElement>(null);
   const planVideoAssets: Asset[] = planSegments.map(segment => {
     const base = baseAssets.find(asset => asset.id === segment.id);
-    const firstFrame = sharedMediaUrl(segment.keyframes?.first);
-    const videoSource = sharedMediaUrl(segment.video?.path);
-    const reworkSource = sharedMediaUrl(segment.video?.rework_candidate?.path);
-    const finishSource = sharedMediaUrl(segment.video?.finish_review?.path);
+    const firstFrame = mediaUrl(segment.keyframes?.first);
+    const videoSource = mediaUrl(segment.video?.path);
+    const reworkSource = mediaUrl(segment.video?.rework_candidate?.path);
+    const finishSource = mediaUrl(segment.video?.finish_review?.path);
     return {
       id: segment.id, kind: 'video', title: `${segment.id} · ${segment.location}`, subtitle: `${segment.shot_size} · ${segment.camera} · ${segment.wardrobe}`,
-      start: segment.start_seconds, end: segment.end_seconds, ready: Boolean(videoSource) || Boolean(base?.ready), image: firstFrame ?? base?.image, lastImage: sharedMediaUrl(segment.keyframes?.last),
+      start: segment.start_seconds, end: segment.end_seconds, ready: Boolean(videoSource) || Boolean(base?.ready), image: firstFrame ?? base?.image, lastImage: mediaUrl(segment.keyframes?.last),
       sources: videoSource ? { A: videoSource, ...((reworkSource ?? finishSource) ? { B: reworkSource ?? finishSource } : {}) } : base?.sources, intent: segment.performance, prompt: segment.prompt ?? base?.prompt ?? '', origin: segment.video?.path ? `ComfyUI history 成功回执 · ${segment.comfyui_task_id ?? '任务 ID 未登记'}${segment.video.rework_candidate?.prompt_id ? ` · 重做样片 ${segment.video.rework_candidate.prompt_id}` : segment.video.finish_review?.prompt_id ? ` · 精细化候选 ${segment.video.finish_review.prompt_id}` : ''}` : (segment.keyframes?.first ? '生成前分段计划 · 已登记首帧' : '分镜草案 · 待准备本作关键帧'), specs: `${segment.duration_seconds} 秒 · ${segment.status}${segment.video?.rework_candidate?.specs ? ` · B ${segment.video.rework_candidate.specs}` : segment.video?.finish_review?.specs ? ` · B ${segment.video.finish_review.specs}` : ''}`, workflow: [segment.workflow ?? base?.workflow ?? '待登记', segment.video?.rework_candidate?.workflow ? `重做 ${segment.video.rework_candidate.workflow}` : '', segment.video?.rework_candidate?.ui_workflow ? `画布 ${segment.video.rework_candidate.ui_workflow}` : '', segment.video?.finish_review?.workflow ? `精细化 ${segment.video.finish_review.workflow}` : '', segment.keyframes?.first ? `首帧 ${segment.keyframes.first}` : '', segment.keyframes?.last ? `尾帧 ${segment.keyframes.last}` : '', segment.audio?.delivery_master ? `交付音频 ${segment.audio.delivery_master}` : '', segment.audio?.guide ? `引导音频 ${segment.audio.guide}` : '', segment.comfyui_task_id ? `ComfyUI 任务 ${segment.comfyui_task_id}` : ''].filter(Boolean).join(' · '),
     };
   });
   const planAudioAssets: Asset[] = planSegments.flatMap(segment => {
     const audioPath = segment.audio?.delivery_master ?? segment.audio?.guide;
-    const audioSource = sharedMediaUrl(audioPath);
+    const audioSource = mediaUrl(audioPath);
     if (!audioSource) return [];
     return [{
       id: segment.id, kind: 'audio', title: `${segment.id} · ${segment.audio?.delivery_master ? '交付音频' : '表演引导'}`,
@@ -428,22 +275,22 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
     }];
   });
   const planImageAssets: Asset[] = planSegments.flatMap(segment => {
-    const image = sharedMediaUrl(segment.keyframes?.first);
+    const image = mediaUrl(segment.keyframes?.first);
     if (!image || isDiagnosticPath(segment.keyframes?.first)) return [];
     return [{
       id: segment.id, kind: 'image', title: `${segment.id} · 首帧`, subtitle: `${segment.location} · ${segment.shot_size}`,
-      ready: true, image, lastImage: sharedMediaUrl(segment.keyframes?.last), intent: segment.performance,
+      ready: true, image, lastImage: mediaUrl(segment.keyframes?.last), intent: segment.performance,
       prompt: segment.prompt ?? '', origin: segment.keyframes?.first ?? '', specs: '首帧候选', workflow: segment.workflow ?? '待登记',
     }];
   });
   const assembly = planAssembly;
   const assemblyIsStale = assembly?.status === 'stale';
-  const assemblySource = sharedMediaUrl(assembly?.output);
+  const assemblySource = mediaUrl(assembly?.output);
   const assemblyAsset: Asset | null = assembly && assemblySource ? {
     id: project?.assembly_asset_id || 'assembly', kind: 'video', title: `${project?.title ?? '项目'} · ${assemblyIsStale ? '历史成片 · 需重新装配' : '当前成片'}`,
     subtitle: `${assembly.duration_seconds?.toFixed(2) ?? '—'} 秒 · ${assemblyIsStale ? '对应旧计划' : '已装配'}`,
     start: 0, end: assembly.duration_seconds ?? assembly.target_duration_seconds ?? 0,
-    ready: true, sources: { A: assemblySource }, image: sharedMediaUrl(planSegments[0]?.keyframes?.first),
+    ready: true, sources: { A: assemblySource }, image: mediaUrl(planSegments[0]?.keyframes?.first),
     intent: assemblyIsStale ? '这是旧计划的历史成片，仍可预览；当前计划已变化，请重新装配。' : '当前作品的成片。请检查音画后决定是否继续修改分镜。',
     prompt: '', origin: assembly.prompt_id ? `装配任务回执 · ${assembly.prompt_id}` : '装配结果 · 未登记任务回执',
     specs: `${assembly.duration_seconds?.toFixed(2) ?? '—'} 秒 · 分辨率与编码待核验`,
@@ -480,7 +327,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const duration = (current.end ?? 0) - (current.start ?? 0);
   const activeTaskStates = ['preparing', 'submitting', 'queued', 'scheduler_waiting', 'running', 'stop_requested', 'stopping', 'batch_waiting', 'needs_reconcile'];
   const batchActive = batchTasks.some(task => activeTaskStates.includes(task.status));
-  const resourceReleaseBlocked = batchActive || activeTaskStates.includes(taskState) || activeTaskStates.includes(assemblyTaskState);
   const currentPlanSegment = planSegments.find(segment => segment.id === current.id);
   const viewContext = useRef({ projectId: project?.id, assetId: current.id, source });
   viewContext.current = { projectId: project?.id, assetId: current.id, source };
@@ -500,7 +346,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const timelineAssets = kind === 'video' ? planVideoAssets : list;
   const currentAudioPath = currentPlanSegment?.audio?.delivery_master ?? currentPlanSegment?.audio?.guide;
   const currentAudioSource = currentAudioPath
-    ? sharedMediaUrl(currentAudioPath)
+    ? mediaUrl(currentAudioPath)
     : kind === 'audio' ? source : undefined;
   const currentSampleRecord = projectState?.reviews[current.id]?.sample;
   const currentFinishRecord = projectState?.reviews[current.id]?.finish;
@@ -585,13 +431,11 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
     fetch('/api/project').then(response => response.ok ? response.json() : Promise.reject(new Error('project'))).then(data => {
       if (cancelled) return;
       setProject(data as ProjectManifest);
-      const manifestAssets: Asset[] = Array.isArray(data.assets) ? data.assets.map((asset: Record<string, unknown>) => normalizeManifestAsset(asset)) : [];
       setSelected('');
-      setExpanded(manifestAssets.slice(0, 1).map(asset => asset.id));
       // Open the production page in a quiet overview state. Parameter controls
       // appear only after the reviewer chooses a concrete step.
       setPipelineStageId('');
-      setDrafts(loadDrafts(`director-workbench:${String(data.id)}:drafts:v1`));
+      loadDraftsForProject(String(data.id));
       setCreativeDraft(loadCreativeDraft(`director-workbench:${String(data.id)}:creative:v1`));
       setCreativeConflict(null);
       void refreshProjects();
@@ -624,30 +468,9 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
 
   useEffect(() => {
     if (!project) return;
-    try { localStorage.setItem(storageKey, JSON.stringify(drafts)); setStorageError(false); }
-    catch { setStorageError(true); }
-  }, [drafts, project, storageKey]);
-
-  useEffect(() => {
-    if (!project) return;
     try { localStorage.setItem(creativeStorageKey, JSON.stringify(creativeDraft)); setStorageError(false); }
     catch { setStorageError(true); }
   }, [creativeDraft, creativeStorageKey, project]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const refresh = async () => {
-      try {
-        const response = await fetch('/api/status');
-        if (!response.ok) throw new Error('status');
-        const data = await response.json();
-        if (!cancelled) { setComfyOnline(Boolean(data.comfy?.online)); setComfyInfo(data.comfy ?? {}); }
-      } catch { if (!cancelled) setComfyOnline(false); }
-    };
-    void refresh();
-    const timer = window.setInterval(refresh, 4000);
-    return () => { cancelled = true; window.clearInterval(timer); };
-  }, []);
 
   useEffect(() => {
     void refreshPlan().catch(() => { /* the static pilot remains available while the plan is offline */ });
@@ -802,7 +625,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
 
   useEffect(() => {
     advancing.current = false;
-    setPosition(0);
     setPlaying(false);
     const media = mediaElement;
     if (!media) return;
@@ -862,20 +684,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
     else if (item) openTreeItem(item.kind, item.id);
   }
 
-  function resizeSidebar(next: number) {
-    const width = Math.max(240, Math.min(Math.floor(window.innerWidth / 2), next));
-    setSidebarWidth(width);
-    localStorage.setItem('director-workbench:sidebar-width', String(width));
-  }
-
-  function beginSidebarResize(event: ReactPointerEvent<HTMLDivElement>) {
-    event.preventDefault();
-    const move = (pointer: PointerEvent) => resizeSidebar(pointer.clientX);
-    const finish = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', finish); };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', finish);
-  }
-
   function switchKind(next: Kind) {
     mediaRef.current?.pause();
     autoplayRef.current = false;
@@ -905,11 +713,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
     advancing.current = false;
     if (media.ended || (duration > 0 && media.currentTime >= start + duration - 0.08)) media.currentTime = start;
     try { await media.play(); if (mediaEpoch.current === epoch && mediaRef.current === media && media.isConnected) setNotice(''); } catch (error) { if (mediaEpoch.current === epoch && mediaRef.current === media && media.isConnected && !(error instanceof DOMException && error.name === 'AbortError')) setNotice('暂时无法播放，请检查素材是否可读取。'); }
-  }
-
-  function updateDraft(id: string, patch: Draft) {
-    if ('prompt' in patch) setDraftReadiness(null);
-    setDrafts(previous => ({ ...previous, [id]: { ...previous[id], ...patch } }));
   }
 
   async function persistReview(stage: 'sample' | 'finish' | 'final', status: ReviewRecord['status'], adoptedVariant?: Variant) {
@@ -977,7 +780,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail?.message || data.detail || '恢复历史版本失败');
       if (activeProjectId.current !== projectId) return;
-      setDrafts(previous => { const next = { ...previous }; delete next[segmentId]; return next; });
+      clearDraft(segmentId);
       setShotVersionsOffset(0);
       await refreshPlan();
       setNotice(`已恢复 ${localSystemTime(version.generated_at)} 生成的版本。原生成时间保留，本次恢复时间另行记录。`);
@@ -1133,14 +936,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
     setNotice('已导出审阅计划，包含原始信息和编辑草稿；这不是 ComfyUI 工作流。');
   }
 
-  function exportStageContract(stage: PipelineStage) {
-    const blob = new Blob([JSON.stringify({ schema_version: 2, project: project?.id ?? 'current-project', stage }, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a'); link.href = url; link.download = `${project?.id ?? 'project'}-${stage.order.toString().padStart(2, '0')}-${stage.id}-步骤契约.json`; link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    setNotice(`已导出“${stage.title}”步骤契约；其中只记录输入、输出和执行引用。`);
-  }
-
   async function refreshProjects(): Promise<Array<{ id: string; title: string; series?: string; selected?: boolean }>> {
     const response = await fetch('/api/projects');
     if (!response.ok) throw new Error('项目列表读取失败');
@@ -1197,7 +992,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
       if (reportFailure && data.id !== projectId) throw new Error('项目切换回执与目标不一致');
       if (reportFailure && expectedInteraction !== pageInteraction.current) throw new Error('用户已接管页面，未更换编辑器。');
       const nextAssets: Asset[] = Array.isArray(data.assets) ? data.assets.map((asset: Record<string, unknown>) => normalizeManifestAsset(asset)) : [];
-      setProject(data as ProjectManifest); setProjectState(null); setCreativeConflict(null); setProjectMenuOpen(false); setPlanSegments([]); setPlanAssembly(null); setTaskId(''); setTaskState(''); setCurrentTask(null); setProjectTasks([]); setAssemblyTaskId(''); setAssemblyTaskState(''); setBatchId(''); setBatchTasks([]); setSelected(kind === 'video' ? '' : nextAssets.find(asset => asset.kind === kind)?.id ?? ''); setDrafts(loadDrafts(`director-workbench:${String(data.id)}:drafts:v1`)); setCreativeDraft(loadCreativeDraft(`director-workbench:${String(data.id)}:creative:v1`));
+      setProject(data as ProjectManifest); setProjectState(null); setCreativeConflict(null); setProjectMenuOpen(false); setPlanSegments([]); setPlanAssembly(null); setTaskId(''); setTaskState(''); setCurrentTask(null); setProjectTasks([]); setAssemblyTaskId(''); setAssemblyTaskState(''); setBatchId(''); setBatchTasks([]); setSelected(kind === 'video' ? '' : nextAssets.find(asset => asset.kind === kind)?.id ?? ''); loadDraftsForProject(String(data.id)); setCreativeDraft(loadCreativeDraft(`director-workbench:${String(data.id)}:creative:v1`));
       setArchive(null);
       localStorage.setItem('director-workbench:last-project', data.id);
       setNotice(`已切换项目：${data.title ?? data.id}`);
@@ -1205,16 +1000,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
       setSeriesRefreshKey(value => value + 1);
       return data as ProjectManifest;
     } catch (error) { if (reportFailure) throw error; setNotice(error instanceof Error ? error.message : '项目切换失败。'); }
-  }
-
-  async function importWorkspace() {
-    if (!importPath.trim()) { setNotice('请输入 D:\\Comfy-Desktop 内的工作目录路径。'); return; }
-    try {
-      const response = await fetch('/api/projects/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: importPath.trim() }) });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || '工作目录导入失败');
-      setProject(data.project as ProjectManifest); setCreativeConflict(null); setImportReport(data.report ?? null); setImportPath(''); setNotice(`已导入工作目录，发现 ${data.report?.counts?.video ?? 0} 个视频、${data.report?.counts?.audio ?? 0} 个音频和 ${data.report?.counts?.image ?? 0} 张图片。`); void refreshProjects();
-    } catch (error) { setNotice(error instanceof Error ? error.message : '工作目录导入失败。'); }
   }
 
   async function createProject() {
@@ -1233,7 +1018,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || '创建项目失败');
       const saved = await fetch(`/api/projects/${encodeURIComponent(data.project.id)}/creative`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ values: initialCreative, status: 'pending_review', source: 'director-ui', expected_revision: 0 }) }).catch(() => null);
-      setProject(data.project as ProjectManifest); setProjectState(null); setCreativeConflict(null); setProjectMenuOpen(false); setCreateOpen(false); setPlanSegments([]); setPlanAssembly(null); setTaskId(''); setTaskState(''); setCurrentTask(null); setProjectTasks([]); setAssemblyTaskId(''); setAssemblyTaskState(''); setBatchId(''); setBatchTasks([]); setSelected(''); setDrafts({}); setCreativeDraft(initialCreative); setNewSeries(''); setNewTitle(''); setNewProjectId('');
+      setProject(data.project as ProjectManifest); setProjectState(null); setCreativeConflict(null); setProjectMenuOpen(false); setCreateOpen(false); setPlanSegments([]); setPlanAssembly(null); setTaskId(''); setTaskState(''); setCurrentTask(null); setProjectTasks([]); setAssemblyTaskId(''); setAssemblyTaskState(''); setBatchId(''); setBatchTasks([]); setSelected(''); resetDrafts(); setCreativeDraft(initialCreative); setNewSeries(''); setNewTitle(''); setNewProjectId('');
       localStorage.setItem('director-workbench:last-project', data.project.id);
       setWorkspaceMode(newCreationMode === 'reference-video' ? 'reverse' : 'production');
       setCreativeOpen(newCreationMode !== 'reference-video');
@@ -1255,7 +1040,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
       const response = await fetch(`/api/projects/${encodeURIComponent(project.id)}/upload`, { method: 'POST', body: form });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || '资源导入失败');
-      setProject(data.project as ProjectManifest); setImportReport(data.report ?? null); setImportFiles([]); setNotice(`已登记 ${data.uploaded?.length ?? 0} 个资源，工作流和媒体仍由 ComfyUI 负责执行。`); void refreshProjects();
+      setProject(data.project as ProjectManifest); setImportFiles([]); setNotice(`已登记 ${data.uploaded?.length ?? 0} 个资源，工作流和媒体仍由 ComfyUI 负责执行。`); void refreshProjects();
     } catch (error) { setNotice(error instanceof Error ? error.message : '资源导入失败。'); }
   }
 
@@ -1417,20 +1202,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
       if (generate) await startCurrentTask({ prompt: segmentDraft.prompt, duration }, { assetId: data.segment.id, prompt: segmentDraft.prompt, automatic: true });
     } catch (error) { if (activeProjectId.current === project.id) { const message = error instanceof Error ? error.message : '分段登记失败。'; setNotice(message); if (generate) setQuickError(message); } }
     finally { creatingSegment.current = false; if (generate) setQuickBusy(false); }
-  }
-
-  async function registerPipelineAsset(inputId: string, file: File) {
-    if (!project) { setNotice('请先创建或选择一个项目。'); return; }
-    const form = new FormData(); form.append('files', file, `assets/${file.name}`);
-    try {
-      const response = await fetch(`/api/projects/${encodeURIComponent(project.id)}/upload`, { method: 'POST', body: form });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || '素材登记失败');
-      const nextProject = data.project as ProjectManifest;
-      const uploadedPath = data.uploaded?.[0];
-      const registered = nextProject.assets?.find(asset => asset.image_path === uploadedPath || Object.values((asset.sources ?? {}) as Record<string, unknown>).includes(uploadedPath));
-      setProject(nextProject); setPipelineValues(previous => ({ ...previous, [inputId]: registered?.id ? String(registered.id) : file.name })); setNotice(`已登记素材：${file.name}`); void refreshProjects();
-    } catch (error) { setNotice(error instanceof Error ? error.message : '素材登记失败。'); }
   }
 
   async function exportProjectBundle() {
@@ -1772,7 +1543,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
     onTimeUpdate: () => {
       const media = mediaRef.current;
       if (!media) return;
-      setPosition(Math.max(0, Math.min(duration, media.currentTime - start)));
       if (kind === 'audio' && !media.paused && media.currentTime >= (current.end ?? Infinity) - 0.04) finish();
     },
   };
@@ -1854,18 +1624,12 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
     : aspect === '16:9' ? '864 × 480' : aspect === '9:16' ? '480 × 864' : '640 × 640';
   const currentDisplayTitle = quickActive && kind === 'image' ? current.title.replace(/^关键帧 · /, '图片 · ') : assetTitle(current.id, current.title, kind);
   const downloadSource = kind === 'image' ? current.image : source;
-  const downloadName = downloadSource ? new URL(downloadSource, window.location.href).searchParams.get('path')?.split(/[\\/]/).pop() : undefined;
+  const downloadLabel = downloadSource ? downloadName(downloadSource) : undefined;
   return <div className={`director-workbench ${quickShell ? 'director-quick' : ''}`} data-build="2026-10-16-auth-cache-refresh" style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}>
-    <aside className="director-sidebar">
-      <div className="director-brand"><span className="director-brand-mark"><Clapperboard size={20} /></span><div><strong>片场</strong><small>导演工作台</small></div></div>
-      <WorkspaceExplorer projects={projectList} activeProjectId={archive ? undefined : project?.id} activeSegments={planSegments} activeAssets={project?.assets ?? []} selectedKind={kind} selectedId={current.id} onOpenProject={openTreeProject} onOpenItem={openTreeItem} privateMode={privateMode} refreshKey={seriesRefreshKey} onOpenArchive={value => { setArchive(value); setCreateOpen(false); setProjectMenuOpen(false); }} onCreateWork={series => { setNewSeries(series); setNewTitle(''); setCreateOpen(true); setProjectMenuOpen(false); }} onDeleteDirectory={setDeleteDirectory} onRefreshProjects={() => { void refreshProjects(); if (project?.id) void refreshPlan().catch(() => setNotice('分镜读取失败，请稍后重试。')); }} />
-      <div className="director-sidebar-bottom"><div className="director-connection"><span className={comfyOnline ? 'online' : ''} />{comfyOnline ? `ComfyUI ${comfyInfo.version ?? '已连接'}` : 'ComfyUI 离线'}</div><button className="director-resource-link" onClick={() => setMaterialBridgeOpen(true)}><FolderOpen size={14} />跨设备素材桥</button><button className="director-resource-link" onClick={() => setResourceOpen(open => !open)}><Settings2 size={14} />资源与连接</button></div>
-    </aside>
-    <div className="director-sidebar-resizer" role="separator" aria-label="调整作品目录宽度" aria-orientation="vertical" aria-valuemin={240} aria-valuemax={Math.floor(window.innerWidth / 2)} aria-valuenow={sidebarWidth} tabIndex={0} onPointerDown={beginSidebarResize} onKeyDown={event => { if (event.key === 'ArrowLeft') resizeSidebar(sidebarWidth - 24); if (event.key === 'ArrowRight') resizeSidebar(sidebarWidth + 24); }} />
+    <WorkbenchSidebar projects={projectList} archive={archive} projectId={project?.id} planSegments={planSegments} assets={project?.assets ?? []} selectedKind={kind} selectedId={current.id} privateMode={privateMode} refreshKey={seriesRefreshKey} onOpenProject={openTreeProject} onOpenItem={openTreeItem} onOpenArchive={value => { setArchive(value); setCreateOpen(false); setProjectMenuOpen(false); }} onCreateWork={series => { setNewSeries(series); setNewTitle(''); setCreateOpen(true); setProjectMenuOpen(false); }} onDeleteDirectory={setDeleteDirectory} onRefreshProjects={() => { void refreshProjects(); if (project?.id) void refreshPlan().catch(() => setNotice('分镜读取失败，请稍后重试。')); }} comfyOnline={comfyOnline} comfyVersion={comfyInfo.version} onOpenMaterialBridge={() => setMaterialBridgeOpen(true)} onToggleResources={() => setResourceOpen(open => !open)} sidebarWidth={sidebarWidth} onBeginResize={beginSidebarResize} onResize={resizeSidebar} />
     <main className="director-main">
-      <div className="quick-navigation"><button className="text-button" onClick={() => { setQuickMode(true); setArchive(null); setWorkspaceMode('production'); setWorkspacePage('shots'); }}>快速生成</button><button className="text-button" onClick={() => { setQuickMode(false); setWorkspaceMode('production'); setWorkspacePage('shots'); }}>作品、片段与更多功能</button><span>{project ? `新产物会存进：「${project.series || '我的作品'}」/ ${project.title}` : `还没有作品；生成时会先新建到「${QUICK_SERIES[quickCategory]}」`}</span>{privateMode && quickShell && <button className="text-button" onClick={onLogout} disabled={logoutBusy}>退出登录</button>}</div>
-      <header className="director-topbar"><div className="director-breadcrumb"><span>{archive?.series ?? project?.series ?? '我的作品'}</span><ChevronRight size={13} /><strong>{archive?.work ?? project?.title ?? '选择或新建作品'}</strong></div><nav className="director-topnav" aria-label="工作台功能"><button className={!archive && workspaceMode === 'production' && workspacePage === 'script' ? 'active' : ''} onClick={() => { setArchive(null); setWorkspaceMode('production'); setWorkspacePage('script'); }}>剧本与场次</button><button className={!archive && workspaceMode === 'production' && workspacePage === 'shots' ? 'active' : ''} onClick={() => { setArchive(null); setWorkspaceMode('production'); setWorkspacePage('shots'); }}>分镜制作</button><button className={!archive && workspaceMode === 'production' && workspacePage === 'creative' ? 'active' : ''} onClick={() => { setArchive(null); setWorkspaceMode('production'); setWorkspacePage('creative'); setCreativeOpen(true); }}>创作设定</button><button className={!archive && workspaceMode === 'reverse' ? 'active' : ''} onClick={() => { setArchive(null); setWorkspaceMode('reverse'); }}>参考拆解</button><button className={!archive && workspaceMode === 'production' && workspacePage === 'delivery' ? 'active' : ''} onClick={() => { setArchive(null); setWorkspaceMode('production'); setWorkspacePage('delivery'); }}>任务与成片</button></nav><div className="director-topbar-status"><span className={comfyOnline ? 'online-dot' : 'offline-dot'} />{comfyOnline ? '引擎已连接' : '引擎离线'}</div><button className="button primary compact" onClick={() => { setCreateOpen(open => !open); setProjectMenuOpen(false); }}>新建作品</button><button className="button secondary compact" onClick={() => { setProjectMenuOpen(open => !open); setCreateOpen(false); }}>导入素材</button>{privateMode && <button className="director-logout" onClick={onLogout} disabled={logoutBusy} title={sessionError || '退出登录'}><LogOut size={14} />退出登录</button>}</header>
-      {privateMode && !quickShell && <FirstUseGuide projectId={project?.id} refreshKey={`${planRevision}:${projectState?.history.length ?? 0}:${projectTasks.length}`} onAction={openGuideAction} onOpenProject={id => void selectProject(id)} />}
+      <WorkbenchTopbar project={project} archive={archive} privateMode={privateMode} quickShell={quickShell} quickCategory={quickCategory} workspaceMode={workspaceMode} workspacePage={workspacePage} comfyOnline={comfyOnline} logoutBusy={logoutBusy} sessionError={sessionError} onLogout={onLogout} onQuickGenerate={() => { setQuickMode(true); setArchive(null); setWorkspaceMode('production'); setWorkspacePage('shots'); }} onWorkspace={() => { setQuickMode(false); setWorkspaceMode('production'); setWorkspacePage('shots'); }} onNavigate={page => { setArchive(null); setWorkspaceMode('production'); setWorkspacePage(page); if (page === 'creative') setCreativeOpen(true); }} onOpenReverse={() => { setArchive(null); setWorkspaceMode('reverse'); }} onToggleCreate={() => { setCreateOpen(open => !open); setProjectMenuOpen(false); }} onToggleImport={() => { setProjectMenuOpen(open => !open); setCreateOpen(false); }} />
+      {privateMode && !quickShell && <Suspense fallback={null}><FirstUseGuide projectId={project?.id} refreshKey={`${planRevision}:${projectState?.history.length ?? 0}:${projectTasks.length}`} onAction={openGuideAction} onOpenProject={id => void selectProject(id)} /></Suspense>}
       {(createOpen || projectMenuOpen) && <section className="director-top-popover" aria-label={createOpen ? '新建作品' : '导入素材'}>{createOpen ? <div className="director-mini-form"><strong>新建作品</strong><label>系列名称<input value={newSeries} onChange={event => setNewSeries(event.target.value)} placeholder="例如：家庭短片" /></label><label>作品名称<input value={newTitle} onChange={event => setNewTitle(event.target.value)} placeholder="例如：第一集" /></label><label>创作起点<select value={newCreationMode} onChange={event => setNewCreationMode(event.target.value)}>{creationRoutes.map(route => <option key={route.id} value={route.id}>{route.title}</option>)}</select></label>{newCreationMode === 'reference-series' && <label>沿用作品设定<select value={newReferenceProject} onChange={event => setNewReferenceProject(event.target.value)}><option value="">手动填写系列设定</option>{projectList.map(item => <option key={item.id} value={item.id}>{item.series} · {item.title}</option>)}</select></label>}<button className="button primary compact" disabled={creatingProject || !newSeries.trim() || !newTitle.trim()} onClick={() => void createProject()}>{creatingProject ? '正在创建…' : '创建并进入'}</button></div> : <div className="director-import"><strong>导入工作目录</strong><input ref={folderInputRef} className="visually-hidden-file" type="file" multiple {...({ webkitdirectory: '' } as unknown as InputHTMLAttributes<HTMLInputElement>)} onChange={event => setImportFiles(Array.from(event.target.files ?? []))} /><button className="button secondary compact" onClick={() => folderInputRef.current?.click()}><ArrowUpRight size={13} />选择文件夹</button><span>{importFiles.length ? `已选择 ${importFiles.length} 个文件` : '未选择文件夹'}</span><button className="button primary compact" disabled={!project || !importFiles.length} onClick={() => void uploadSelectedFiles()}>导入当前作品</button></div>}<button className="icon-button" aria-label="关闭面板" onClick={() => { setCreateOpen(false); setProjectMenuOpen(false); }}><X size={16} /></button></section>}
       {resourceOpen && <section className="director-resource-panel"><div><strong>连接与资源</strong><p>{comfyOnline ? `ComfyUI ${comfyInfo.version ?? ''} · 队列运行 ${comfyInfo.queue_running ?? 0} · 等待 ${comfyInfo.queue_pending ?? 0} · 显存空闲约 ${comfyInfo.gpu_free_mib ?? '?'} MiB。` : '引擎暂时离线。通过预检的请求仍可排队，服务器会在资源恢复后继续处理。'}</p></div><button className="icon-button" aria-label="关闭资源状态" onClick={() => setResourceOpen(false)}><X size={16} /></button></section>}
       <div className="director-content" data-workspace-page={workspacePage}>
@@ -1898,7 +1662,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
             <div className="quick-wide"><button className="button primary" disabled={!segmentDraft.prompt.trim() || quickTemplate === 'video' && !segmentDraft.first_frame} onClick={() => void createPlanSegment(true)}><Play size={15} />生成视频</button><button className="text-button" onClick={() => setSegmentFormOpen(false)}>返回已有片段</button></div>
           </fieldset>}
         </section>}
-        {archive ? <ArchiveBrowser archive={archive} /> : privateMode && !project ? quickActive ? null : <section className="director-no-project"><FolderOpen size={38} /><h1>从一部作品开始</h1><p>左侧会按系列整理你能访问的全部作品。新作品创建后，分镜、声音和图片都可以从目录中展开查看。</p><button className="button primary" onClick={() => setCreateOpen(true)}>新建第一部作品</button></section> : workspaceMode === 'reverse' ? <ReverseWorkbench key={project?.id} initialAnalysisId={referenceTarget?.projectId === project?.id ? referenceTarget?.analysisId : undefined} projectId={project?.id ?? ''} onConverted={count => { void refreshPlan(); setWorkspaceMode('production'); setWorkspacePage('shots'); setNotice(count ? `已从参考拆解新增 ${count} 个分镜草案，请准备本作关键帧和制作方案。` : '已打开对应制作草案，原有分镜与修改均已保留。'); }} /> : <>
+        {archive ? <Suspense fallback={null}><ArchiveBrowser archive={archive} /></Suspense> : privateMode && !project ? quickActive ? null : <section className="director-no-project"><FolderOpen size={38} /><h1>从一部作品开始</h1><p>左侧会按系列整理你能访问的全部作品。新作品创建后，分镜、声音和图片都可以从目录中展开查看。</p><button className="button primary" onClick={() => setCreateOpen(true)}>新建第一部作品</button></section> : workspaceMode === 'reverse' ? <Suspense fallback={null}><ReverseWorkbench key={project?.id} initialAnalysisId={referenceTarget?.projectId === project?.id ? referenceTarget?.analysisId : undefined} projectId={project?.id ?? ''} onConverted={count => { void refreshPlan(); setWorkspaceMode('production'); setWorkspacePage('shots'); setNotice(count ? `已从参考拆解新增 ${count} 个分镜草案，请准备本作关键帧和制作方案。` : '已打开对应制作草案，原有分镜与修改均已保留。'); }} /></Suspense> : <>
         <header className="director-heading"><div><span className="director-kicker">{project?.eyebrow ?? '导演工作区'}</span><h1>{workspacePage === 'script' ? '剧本与场次' : workspacePage === 'creative' ? '创作设定' : workspacePage === 'delivery' ? '任务与成片' : '分镜制作'}</h1><p>{workspacePage === 'script' ? '先读故事，再把每场戏安排成镜头。' : workspacePage === 'creative' ? '确定这部作品的起点、角色与表达。' : workspacePage === 'delivery' ? '运行批次，检查并导出成片。' : '选择一段，修改素材与提示词，然后生成。'}</p></div><div className="director-heading-actions" hidden={workspacePage !== 'delivery'}><button className="button secondary" onClick={exportPlan}><ArrowDownToLine size={14} />导出审阅计划</button><button className="button secondary" onClick={exportProjectBundle}><ArrowDownToLine size={14} />导出项目清单</button></div></header>
         <div className="director-status-line"><span className="status-pill"><span className="status-pill-dot" />{planSegments.length ? `${planSegments.length} 个分镜已登记` : `${library.length} 个素材已登记`}</span><span className="status-pill status-pill-muted">{assemblyIsStale ? '历史成片 · 需重新装配' : hasAssemblyCheckpoint ? '当前成片已生成' : hasAssemblyArtifact ? '历史成片可预览' : '等待各分镜生成视频'}</span>{assemblyAsset && <button className="text-button" onClick={() => { choose(assemblyAsset); setWorkspacePage('shots'); }}><Film size={13} />打开历史成片</button>}<span className="director-status-spacer" /><span className="director-save-status">{storageError || segmentStorageError ? '本机草稿缓存失败' : '编辑后请点击保存，未保存修改仅留在本机'}</span></div>
         {workspacePage === 'delivery' && !quickDelivery && projectTasks.map(task => <TaskQueueStatus key={task.id} task={task} />)}
@@ -1908,7 +1672,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
           <section aria-label="分镜采用进度"><h2>已采用 {savedPlanCurrent ? adoptedShotCount : '…'} / {planSegments.length} 段</h2><p>装配保留原片及候选。未采用或版本变化的分镜，请先打开核对。</p>
             <ol className="quick-delivery-shots">{planSegments.map(segment => <li key={segment.id}><span>{assetLabel(segment.id)} · {projectState?.reviews[segment.id]?.sample?.status === 'approved' ? '已采用' : segment.video?.path ? '等待采用' : '等待生成'}</span><button type="button" className="text-button" onClick={() => openQuickShot(segment.id)}>打开{assetLabel(segment.id)}</button></li>)}</ol>
           </section>
-          <AssemblyEditPanel projectId={project.id} planRevision={planRevision} assemblyPath={planAssembly?.output} onPlanChanged={() => refreshPlan()} onBrowse={() => setMaterialBridgeOpen(true)} onOpenShot={openQuickShot} />
+          <Suspense fallback={null}><AssemblyEditPanel projectId={project.id} planRevision={planRevision} assemblyPath={planAssembly?.output} onPlanChanged={() => refreshPlan()} onBrowse={() => setMaterialBridgeOpen(true)} onOpenShot={openQuickShot} /></Suspense>
           <section className="quick-delivery-submit" aria-label="提交成片装配"><h2>提交装配</h2>
             {!savedReadiness || !savedPlanCurrent ? <p>正在核对当前计划的准备度…</p> : <><p>{assemblyReady ? '装配输入已准备好。' : '请先处理以下项目：'}</p>{savedReadiness.assembly.blockers.length > 0 && <ul>{savedReadiness.assembly.blockers.map((blocker, index) => <li key={index}>{blocker.dependency && `${blocker.dependency}：`}{blockerMessage(blocker)}</li>)}</ul>}</>}
             {adoptedShotCount < planSegments.length && <p>还有 {planSegments.length - adoptedShotCount} 段未采用；上方可以直接返回对应分镜。</p>}
@@ -1926,21 +1690,21 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
           </section>}
         </section>}
         {workspacePage === 'delivery' && !quickDelivery && project && <AssemblyEditPanel projectId={project.id} planRevision={planRevision} assemblyPath={planAssembly?.output} onPlanChanged={() => refreshPlan()} onBrowse={() => setMaterialBridgeOpen(true)} onOpenShot={id => openTreeItem('video', id)} />}
-        {workspacePage === 'delivery' && !quickDelivery && project && <MediaToolsPanel projectId={project.id} assets={[...new Map([...baseAssets, ...planVideoAssets, ...(assemblyAsset ? [assemblyAsset] : [])].map(a => [a.id, a])).values()].filter(a => (a.kind === 'audio' || a.kind === 'video') && Boolean(a.sources?.A || a.sources?.B)).map(a => ({ id: a.id, title: a.title, kind: a.kind }))} onBrowse={() => setMaterialBridgeOpen(true)} onComplete={() => {
+        {workspacePage === 'delivery' && !quickDelivery && project && <Suspense fallback={null}><MediaToolsPanel projectId={project.id} assets={[...new Map([...baseAssets, ...planVideoAssets, ...(assemblyAsset ? [assemblyAsset] : [])].map(a => [a.id, a])).values()].filter(a => (a.kind === 'audio' || a.kind === 'video') && Boolean(a.sources?.A || a.sources?.B)).map(a => ({ id: a.id, title: a.title, kind: a.kind }))} onBrowse={() => setMaterialBridgeOpen(true)} onComplete={() => {
           const completedProjectId = project.id;
           void fetch(`/api/projects/${encodeURIComponent(completedProjectId)}`).then(r => { if (!r.ok) throw new Error(); return r.json() as Promise<ProjectManifest>; }).then(data => setProject(previous => previous?.id === completedProjectId ? data : previous)).catch(() => { if (activeProjectId.current === completedProjectId) setNotice('媒体处理已完成，素材刷新失败，请重新选择作品。'); });
-        }} />}
-        {workspacePage === 'script' && project && <ScriptWorkbench key={project.id} projectId={project.id} shots={planSegments} request={fetch} onCreateShot={(sceneId, revision) => { setSegmentDraft(previous => ({ ...previous, script_scene_id: sceneId, script_revision: String(revision) })); setWorkspacePage('shots'); setSegmentFormOpen(true); setStageFormOpen(false); }} onSelectShot={id => openTreeItem('video', id)} />}
+        }} /></Suspense>}
+        {workspacePage === 'script' && project && <Suspense fallback={null}><ScriptWorkbench key={project.id} projectId={project.id} shots={planSegments} request={fetch} onCreateShot={(sceneId, revision) => { setSegmentDraft(previous => ({ ...previous, script_scene_id: sceneId, script_revision: String(revision) })); setWorkspacePage('shots'); setSegmentFormOpen(true); setStageFormOpen(false); }} onSelectShot={id => openTreeItem('video', id)} /></Suspense>}
         {workspacePage === 'creative' && <CreationRoutes onScript={() => setWorkspacePage('script')} mode={creativeDraft.creation_mode} segmentCount={planSegments.length} onMode={mode => setCreativeDraft(previous => ({ ...previous, creation_mode: mode }))} onReference={() => setWorkspaceMode('reverse')} onSettings={() => setCreativeOpen(open => !open)} onSegment={() => { setWorkspacePage('shots'); setSegmentFormOpen(true); setStageFormOpen(false); }} onStage={() => { setWorkspacePage('shots'); setStageFormOpen(true); setSegmentFormOpen(false); }} />}
         {workspacePage === 'creative' && creativeOpen && <section className="director-creation-panel" aria-label="创作意图与世界观"><div className="director-form-heading"><div><span className="director-kicker">人工草稿 · 可随时退回修改</span><h2>创作意图与身份锚点</h2></div><span>{projectState?.creative ? `服务器档案 revision ${projectState.creative.revision} · ${projectState.creative.status === 'approved' ? '已确认' : '待确认'}` : '尚未提交服务器档案'}</span></div><div className="director-creation-grid"><label>创作意图<textarea rows={3} value={creativeDraft.intent} onChange={event => setCreativeDraft(previous => ({ ...previous, intent: event.target.value }))} placeholder="这部作品希望观众感受到什么？"></textarea></label><label>世界观 / 规则<textarea rows={3} value={creativeDraft.world} onChange={event => setCreativeDraft(previous => ({ ...previous, world: event.target.value }))} placeholder="时间、地点、叙事规则和不能违背的约束"></textarea></label><label>角色与身份锚点<input value={creativeDraft.character} onChange={event => setCreativeDraft(previous => ({ ...previous, character: event.target.value }))} placeholder="外形、服装、身份连续性"></input></label><label>声音与配音设定<input value={creativeDraft.voice} onChange={event => setCreativeDraft(previous => ({ ...previous, voice: event.target.value }))} placeholder="声线、情绪、演唱或对白规则"></input></label><label>参考视频备注（可选）<input value={creativeDraft.reference_video} onChange={event => setCreativeDraft(previous => ({ ...previous, reference_video: event.target.value }))} placeholder="描述想借鉴的参考；导入和分析请使用参考拆解入口"></input></label><label>参考系列（可选）<textarea rows={2} value={creativeDraft.reference_series} onChange={event => setCreativeDraft(previous => ({ ...previous, reference_series: event.target.value }))} placeholder="系列名称、代表作品、角色关系与风格规则" /></label><label>保留什么 / 改编什么<textarea rows={2} value={creativeDraft.adaptation} onChange={event => setCreativeDraft(previous => ({ ...previous, adaptation: event.target.value }))} placeholder="保留的结构、节奏与角色特征；本集的新内容及需要避免的重复" /></label><label>导演备注<textarea rows={2} value={creativeDraft.notes} onChange={event => setCreativeDraft(previous => ({ ...previous, notes: event.target.value }))} placeholder="需要人工逐项确认的风险或取舍"></textarea></label></div><div className="director-form-actions"><span>创作方式与设定一起保存；未提交修改仅缓存在当前浏览器。</span><div className="director-creation-actions"><button className="button secondary compact" disabled={stateSaving} onClick={() => void saveCreativeSettings('pending_review')}>保存版本</button><button className="button primary compact" disabled={stateSaving} onClick={() => void saveCreativeSettings('approved')}>保存并确认</button></div></div></section>}
-        {workspacePage === 'enhance' && project && <EnhancementPanel key={project.id} projectId={project.id} initialSource={enhancementSource} onBack={() => setWorkspacePage('shots')} />}
+        {workspacePage === 'enhance' && project && <Suspense fallback={null}><EnhancementPanel key={project.id} projectId={project.id} initialSource={enhancementSource} onBack={() => setWorkspacePage('shots')} /></Suspense>}
         {workspacePage === 'shots' && !quickActive && segmentFormOpen && autoCreation && !advancedOpen && <section className="director-creation-panel" aria-label="添加分镜"><h2>描述这一段画面</h2><label>画面与动作描述<textarea rows={3} value={segmentDraft.prompt} onChange={event => setSegmentDraft(previous => ({ ...previous, prompt: event.target.value }))} placeholder="例如：旧物店中，女孩拿起一只怀表，听见远处的钟声" /></label><div className="director-creation-grid"><label>剧情时长（秒）<input type="number" min="4" max="15" step="0.1" value={segmentDraft.duration_seconds} onChange={event => setSegmentDraft(previous => ({ ...previous, duration_seconds: event.target.value }))} /></label><label>目标画幅<select value={generationDraft.aspect_ratio} onChange={event => setGenerationDraft(previous => ({ ...previous, aspect_ratio: event.target.value as ShotGenerationSettings['aspect_ratio'] }))}><option value="16:9">横屏 · 1344×768</option><option value="1:1">方形 · 1024×1024</option><option value="9:16">竖屏 · 768×1344</option></select></label></div><p>默认5秒横屏样片；文字生成使用标准采样和约1.0MP原生画布。保存后可按需增加开始画面或表演声音，预检不生成。</p><button className="button primary" onClick={() => void createPlanSegment()}>保存分镜</button><button className="button secondary" onClick={() => setSegmentFormOpen(false)}>收起</button></section>}
         {workspacePage === 'shots' && !quickActive && segmentFormOpen && (!autoCreation || advancedOpen) && <section className="director-creation-panel" aria-label="添加分镜"><div className="director-form-heading"><div><span className="director-kicker">人工阶段 · 分镜 / 节拍</span><h2>添加分镜</h2>{segmentDraft.script_scene_id && <p>所属场次：{segmentDraft.script_scene_id} · 请单独设置这个镜头的时长。<button className="text-button" onClick={() => setSegmentDraft(previous => ({ ...previous, script_scene_id: '', script_revision: '' }))}>解除关联</button></p>}</div><button className="icon-button" aria-label="关闭添加分镜" onClick={() => setSegmentFormOpen(false)}><X size={16} /></button></div><div className="director-creation-grid"><label>片段编号<input value={segmentDraft.segment_id} onChange={event => setSegmentDraft(previous => ({ ...previous, segment_id: event.target.value }))} placeholder="留空则自动编号"></input></label><label>时长（秒）<input type="number" min="0.1" step="0.1" value={segmentDraft.duration_seconds} onChange={event => setSegmentDraft(previous => ({ ...previous, duration_seconds: event.target.value }))}></input></label><label>场景<input value={segmentDraft.location} onChange={event => setSegmentDraft(previous => ({ ...previous, location: event.target.value }))} placeholder="允许原创场景"></input></label><label>景别<input value={segmentDraft.shot_size} onChange={event => setSegmentDraft(previous => ({ ...previous, shot_size: event.target.value }))}></input></label><label>镜头运动<input value={segmentDraft.camera} onChange={event => setSegmentDraft(previous => ({ ...previous, camera: event.target.value }))}></input></label><label>服装 / 造型<input value={segmentDraft.wardrobe} onChange={event => setSegmentDraft(previous => ({ ...previous, wardrobe: event.target.value }))}></input></label><label className="director-creation-wide">动作与表演<input value={segmentDraft.performance} onChange={event => setSegmentDraft(previous => ({ ...previous, performance: event.target.value }))} placeholder="表情、口型、手势、节拍动作"></input></label><label className="director-creation-wide">提示词草稿<textarea rows={3} value={segmentDraft.prompt} onChange={event => setSegmentDraft(previous => ({ ...previous, prompt: event.target.value }))} placeholder="先写导演意图，再决定模型和工作流"></textarea></label>{advancedOpen && <label>工作流引用（可选）<input value={segmentDraft.workflow} onChange={event => setSegmentDraft(previous => ({ ...previous, workflow: event.target.value }))} placeholder="ComfyUI JSON 路径"></input></label>}<MaterialSelect excludedValues={diagnosticPaths} label="首帧" kind="image" value={segmentDraft.first_frame} options={materialOptions} onChange={value => setSegmentDraft(previous => ({ ...previous, first_frame: value }))} onBrowse={() => setMaterialBridgeOpen(true)} /><MaterialSelect excludedValues={diagnosticPaths} label="尾帧" kind="image" value={segmentDraft.last_frame} options={materialOptions} onChange={value => setSegmentDraft(previous => ({ ...previous, last_frame: value }))} onBrowse={() => setMaterialBridgeOpen(true)} /><MaterialSelect excludedValues={diagnosticPaths} label="表演引导音频" kind="audio" value={segmentDraft.audio_guide} options={materialOptions} onChange={value => setSegmentDraft(previous => ({ ...previous, audio_guide: value }))} onBrowse={() => setMaterialBridgeOpen(true)} /><MaterialSelect excludedValues={diagnosticPaths} label="交付音频" kind="audio" value={segmentDraft.delivery_master} options={materialOptions} onChange={value => setSegmentDraft(previous => ({ ...previous, delivery_master: value }))} onBrowse={() => setMaterialBridgeOpen(true)} /></div><div className="director-form-actions"><span>保存后可直接在当前分镜下方修改和审核。</span><button className="button primary compact" onClick={() => void createPlanSegment()}>保存分镜计划</button></div></section>}
         {workspacePage === 'shots' && stageFormOpen && <section className="director-creation-panel" aria-label="添加制作步骤"><div className="director-form-heading"><div><span className="director-kicker">执行契约 · 可人工覆盖</span><h2>添加声音、图像或视频步骤</h2></div><button className="icon-button" aria-label="关闭添加步骤" onClick={() => setStageFormOpen(false)}><X size={16} /></button></div><div className="director-creation-grid"><label>步骤名称<input value={stageTitle} onChange={event => setStageTitle(event.target.value)} placeholder="例如：角色配音或动作设计"></input></label><label>执行方式<select value={stageBackend} onChange={event => setStageBackend(event.target.value)}><option>混合流程</option><option>ComfyUI 工作流</option><option>本地脚本</option></select></label><label className="director-creation-wide">这一步的目的<input value={stagePurpose} onChange={event => setStagePurpose(event.target.value)} placeholder="导演能判断输入和输出是否成立"></input></label><label>输入（逗号分隔）<input value={stageInputs} onChange={event => setStageInputs(event.target.value)} placeholder="角色设定, 音频, 提示词"></input></label><label>输出（逗号分隔）<input value={stageOutputs} onChange={event => setStageOutputs(event.target.value)} placeholder="候选素材"></input></label><label className="director-creation-wide">工作流或脚本引用（可选）<input value={stageWorkflow} onChange={event => setStageWorkflow(event.target.value)} placeholder="先保存契约，执行引用可后补"></input></label></div><div className="director-form-actions"><span>步骤登记后可在高级操作中查看。</span><button className="button primary compact" onClick={() => void createPipelineStage()}>保存制作步骤</button></div></section>}
-        {workspacePage === 'shots' && project && advancedOpen && !planSegments.length && <ProductionPresetPicker key={project.id} projectId={project.id} installed={project.production_preset?.id} onInstalled={refreshPresetSelection} />}
+        {workspacePage === 'shots' && project && advancedOpen && !planSegments.length && <Suspense fallback={null}><ProductionPresetPicker key={project.id} projectId={project.id} installed={project.production_preset?.id} onInstalled={refreshPresetSelection} /></Suspense>}
         {workspacePage === 'shots' && <>
         <div className="director-shot-toolbar"><div className="director-kind-tabs" role="group" aria-label="素材类型">{((quickActive ? ['video', 'image'] : ['video', 'audio', 'image']) as Kind[]).map(type => <button key={type} aria-pressed={kind === type} onClick={() => switchKind(type)}>{type === 'video' ? '分镜' : type === 'audio' ? '声音' : quickActive ? '图片' : '关键帧'} <span>{type === 'video' ? planVideoAssets.length : library.filter(asset => asset.kind === type).length}</span></button>)}</div><div className="director-creation-actions"><button className="button secondary compact" onClick={() => quickActive ? void openQuickTemplate('video') : setSegmentFormOpen(open => !open)}>+ 添加分镜</button>{advancedOpen && currentPlanSegment && generationEdit.mode !== 'auto' && <button className="button secondary compact" onClick={() => setGenerationEdit(previous => ({ ...previous, mode: 'auto' }))}>切换为自动创作（保存后生效）</button>}{advancedOpen && <button className="button secondary compact" onClick={() => setStageFormOpen(open => !open)}>高级制作步骤</button>}</div></div>
-        {kind === 'audio' && project?.id && <SpeechPanel key={project.id} projectId={project.id} options={materialOptions} onBrowse={() => setMaterialBridgeOpen(true)} onComplete={() => {
+        {kind === 'audio' && project?.id && <Suspense fallback={null}><SpeechPanel key={project.id} projectId={project.id} options={materialOptions} onBrowse={() => setMaterialBridgeOpen(true)} onComplete={() => {
           const completedProjectId = project.id;
           void fetch(`/api/projects/${encodeURIComponent(completedProjectId)}`).then(response => {
             if (!response.ok) throw new Error('声音素材刷新失败');
@@ -1948,8 +1712,8 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
           }).then(data => setProject(previous => previous?.id === completedProjectId ? data : previous)).catch(() => {
             if (activeProjectId.current === completedProjectId) setNotice('声音已完成，素材刷新失败，请重新选择作品。');
           });
-        }} />}
-        {kind === 'audio' && project?.id && <AudioEditPanel projectId={project.id}
+        }} /></Suspense>}
+        {kind === 'audio' && project?.id && <Suspense fallback={null}><AudioEditPanel projectId={project.id}
           audioAssets={(project.assets ?? []).filter(asset => asset.kind === 'audio' && typeof asset.id === 'string').map(asset => ({ id: String(asset.id), title: String(asset.title ?? asset.id) }))}
           onBrowse={() => setMaterialBridgeOpen(true)} onComplete={() => {
             const completedProjectId = project.id;
@@ -1959,8 +1723,8 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
             }).then(data => setProject(previous => previous?.id === completedProjectId ? data : previous)).catch(() => {
               if (activeProjectId.current === completedProjectId) setNotice('编辑已完成，素材刷新失败，请重新选择作品。');
             });
-          }} />}
-        {kind === 'image' && project?.id && <KeyframePanel key={project.id} projectId={project.id} simple={quickActive} initialMode={quickActive ? 'text' : undefined} creativeProfile={quickCategory === 'adult' ? adultProfile : 'general'} candidateTaskId={typeof editableMaterial?.keyframe_task_id === 'string' ? editableMaterial.keyframe_task_id : undefined} options={materialOptions} onBrowse={() => setMaterialBridgeOpen(true)} onComplete={completedTaskId => {
+          }} /></Suspense>}
+        {kind === 'image' && project?.id && <Suspense fallback={null}><KeyframePanel key={project.id} projectId={project.id} simple={quickActive} initialMode={quickActive ? 'text' : undefined} creativeProfile={quickCategory === 'adult' ? adultProfile : 'general'} candidateTaskId={typeof editableMaterial?.keyframe_task_id === 'string' ? editableMaterial.keyframe_task_id : undefined} options={materialOptions} onBrowse={() => setMaterialBridgeOpen(true)} onComplete={completedTaskId => {
           const completedProjectId = project.id;
           void fetch(`/api/projects/${encodeURIComponent(completedProjectId)}`).then(response => {
             if (!response.ok) throw new Error('关键帧素材刷新失败');
@@ -1968,7 +1732,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
           }).then(data => { if (activeProjectId.current !== completedProjectId) return; setProject(data); setSelected(`keyframe-${completedTaskId}`); }).catch(() => {
             if (activeProjectId.current === completedProjectId) setNotice('关键帧已完成，素材刷新失败，请重新选择作品。');
           });
-        }} />}
+        }} /></Suspense>}
         <section className="director-board" aria-label="分镜工作区" hidden={quickActive && !timelineAssets.length && !currentPlanSegment}>
           <div className="director-board-main">
             <div className="director-timeline-header"><div><h2>分镜时间线</h2></div><div className="director-timeline-tools"><span>{timelineCountLabel}</span><button className="button secondary compact" onClick={() => setPipelineOpen(open => !open)}><Workflow size={14} />{pipelineOpen ? '收起制作流程' : '制作流程'}</button></div></div>
@@ -1984,7 +1748,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
               {(kind === 'image' || kind === 'video') && downloadSource && <button className="button secondary" onClick={() => void openQuickTemplate('enhance', new URL(downloadSource, window.location.href).searchParams.get('path') || '')}>清晰化这个结果</button>}
                 {kind === 'image' && <button className="button primary" onClick={() => void openQuickTemplate('video', String(editableMaterial?.image_path ?? current.sources?.A ?? ''))}>让这张图动起来</button>}
               {canReviewAsset && <button className="button adopt" disabled={stateSaving || Boolean(restoringVersion) || isAssemblyAsset && assemblyIsStale} onClick={() => void adoptCurrent()}><Check size={14} />{isAssemblyAsset ? '通过全片审核' : variant === 'B' && currentCandidateBIsFinish ? '采用精细版' : '采用当前候选'}</button>}
-              <a className="button secondary" href={downloadSource} download={downloadName || true}>下载{isAssemblyAsset ? assemblyIsStale ? '历史成片' : '成片候选' : kind === 'image' ? '图片' : kind === 'audio' ? '音频' : '视频'}</a>
+              <a className="button secondary" href={downloadSource} download={downloadLabel || true}>下载{isAssemblyAsset ? assemblyIsStale ? '历史成片' : '成片候选' : kind === 'image' ? '图片' : kind === 'audio' ? '音频' : '视频'}</a>
               <span>{currentReview}</span>
             </div>}
             {quickActive && kind === 'video' && currentPlanSegment && <section className="quick-continuation" aria-label="采用后继续"><div><strong>{hasApprovalCheckpoint ? '这一段已采用' : '先核对并采用这一段'}</strong><p>{hasApprovalCheckpoint ? '继续制作下一段，或核对整部作品并装配。' : '采用后可继续下一段；原作品和其他候选都会保留。'}</p></div><div className="quick-result-actions">
@@ -2001,19 +1765,19 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
               </dl>
               {currentOutputFacts.nativeOutput && <p>原生文件已保留，可在任务回执中核对；当前下载的是{outputMethodLabel(currentOutputFacts.method)}结果。</p>}
             </section>}
-            {quickActive && kind === 'video' && currentPlanSegment && shotVersionsOwner === `${project?.id}:${current.id}` && shotVersions.length > 1 && <CandidateComparison
+            {quickActive && kind === 'video' && currentPlanSegment && shotVersionsOwner === `${project?.id}:${current.id}` && shotVersions.length > 1 && <Suspense fallback={null}><CandidateComparison
               key={`${project?.id}:${current.id}`}
               busy={Boolean(restoringVersion)} loading={shotVersionsLoading} error={shotVersionsError}
               hasMore={shotVersions.length < shotVersionsTotal} onLoadMore={() => setShotVersionsOffset(shotVersions.length)}
               onRestore={id => { const version = shotVersions.find(item => item.task_id === id); if (version) void restoreShotVersion(version); }}
               candidates={shotVersions.map((version, index) => ({
-                id: version.task_id, label: `v${shotVersionsTotal - index}`, mediaUrl: sharedMediaUrl(version.video_path) ?? '',
+                id: version.task_id, label: `v${shotVersionsTotal - index}`, mediaUrl: mediaUrl(version.video_path) ?? '',
                 prompt: String(version.snapshot?.prompt ?? (version.snapshot?.execution_snapshot as Record<string, unknown> | undefined)?.prompt ?? '未登记提示词'),
                 generatedAt: localSystemTime(version.generated_at),
                 output: [outputResolutionLabel(version.processing?.resolution), version.processing?.width && version.processing?.height ? `${version.processing.width} × ${version.processing.height}` : '尺寸未登记', outputMethodLabel(version.processing?.method)].join(' · '),
                 current: version.is_current, incomplete: version.snapshot_complete === false,
               }))}
-            />}
+            /></Suspense>}
             <section className="director-edit-sheet" aria-label="当前分镜修改" hidden={quickActive && kind === 'image'}>
               <div className="director-edit-heading"><div><span className="director-kicker">只编辑当前这一段</span><h2>{currentPlanSegment ? `${assetLabel(current.id, kind)}的内容` : isAssemblyAsset ? '完整成片' : editableMaterial ? '素材档案' : '请先添加分镜'}</h2>{currentPlanSegment?.script_scene_id && <><button className="text-button" onClick={() => setWorkspacePage('script')}>所属场次 {currentPlanSegment.script_scene_id} · 查看剧本</button><button className="text-button" disabled={scriptLinkSaving} onClick={() => void unlinkScriptScene()}>解除场次关联</button></>}</div><span>{isProjectVideoMaterial ? '素材已登记 · 未生成分镜' : taskState ? taskStateLabel(taskState) : current.ready ? '当前版本已生成' : current.image ? '已有首帧 · 视频待生成' : '视频待生成'}</span></div>
               {currentPlanSegment ? <>
@@ -2030,8 +1794,8 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
                   <MaterialSelect excludedValues={diagnosticPaths} label="成片音频" kind="audio" value={segmentEdit.delivery_master} options={materialOptions} onChange={value => setSegmentEdit(previous => ({ ...previous, delivery_master: value }))} onBrowse={() => setMaterialBridgeOpen(true)} /></div></details>
                   <details className="director-edit-more director-edit-wide"><summary>场景、时长与镜头设置</summary><div className="director-segment-edit-grid"><label>时长（秒）<input type="number" min="0.1" step="0.01" value={segmentEdit.duration_seconds} onChange={event => setSegmentEdit(previous => ({ ...previous, duration_seconds: event.target.value }))} /></label><label>场景<input value={segmentEdit.location} onChange={event => setSegmentEdit(previous => ({ ...previous, location: event.target.value }))} /></label><label>景别<input value={segmentEdit.shot_size} onChange={event => setSegmentEdit(previous => ({ ...previous, shot_size: event.target.value }))} /></label><label>镜头<input value={segmentEdit.camera} onChange={event => setSegmentEdit(previous => ({ ...previous, camera: event.target.value }))} /></label><label>造型<input value={segmentEdit.wardrobe} onChange={event => setSegmentEdit(previous => ({ ...previous, wardrobe: event.target.value }))} /></label></div></details>
                 </div>}
-                {shotEditTab === 'prompt' && <div role="tabpanel"><ShotPromptEditor key={currentPlanSegment.id} value={currentPrompt} savedValue={currentPlanSegment.prompt ?? ''} onChange={value => { updateDraft(current.id, { prompt: value }); setSegmentEdit(previous => ({ ...previous, prompt: value })); updatePipelineValue('prompt', value); }} /></div>}
-                {shotEditTab === 'history' && <div className="shot-version-list" role="tabpanel"><p>按生成时间查看候选及完整输入。新结果会显示为当前版本，采用仍需你确认；可以恢复旧版本后继续修改。</p>{shotVersionsError && <p role="alert">{shotVersionsError}</p>}{shotVersions.length ? shotVersions.map((version, versionIndex) => <article key={version.task_id} className={`shot-version ${version.is_current ? 'current' : ''}`}><div className="shot-version-preview"><video src={sharedMediaUrl(version.video_path)} preload="metadata" controls aria-label={`${assetLabel(current.id, kind)}历史版本${versionIndex + 1}`} /></div><div className="shot-version-info"><strong>{version.is_current ? '当前版本' : `第 ${shotVersionsTotal - versionIndex} 次生成`}</strong><time dateTime={version.generated_at}>生成于 {localSystemTime(version.generated_at)}</time>{version.restored_at && <small>最近恢复：{localSystemTime(version.restored_at)}</small>}<small>{[version.snapshot?.location ? String(version.snapshot.location) : '场景未登记', version.snapshot?.duration_seconds ? String(version.snapshot.duration_seconds) + ' 秒' : '时长未登记', `${outputResolutionLabel(version.processing?.resolution)}${version.processing?.width && version.processing?.height ? ` · ${version.processing.width} × ${version.processing.height}` : ''}`, outputMethodLabel(version.processing?.method)].join(' · ')}{version.snapshot_complete === false ? ' · 旧任务信息不完整' : ''}</small><details><summary>查看当时的提示词与素材</summary><p>{String(version.snapshot?.prompt ?? (version.snapshot?.execution_snapshot as Record<string, unknown> | undefined)?.prompt ?? '未登记提示词')}</p><div className="shot-version-materials"><span>首帧{versionMaterial(version, 'first') ? <img src={sharedMediaUrl(versionMaterial(version, 'first'))} alt="历史首帧" /> : '未登记'}</span><span>尾帧{versionMaterial(version, 'last') ? <img src={sharedMediaUrl(versionMaterial(version, 'last'))} alt="历史尾帧" /> : '未登记'}</span><span>表演音频{versionMaterial(version, 'guide') ? <audio src={sharedMediaUrl(versionMaterial(version, 'guide'))} controls preload="none" /> : '未登记'}</span></div></details>{!version.is_current && <button type="button" className="button secondary compact" disabled={Boolean(restoringVersion)} onClick={() => void restoreShotVersion(version)}>{restoringVersion === version.task_id ? '恢复中…' : '恢复为当前'}</button>}</div></article>) : !shotVersionsError && <p>还没有成功生成的历史版本。</p>}{shotVersions.length < shotVersionsTotal && <button type="button" className="button secondary compact" onClick={() => setShotVersionsOffset(shotVersions.length)}>查看更多历史</button>}</div>}
+                {shotEditTab === 'prompt' && <div role="tabpanel"><Suspense fallback={null}><ShotPromptEditor key={currentPlanSegment.id} value={currentPrompt} savedValue={currentPlanSegment.prompt ?? ''} onChange={value => { updateDraft(current.id, { prompt: value }); setSegmentEdit(previous => ({ ...previous, prompt: value })); updatePipelineValue('prompt', value); }} /></Suspense></div>}
+                {shotEditTab === 'history' && <div className="shot-version-list" role="tabpanel"><p>按生成时间查看候选及完整输入。新结果会显示为当前版本，采用仍需你确认；可以恢复旧版本后继续修改。</p>{shotVersionsError && <p role="alert">{shotVersionsError}</p>}{shotVersions.length ? shotVersions.map((version, versionIndex) => <article key={version.task_id} className={`shot-version ${version.is_current ? 'current' : ''}`}><div className="shot-version-preview"><video src={mediaUrl(version.video_path)} preload="metadata" controls aria-label={`${assetLabel(current.id, kind)}历史版本${versionIndex + 1}`} /></div><div className="shot-version-info"><strong>{version.is_current ? '当前版本' : `第 ${shotVersionsTotal - versionIndex} 次生成`}</strong><time dateTime={version.generated_at}>生成于 {localSystemTime(version.generated_at)}</time>{version.restored_at && <small>最近恢复：{localSystemTime(version.restored_at)}</small>}<small>{[version.snapshot?.location ? String(version.snapshot.location) : '场景未登记', version.snapshot?.duration_seconds ? String(version.snapshot.duration_seconds) + ' 秒' : '时长未登记', `${outputResolutionLabel(version.processing?.resolution)}${version.processing?.width && version.processing?.height ? ` · ${version.processing.width} × ${version.processing.height}` : ''}`, outputMethodLabel(version.processing?.method)].join(' · ')}{version.snapshot_complete === false ? ' · 旧任务信息不完整' : ''}</small><details><summary>查看当时的提示词与素材</summary><p>{String(version.snapshot?.prompt ?? (version.snapshot?.execution_snapshot as Record<string, unknown> | undefined)?.prompt ?? '未登记提示词')}</p><div className="shot-version-materials"><span>首帧{versionMaterial(version, 'first') ? <img src={mediaUrl(versionMaterial(version, 'first'))} alt="历史首帧" /> : '未登记'}</span><span>尾帧{versionMaterial(version, 'last') ? <img src={mediaUrl(versionMaterial(version, 'last'))} alt="历史尾帧" /> : '未登记'}</span><span>表演音频{versionMaterial(version, 'guide') ? <audio src={mediaUrl(versionMaterial(version, 'guide'))} controls preload="none" /> : '未登记'}</span></div></details>{!version.is_current && <button type="button" className="button secondary compact" disabled={Boolean(restoringVersion)} onClick={() => void restoreShotVersion(version)}>{restoringVersion === version.task_id ? '恢复中…' : '恢复为当前'}</button>}</div></article>) : !shotVersionsError && <p>还没有成功生成的历史版本。</p>}{shotVersions.length < shotVersionsTotal && <button type="button" className="button secondary compact" onClick={() => setShotVersionsOffset(shotVersions.length)}>查看更多历史</button>}</div>}
                 <div className="director-edit-actions">
                   <button className="button secondary" onClick={() => void saveCurrentSegment()}>保存修改</button>
                   <button className="button primary" disabled={activeTaskStates.includes(taskState)} onClick={() => currentGenerationStage || generationEdit.mode === 'auto' ? void saveAndRegenerate() : openGenerationSettings()}><Play size={15} />{!currentGenerationStage && generationEdit.mode !== 'auto' ? '先选择生成方式' : current.ready ? '保存并重新生成' : '保存并生成这一段'}</button>
@@ -2061,7 +1825,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
             {!isProjectVideoMaterial && <div className="director-decision-strip" aria-label="当前片段审核门"><div><span>审核门</span><strong>{hasApprovalCheckpoint ? '已通过，可进入精细化' : hasGeneratedCheckpoint ? '先判断内容是否可用' : '生成前检查'}</strong></div><small>{kind === 'video' ? '低清样片只审画面、声音与动作' : '素材审核不会自动绑定到分镜'} · 当前：{currentReview}</small></div>}
           </div>
           <details className="director-advanced-details" hidden><summary>更多执行信息</summary>
-          <aside className="director-inspector" aria-label="当前分镜详情"><div className="director-inspector-header"><div><span className="director-kicker">当前片段</span><h2>{assetLabel(current.id, kind)} <small>{currentReview}</small></h2></div><button className="icon-button" aria-label="刷新当前项目" onClick={() => { void refreshPlan(); }}><Radio size={16} /></button></div><div className="director-inspector-actions"><button className="button secondary compact" onClick={() => void checkPendingSubmission()}>核对提交回执</button><button className="button primary" disabled={!currentExecutable || !currentGenerationStage || Boolean(taskState && !['succeeded', 'failed', 'stopped', 'needs_reconcile'].includes(taskState)) || !current.id} onClick={() => void startCurrentTask()}><Play size={14} />{activeTaskStates.includes(taskState) ? taskStateLabel(taskState) : current.ready ? '重做当前片段' : '启动当前片段'}</button>{['preparing', 'submitting', 'queued', 'scheduler_waiting', 'running', 'stop_requested', 'stopping'].includes(taskState) && <button className="button secondary" onClick={stopCurrentTask}><Square size={14} />停止</button>}{['stopped', 'needs_reconcile'].includes(taskState) && <button className="button secondary" onClick={resumeCurrentTask}><Play size={14} />恢复</button>}<button className="button adopt" onClick={adoptCurrent} disabled={!current.ready || (isAssemblyAsset && assemblyIsStale) || (variant === 'B' && currentCandidateBIsFinish && !hasApprovalCheckpoint)}><Check size={14} />{variant === 'B' && currentCandidateBIsFinish ? '采用精细版' : isAssemblyAsset ? '通过全片审核' : kind === 'video' ? '采用样片' : '采用素材候选'}</button></div><div className="director-task-status"><span className={taskState === 'succeeded' ? 'task-success' : taskState === 'failed' ? 'task-failed' : ''} />任务状态 <strong>{taskState ? taskStateLabel(taskState) : current.ready ? '已有结果' : '尚未提交'}</strong>{currentTask?.queue && <span>{currentTask.queue.reason?.message || currentTask.queue.state}{currentTask.queue.position != null && ` · 队列位置 ${currentTask.queue.position}`}</span>}{taskId && <small>{taskId}</small>}</div>{!currentExecutable && !isAssemblyAsset && <p className="director-next-step">尚未登记制作方案。先添加制作步骤与素材，再开始生成。</p>}{taskId && ['stopped', 'failed', 'needs_reconcile'].includes(taskState) && <div className="director-panel-actions"><button className="button secondary compact" onClick={() => void resumeCurrentTask()}>{taskState === 'needs_reconcile' ? '核对原任务结果' : '恢复原任务'}</button>{taskState === 'needs_reconcile' && currentTask?.payload?.kind !== 'speech' && <button className="button secondary compact" onClick={() => void resolveMissingExecution(taskId)}>确认执行已结束</button>}</div>}<div className="director-inspector-tabs" role="tablist" aria-label="片段档案栏目">{[['intent', '导演意图'], ['materials', '画面与音频'], ['params', '生成参数'], ['history', '历史版本']].map(([id, label]) => <button key={id} role="tab" aria-selected={inspectorTab === id} className={inspectorTab === id ? 'active' : ''} onClick={() => setInspectorTab(id as typeof inspectorTab)}>{label}</button>)}</div>{inspectorTab === 'intent' && <div className="director-inspector-body">{currentPlanSegment?.visual_review?.reason && <section><h3>持久化视觉审核</h3><p className="director-intent">{currentPlanSegment.visual_review.reason}</p></section>}<section><h3>导演意图</h3><p className="director-intent">{current.intent || '暂无导演意图。'}</p></section><section><label htmlFor={`director-prompt-${current.id}`}>提示词</label><textarea id={`director-prompt-${current.id}`} rows={6} value={currentPrompt} placeholder="描述画面、动作、表情和镜头意图。" onChange={event => { updateDraft(current.id, { prompt: event.target.value }); updatePipelineValue('prompt', event.target.value); }} /></section><section><label htmlFor={`director-note-${current.id}`}>审核意见</label><textarea id={`director-note-${current.id}`} rows={4} value={currentNote} placeholder="记录为什么保留、采用或需要重做。" onChange={event => updateDraft(current.id, { note: event.target.value })} /></section><div className="director-intent-meta"><span>{currentPlanSegment?.shot_size ?? '素材类型'}</span><span>{currentPlanSegment?.camera ?? current.specs}</span><span>{currentPlanSegment?.wardrobe ?? '版本档案'}</span></div></div>}{inspectorTab === 'materials' && <div className="director-inspector-body"><section><h3>首尾帧</h3><div className="director-frame-pair">{current.image ? <figure><img src={current.image} alt={`${current.id} 首帧`} /><figcaption>首帧参考</figcaption></figure> : <div className="director-frame-empty">暂无首帧</div>}{current.lastImage ? <figure><img src={current.lastImage} alt={`${current.id} 尾帧`} /><figcaption>尾帧目标</figcaption></figure> : <div className="director-frame-empty">暂无尾帧</div>}</div></section><section><h3>音频素材</h3>{currentAudioSource ? <audio src={currentAudioSource} controls preload="metadata" /> : <p className="director-muted">当前片段没有独立音频文件，使用项目完整母版时间轴。</p>}</section><section><h3>工作流与来源</h3><p className="director-mono">{current.workflow || '尚未登记'}</p>{workflowEntriesForAsset(current).length > 0 && <div className="director-workflow-links">{workflowEntriesForAsset(current).map(entry => <a key={`${entry.id}-${entry.path}`} href={workflowDownloadUrl(entry.path)} download={entry.path.split(/[\\/]/).pop()}><ArrowDownToLine size={13} />{entry.comfyui_import === 'ui' ? 'UI 工作流' : 'API 配方'}</a>)}</div>}</section></div>}{inspectorTab === 'params' && <div className="director-inspector-body"><section><h3>当前规格</h3><dl className="director-fact-list"><div><dt>时长</dt><dd>{range(current)}</dd></div><div><dt>规格</dt><dd>{current.specs || '尚未登记'}</dd></div><div><dt>来源</dt><dd>{current.origin || '尚未登记'}</dd></div></dl></section><section><h3>执行入口</h3><p className="director-muted">节点、脚本和模型仍由 ComfyUI 执行，工作台只保存本段的参数档案和任务回执。</p><button className="button secondary pipeline-drawer-button" onClick={() => setPipelineOpen(true)}><Workflow size={14} />打开当前片段 Pipeline</button></section></div>}{inspectorTab === 'history' && <div className="director-inspector-body"><section><h3>历史版本</h3><div className="director-history-row"><span className="history-version active">A</span><div><strong>{candidateA ? '当前候选已存在' : 'A 版本待生成'}</strong><small>{current.origin || '尚未登记来源'}</small></div></div><div className="director-history-row"><span className="history-version">B</span><div><strong>{candidateB ? currentCandidateBIsRework ? '重做样片 · 待审核' : `精细化候选 · ${currentFinishReview}` : '尚未生成 B 版本'}</strong><small>{candidateB ? currentCandidateBIsRework ? '与原样片同规格，只判断内容是否可用' : '样片采用后才能采用精细版' : '重做时可保存为新版本'}</small></div></div></section><section><h3>持久化审核</h3><p className="director-muted">{currentSampleRecord ? `${currentReview} · revision ${currentSampleRecord.revision} · ${currentSampleRecord.source}` : '尚无审核 revision；请使用下方审核与版本档案提交决定。'}</p></section><section><h3>任务尝试</h3>{currentAttempts.length ? currentAttempts.slice(0, 4).map(task => <div className="director-history-row" key={task.id}><span className="history-version">{taskStateLabel(task.status).slice(0, 2)}</span><div><strong>{taskStateLabel(task.status)}</strong><small>{task.id}</small></div></div>) : <p className="director-mono">尚无当前片段任务</p>}</section></div>}</aside>
+          <aside className="director-inspector" aria-label="当前分镜详情"><div className="director-inspector-header"><div><span className="director-kicker">当前片段</span><h2>{assetLabel(current.id, kind)} <small>{currentReview}</small></h2></div><button className="icon-button" aria-label="刷新当前项目" onClick={() => { void refreshPlan(); }}><Radio size={16} /></button></div><div className="director-inspector-actions"><button className="button secondary compact" onClick={() => void checkPendingSubmission()}>核对提交回执</button><button className="button primary" disabled={!currentExecutable || !currentGenerationStage || Boolean(taskState && !['succeeded', 'failed', 'stopped', 'needs_reconcile'].includes(taskState)) || !current.id} onClick={() => void startCurrentTask()}><Play size={14} />{activeTaskStates.includes(taskState) ? taskStateLabel(taskState) : current.ready ? '重做当前片段' : '启动当前片段'}</button>{['preparing', 'submitting', 'queued', 'scheduler_waiting', 'running', 'stop_requested', 'stopping'].includes(taskState) && <button className="button secondary" onClick={stopCurrentTask}><Square size={14} />停止</button>}{['stopped', 'needs_reconcile'].includes(taskState) && <button className="button secondary" onClick={resumeCurrentTask}><Play size={14} />恢复</button>}<button className="button adopt" onClick={adoptCurrent} disabled={!current.ready || (isAssemblyAsset && assemblyIsStale) || (variant === 'B' && currentCandidateBIsFinish && !hasApprovalCheckpoint)}><Check size={14} />{variant === 'B' && currentCandidateBIsFinish ? '采用精细版' : isAssemblyAsset ? '通过全片审核' : kind === 'video' ? '采用样片' : '采用素材候选'}</button></div><div className="director-task-status"><span className={taskState === 'succeeded' ? 'task-success' : taskState === 'failed' ? 'task-failed' : ''} />任务状态 <strong>{taskState ? taskStateLabel(taskState) : current.ready ? '已有结果' : '尚未提交'}</strong>{currentTask?.queue && <span>{currentTask.queue.reason?.message || currentTask.queue.state}{currentTask.queue.position != null && ` · 队列位置 ${currentTask.queue.position}`}</span>}{taskId && <small>{taskId}</small>}</div>{!currentExecutable && !isAssemblyAsset && <p className="director-next-step">尚未登记制作方案。先添加制作步骤与素材，再开始生成。</p>}{taskId && ['stopped', 'failed', 'needs_reconcile'].includes(taskState) && <div className="director-panel-actions"><button className="button secondary compact" onClick={() => void resumeCurrentTask()}>{taskState === 'needs_reconcile' ? '核对原任务结果' : '恢复原任务'}</button>{taskState === 'needs_reconcile' && currentTask?.payload?.kind !== 'speech' && <button className="button secondary compact" onClick={() => void resolveMissingExecution(taskId)}>确认执行已结束</button>}</div>}<div className="director-inspector-tabs" role="tablist" aria-label="片段档案栏目">{[['intent', '导演意图'], ['materials', '画面与音频'], ['params', '生成参数'], ['history', '历史版本']].map(([id, label]) => <button key={id} role="tab" aria-selected={inspectorTab === id} className={inspectorTab === id ? 'active' : ''} onClick={() => setInspectorTab(id as typeof inspectorTab)}>{label}</button>)}</div>{inspectorTab === 'intent' && <div className="director-inspector-body">{currentPlanSegment?.visual_review?.reason && <section><h3>持久化视觉审核</h3><p className="director-intent">{currentPlanSegment.visual_review.reason}</p></section>}<section><h3>导演意图</h3><p className="director-intent">{current.intent || '暂无导演意图。'}</p></section><section><label htmlFor={`director-prompt-${current.id}`}>提示词</label><textarea id={`director-prompt-${current.id}`} rows={6} value={currentPrompt} placeholder="描述画面、动作、表情和镜头意图。" onChange={event => { updateDraft(current.id, { prompt: event.target.value }); updatePipelineValue('prompt', event.target.value); }} /></section><section><label htmlFor={`director-note-${current.id}`}>审核意见</label><textarea id={`director-note-${current.id}`} rows={4} value={currentNote} placeholder="记录为什么保留、采用或需要重做。" onChange={event => updateDraft(current.id, { note: event.target.value })} /></section><div className="director-intent-meta"><span>{currentPlanSegment?.shot_size ?? '素材类型'}</span><span>{currentPlanSegment?.camera ?? current.specs}</span><span>{currentPlanSegment?.wardrobe ?? '版本档案'}</span></div></div>}{inspectorTab === 'materials' && <div className="director-inspector-body"><section><h3>首尾帧</h3><div className="director-frame-pair">{current.image ? <figure><img src={current.image} alt={`${current.id} 首帧`} /><figcaption>首帧参考</figcaption></figure> : <div className="director-frame-empty">暂无首帧</div>}{current.lastImage ? <figure><img src={current.lastImage} alt={`${current.id} 尾帧`} /><figcaption>尾帧目标</figcaption></figure> : <div className="director-frame-empty">暂无尾帧</div>}</div></section><section><h3>音频素材</h3>{currentAudioSource ? <audio src={currentAudioSource} controls preload="metadata" /> : <p className="director-muted">当前片段没有独立音频文件，使用项目完整母版时间轴。</p>}</section><section><h3>工作流与来源</h3><p className="director-mono">{current.workflow || '尚未登记'}</p>{workflowEntriesForAsset(current).length > 0 && <div className="director-workflow-links">{workflowEntriesForAsset(current).map(entry => <a key={`${entry.id}-${entry.path}`} href={workflowUrl(entry.path)} download={entry.path.split(/[\\/]/).pop()}><ArrowDownToLine size={13} />{entry.comfyui_import === 'ui' ? 'UI 工作流' : 'API 配方'}</a>)}</div>}</section></div>}{inspectorTab === 'params' && <div className="director-inspector-body"><section><h3>当前规格</h3><dl className="director-fact-list"><div><dt>时长</dt><dd>{range(current)}</dd></div><div><dt>规格</dt><dd>{current.specs || '尚未登记'}</dd></div><div><dt>来源</dt><dd>{current.origin || '尚未登记'}</dd></div></dl></section><section><h3>执行入口</h3><p className="director-muted">节点、脚本和模型仍由 ComfyUI 执行，工作台只保存本段的参数档案和任务回执。</p><button className="button secondary pipeline-drawer-button" onClick={() => setPipelineOpen(true)}><Workflow size={14} />打开当前片段 Pipeline</button></section></div>}{inspectorTab === 'history' && <div className="director-inspector-body"><section><h3>历史版本</h3><div className="director-history-row"><span className="history-version active">A</span><div><strong>{candidateA ? '当前候选已存在' : 'A 版本待生成'}</strong><small>{current.origin || '尚未登记来源'}</small></div></div><div className="director-history-row"><span className="history-version">B</span><div><strong>{candidateB ? currentCandidateBIsRework ? '重做样片 · 待审核' : `精细化候选 · ${currentFinishReview}` : '尚未生成 B 版本'}</strong><small>{candidateB ? currentCandidateBIsRework ? '与原样片同规格，只判断内容是否可用' : '样片采用后才能采用精细版' : '重做时可保存为新版本'}</small></div></div></section><section><h3>持久化审核</h3><p className="director-muted">{currentSampleRecord ? `${currentReview} · revision ${currentSampleRecord.revision} · ${currentSampleRecord.source}` : '尚无审核 revision；请使用下方审核与版本档案提交决定。'}</p></section><section><h3>任务尝试</h3>{currentAttempts.length ? currentAttempts.slice(0, 4).map(task => <div className="director-history-row" key={task.id}><span className="history-version">{taskStateLabel(task.status).slice(0, 2)}</span><div><strong>{taskStateLabel(task.status)}</strong><small>{task.id}</small></div></div>) : <p className="director-mono">尚无当前片段任务</p>}</section></div>}</aside>
           </details>
         </section>
 
@@ -2089,99 +1853,16 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
 
             <article className="director-operation-panel director-delivery-panel"><div className="director-panel-title"><div><h3>批次与装配</h3><small>停止保留已完成片段；恢复从原冻结快照的新尝试开始</small></div><span>{batchTasks.length ? `${batchTasks.filter(task => task.status === 'succeeded').length}/${batchTasks.length}` : '未运行批次'}</span></div><div className="director-panel-actions"><button className="button secondary compact" disabled={batchActive} onClick={startBatch}><Play size={13} />启动可执行片段批次</button>{batchActive && <button className="button secondary compact" onClick={stopBatch}><Square size={13} />停止批次</button>}{batchId && !batchActive && batchTasks.some(task => task.status !== 'succeeded') && <button className="button secondary compact" onClick={resumeBatch}><Play size={13} />恢复批次</button>}<button className="button primary compact" disabled={assemblySubmitting || (!hasPendingAssembly && (!assemblyReady || activeTaskStates.includes(assemblyTaskState)))} onClick={() => void startAssembly()}><Layers3 size={13} />{hasPendingAssembly ? '沿用装配凭据重试' : assemblyTaskState === 'succeeded' ? '重新装配' : '启动装配'}</button>{hasPendingAssembly && <button className="button secondary compact" disabled={assemblySubmitting} onClick={() => void startAssembly(true)}>核对装配提交</button>}{activeTaskStates.includes(assemblyTaskState) && <button className="button secondary compact" onClick={stopAssembly}><Square size={13} />停止装配</button>}{!hasPendingAssembly && ['stopped', 'failed', 'needs_reconcile'].includes(assemblyTaskState) && <button className="button secondary compact" onClick={resumeAssembly}><Play size={13} />{assemblyTaskState === 'needs_reconcile' ? '核对装配结果' : '恢复装配'}</button>}</div><div className="director-review-facts"><span>已有视频 {planSegments.filter(segment => Boolean(segment.video?.path)).length}/{planSegments.length}</span><span>装配使用各分镜的当前版本</span><span>装配任务：{assemblyIsStale ? '历史成片 · 需重新装配' : assemblyTaskState ? taskStateLabel(assemblyTaskState) : '无'}</span></div></article>
 
-            <details className="director-operation-panel director-execution-record"><summary className="director-panel-title"><div><h3>本次实际执行档案</h3><small>查看实际使用的参数与执行记录</small></div><span>{currentTask ? `${currentTask.status} · ${currentTask.id.slice(0, 8)}` : '尚无任务'}</span></summary>{currentTask?.payload?.execution_snapshot ? <dl><div><dt>实际步骤</dt><dd>{currentTask.payload.execution_snapshot.pipeline_stage_id || '旧任务 · 未登记步骤'} · 已写入 {currentTask.payload.execution_snapshot.applied_bindings?.length ?? 0} 项节点输入</dd></div><div><dt>实际提示词</dt><dd>{currentTask.payload.execution_snapshot.prompt || '工作流未声明提示词覆盖'}</dd></div><div><dt>API 图</dt><dd><a href={workflowDownloadUrl(currentTask.payload.execution_snapshot.api_graph ?? '')}>{currentTask.payload.execution_snapshot.api_graph}</a></dd></div><div><dt>来源图</dt><dd>{currentTask.payload.execution_snapshot.source_workflow}</dd></div><div><dt>参数</dt><dd><code>{JSON.stringify(currentTask.payload.execution_snapshot.parameters ?? {})}</code></dd></div><div><dt>素材</dt><dd><code>{JSON.stringify(currentTask.payload.execution_snapshot.materials ?? {})}</code></dd></div></dl> : <p className="director-muted">提交后，这里会显示真正执行的提示词、素材、参数和冻结 API 图。</p>}{currentTask?.error && <p className="director-error">{currentTask.error}</p>}</details>
+            <details className="director-operation-panel director-execution-record"><summary className="director-panel-title"><div><h3>本次实际执行档案</h3><small>查看实际使用的参数与执行记录</small></div><span>{currentTask ? `${currentTask.status} · ${currentTask.id.slice(0, 8)}` : '尚无任务'}</span></summary>{currentTask?.payload?.execution_snapshot ? <dl><div><dt>实际步骤</dt><dd>{currentTask.payload.execution_snapshot.pipeline_stage_id || '旧任务 · 未登记步骤'} · 已写入 {currentTask.payload.execution_snapshot.applied_bindings?.length ?? 0} 项节点输入</dd></div><div><dt>实际提示词</dt><dd>{currentTask.payload.execution_snapshot.prompt || '工作流未声明提示词覆盖'}</dd></div><div><dt>API 图</dt><dd><a href={workflowUrl(currentTask.payload.execution_snapshot.api_graph ?? '')}>{currentTask.payload.execution_snapshot.api_graph}</a></dd></div><div><dt>来源图</dt><dd>{currentTask.payload.execution_snapshot.source_workflow}</dd></div><div><dt>参数</dt><dd><code>{JSON.stringify(currentTask.payload.execution_snapshot.parameters ?? {})}</code></dd></div><div><dt>素材</dt><dd><code>{JSON.stringify(currentTask.payload.execution_snapshot.materials ?? {})}</code></dd></div></dl> : <p className="director-muted">提交后，这里会显示真正执行的提示词、素材、参数和冻结 API 图。</p>}{currentTask?.error && <p className="director-error">{currentTask.error}</p>}</details>
           </div>
         </section>}
         </>}
       </div>
       {workspaceMode === 'production' && workspacePage === 'shots' && advancedOpen && pipelineOpen && <aside className="director-pipeline-drawer" aria-label="高级制作参数"><div className="director-drawer-head"><div><span className="director-kicker">当前分镜</span><h2>高级制作参数</h2><p>仅在需要调试执行方案时使用。</p></div><button className="icon-button" aria-label="关闭高级参数" onClick={() => setPipelineOpen(false)}><X size={17} /></button></div><div className="director-pipeline-list">{currentPipeline.map(stage => <button key={stage.id} className={`director-pipeline-step ${stage.id === activePipelineStage?.id ? 'active' : ''}`} onClick={() => setPipelineStageId(stage.id)}><span>{String(stage.order).padStart(2, '0')}</span><div><strong>{stage.title}</strong><small>{stage.purpose}</small></div><em>{stage.status}</em></button>)}</div></aside>}
     </main>
-      {materialBridgeOpen && <MaterialBridge projectId={project?.id ?? ''} initialMode={materialBridgeDevice ? 'device' : 'server'} onClose={() => { setMaterialBridgeOpen(false); setMaterialBridgeDevice(false); }} onRegistered={count => { void refreshRegisteredMaterials(count); }} />}
+      {materialBridgeOpen && <Suspense fallback={null}><MaterialBridge projectId={project?.id ?? ''} initialMode={materialBridgeDevice ? 'device' : 'server'} onClose={() => { setMaterialBridgeOpen(false); setMaterialBridgeDevice(false); }} onRegistered={count => { void refreshRegisteredMaterials(count); }} /></Suspense>}
       {creativeConflictPanel}
       {batchId && <div className="director-batch-note" role="note">批次参数语义：按每个分镜自己的计划与源工作流冻结；当前片段 Inspector 的修改只影响单段重做。需要批量改参时，请先逐段确认后再提交。</div>}
-      {notice && <div className="director-toast" role="status"><Check size={16} /><span>{notice}</span></div>}
-      {deleteDirectory && <DeleteDirectoryDialog target={deleteDirectory} onClose={() => setDeleteDirectory(null)} onDeleted={() => { void afterDirectoryDeleted(); }} />}
-      {deleteShotOpen && currentPlanSegment && <div className="director-delete-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setDeleteShotOpen(false); }}><section className="director-delete-dialog" role="dialog" aria-modal="true" aria-label="删除分镜"><h2>删除分镜 {currentPlanSegment.id}？</h2><p>会从本作品的制作计划移除这一段，并重排后续时间轴。生成记录与可能被其他分镜共用的素材仍保留。</p><div className="director-delete-actions"><button type="button" className="button secondary compact" onClick={() => setDeleteShotOpen(false)}>取消</button><button type="button" className="button danger compact" disabled={deletingShot} onClick={() => void deleteCurrentShot()}>{deletingShot ? '删除中…' : '删除分镜'}</button></div></section></div>}
-    <dialog ref={dialogRef} className="lightbox" onCancel={() => setLightbox(false)}><div><span>{current.id} · {current.title}</span><button className="icon-button" onClick={() => setLightbox(false)} aria-label="关闭大图"><X size={22} /></button></div>{lightbox && <img src={current.image} alt={current.title} />}</dialog>
+      <WorkbenchOverlays notice={notice} deleteDirectory={deleteDirectory} onCloseDeleteDirectory={() => setDeleteDirectory(null)} onDeletedDirectory={() => { void afterDirectoryDeleted(); }} deleteShotOpen={deleteShotOpen} deleteShotId={currentPlanSegment?.id} deletingShot={deletingShot} onCloseDeleteShot={() => setDeleteShotOpen(false)} onConfirmDeleteShot={() => void deleteCurrentShot()} dialogRef={dialogRef} lightbox={lightbox} onCloseLightbox={() => setLightbox(false)} current={current} />
   </div>;
-  /* Legacy multi-page render retained temporarily while the single-screen
-     director workspace is validated. */
-  /*
-  return <div className="workbench">
-    <aside className="project-sidebar">
-      <div className="brand"><span className="brand-mark"><Clapperboard size={21} /></span><div>片场<span>DIRECTOR WORKBENCH</span></div></div>
-      <div className="sidebar-label">工作空间 <span>LOCAL</span></div>
-      <div className="series-label"><Layers3 size={16} /> {project?.series ?? '工作空间'}</div>
-      <button className="project-active" onClick={() => setProjectMenuOpen(open => !open)}><span className="project-dot" />{project?.title ?? '正在读取项目'}<ChevronRight size={14} /></button>
-      <div className="project-note">{project?.tag ?? '项目清单驱动'}</div>
-      {projectMenuOpen && <div className="project-switcher"><div className="project-switcher-actions"><button className="button secondary compact" onClick={() => { void refreshProjects(); setProjectMenuOpen(true); }}>刷新项目</button><button className="button primary compact" onClick={() => setCreateOpen(open => !open)}>新建空白作品</button></div>{projectList.map(item => <button key={item.id} className={`project-switcher-item ${item.selected ? 'selected' : ''}`} onClick={() => void selectProject(item.id)}>{item.title}<small>{item.series ?? item.id}</small></button>)}{createOpen && <div className="project-create-form"><label>系列名称<input value={newSeries} onChange={event => setNewSeries(event.target.value)} placeholder="例如：新系列" /></label><label>作品名称<input value={newTitle} onChange={event => setNewTitle(event.target.value)} placeholder="例如：第一集" /></label><label>项目 ID（可选）<input value={newProjectId} onChange={event => setNewProjectId(event.target.value)} placeholder="自动生成" /></label><button className="button primary compact" onClick={() => void createProject()}>创建并进入工作台</button></div>}<div className="project-import-form"><strong>导入现有工作目录</strong><small>点击“选择工作目录”会唤起系统文件夹选择框；选定后保留原有相对目录。</small><input ref={folderInputRef} className="visually-hidden-file" type="file" multiple {...({ webkitdirectory: '' } as unknown as InputHTMLAttributes<HTMLInputElement>)} onChange={event => setImportFiles(Array.from(event.target.files ?? []))} /><button className="button secondary compact file-picker-button" onClick={() => folderInputRef.current?.click()}><ArrowUpRight size={14} />选择工作目录</button><span>{importFiles.length ? `已选择 ${importFiles.length} 个文件` : '尚未选择文件夹'}</span><button className="button primary compact" disabled={!importFiles.length} onClick={() => void uploadSelectedFiles()}>上传并解析资源</button><label>本机高级入口<input value={importPath} onChange={event => setImportPath(event.target.value)} placeholder="D:\\Comfy-Desktop\\..." /></label><button className="button secondary compact" onClick={() => void importWorkspace()}>按路径解析</button></div><button className="button secondary compact" onClick={() => void exportProjectBundle()}>导出当前项目清单</button>{importReport && <small>最近导入：{String((importReport.counts as Record<string, unknown> | undefined)?.video ?? 0)} 视频 · {String((importReport.counts as Record<string, unknown> | undefined)?.audio ?? 0)} 音频 · {String((importReport.counts as Record<string, unknown> | undefined)?.image ?? 0)} 图片</small>}</div>}
-      <div className="sidebar-divider" />
-      <div className="sidebar-label">工作台</div>
-      <nav className="page-nav" aria-label="工作台页面">
-        <button className={`page-nav-item ${page === 'overview' ? 'active' : ''}`} onClick={() => setPage('overview')}><LayoutDashboard size={16} />总览</button>
-        <button className={`page-nav-item ${page === 'pipeline' ? 'active' : ''}`} onClick={() => setPage('pipeline')}><Workflow size={16} />制作流程</button>
-        <button className={`page-nav-item ${page === 'review' ? 'active' : ''}`} onClick={() => setPage('review')}><ClipboardCheck size={16} />片段审核</button>
-      </nav>
-      <div className="sidebar-divider" />
-      <div className="sidebar-label">作品内容</div>
-      {(['video', 'audio', 'image'] as Kind[]).map(type => {
-        const Icon = kindIcons[type];
-        const count = type === 'video' ? planVideoAssets.length : library.filter(asset => asset.kind === type).length;
-        return <button key={type} className={`side-item ${kind === type ? 'active' : ''}`} onClick={() => switchKind(type)}><Icon size={17} />{type === 'video' ? '表演分镜' : type === 'audio' ? '声音与配乐' : '造型与关键帧'}<span>{String(count).padStart(2, '0')}</span></button>;
-      })}
-      <div className="sidebar-bottom"><div className="connection"><span className={comfyOnline ? 'online' : ''} /> {comfyOnline ? `ComfyUI 已连接${comfyInfo.version ? ` · ${comfyInfo.version}` : ''}` : 'ComfyUI 尚未接入'}</div><p>工作台整理与展示<br />ComfyUI 执行生成</p><button className="text-button" onClick={() => setResourceOpen(!resourceOpen)}><Radio size={15} /> 查看连接与资源</button></div>
-    </aside>
-
-    <main data-page={page}>
-      <header className="topbar"><div>{project?.series ?? '工作空间'} <ChevronRight size={13} /><span>{project?.title ?? '项目读取中'}</span></div><span className="prototype-label">项目配置驱动 · ComfyUI 封装层</span><button className="icon-button" aria-label="连接与资源状态" onClick={() => setResourceOpen(!resourceOpen)}><Settings2 size={18} /></button></header>
-      <nav className="mobile-page-nav" aria-label="工作台页面"><button className={page === 'overview' ? 'active' : ''} onClick={() => setPage('overview')}>总览</button><button className={page === 'pipeline' ? 'active' : ''} onClick={() => setPage('pipeline')}>制作流程</button><button className={page === 'review' ? 'active' : ''} onClick={() => setPage('review')}>片段审核</button></nav>
-      {resourceOpen && <section className="resource-panel"><div><Radio size={18} /><strong>连接与资源</strong></div><p>{comfyOnline ? `已连接 ComfyUI ${comfyInfo.version ?? ''} · 显存空闲约 ${comfyInfo.gpu_free_mib ?? '?'} MiB · 队列运行 ${comfyInfo.queue_running ?? 0} · 等待 ${comfyInfo.queue_pending ?? 0}。` : '尚未连接 ComfyUI，未读取实时显存、内存或队列数据。本页面不会加载模型。连续播放只读取已有素材；有效任务可先排队，服务器会在所需资源恢复后执行。'}</p><button className="icon-button" aria-label="关闭资源面板" onClick={() => setResourceOpen(false)}><X size={17} /></button></section>}
-        {pipeline.find(stage => stage.id === pipelineStageId)?.inputSpecs?.length ? (() => { const stage = pipeline.find(item => item.id === pipelineStageId)!; return <section className="pipeline-inputs" aria-label={`${stage.title}输入控件`}><div className="pipeline-inputs-head"><div><span className="eyebrow">可填写参数 · {stage.title}</span><p>控件由步骤契约声明：固定选项不会变成自由文本，数值参数保留可编辑范围。</p></div><span className="pipeline-inputs-source">{stage.execution?.label ?? stage.backend}</span></div><div className="pipeline-input-grid">{stage.inputSpecs!.map(input => { const assetKind = assetKindForInput(input.kind); const value = pipelineValues[input.id] ?? input.example ?? (input.control === 'multi-select' ? [] : ''); const values = Array.isArray(value) ? value : []; return <label className="pipeline-input" key={input.id}><span>{input.label}{input.required && <small>必需</small>}</span>{(input.control === 'select' || input.control === 'boolean') && <select value={String(value)} onChange={event => updatePipelineValue(input.id, event.target.value)}>{(input.options ?? (input.control === 'boolean' ? ['enable', 'disable'] : [])).map(option => <option key={option} value={option}>{option}</option>)}</select>}{input.control === 'multi-select' && <div className="pipeline-multi-options">{(input.options ?? []).map(option => <span className="pipeline-multi-option" key={option}><input type="checkbox" checked={values.includes(option)} aria-label={option} onChange={event => updatePipelineValue(input.id, event.target.checked ? [...values, option] : values.filter(selected => selected !== option))} /><span>{option}</span></span>)}</div>}{input.control === 'number' && <input type="number" value={String(value)} min={input.min} max={input.max} step={input.step} onChange={event => updatePipelineValue(input.id, event.target.value)} />}{input.control === 'asset' && assetKind && <select value={String(value)} onChange={event => updatePipelineValue(input.id, event.target.value)}><option value="">选择已登记{input.kind}…</option>{baseAssets.filter(asset => asset.kind === assetKind).map(asset => <option key={asset.id} value={asset.id}>{asset.id} · {asset.title}</option>)}</select>}{(input.control === 'text' || input.control === 'freeform') && <textarea rows={2} value={String(value)} placeholder={input.example ?? (input.allowEmpty ? '可留空' : '输入本步骤需要的文本')} onChange={event => updatePipelineValue(input.id, event.target.value)} />}{input.control === 'time-range' && <input type="text" value={String(value)} placeholder={input.example ?? '00:00.000–00:00.000'} onChange={event => updatePipelineValue(input.id, event.target.value)} />}<em>{input.flag ? `${input.flag} · ` : ''}{input.kind} · {input.description}{input.control === 'multi-select' ? ' 可多选' : ''}</em></label>; })}</div></section>; })() : null}
-       {pipeline.find(stage => stage.id === pipelineStageId) && (() => { const stage = pipeline.find(item => item.id === pipelineStageId)!; const validation = pipelineValidation?.stage_id === stage.id ? pipelineValidation : null; return <section className="pipeline-command-preview" aria-label={`${stage.title}参数预检`}><div><span className="eyebrow">执行前预检</span><p>先按 JSON 契约检查必填项、单选范围、多选范围和数值范围；通过后才会生成传给脚本或适配器的参数数组。</p></div><button className="button secondary compact" onClick={() => validatePipelineStage(stage)} disabled={pipelineChecking}>{pipelineChecking ? '检查中…' : '检查参数'}</button>{validation && <div className="pipeline-validation-result"><span className="pipeline-validation-label">参数数组</span><code>{validation.args.length ? validation.args.join('  ') : '（没有可选参数）'}</code><details><summary>查看 JSON 归一化结果</summary><pre>{JSON.stringify(validation.values, null, 2)}</pre></details></div>}</section>; })()}
-          <div className="content">
-           {page === 'pipeline' && <section className="page-intro" aria-label="制作流程页面说明"><div><span className="eyebrow">工作台 / 制作流程</span><h1>制作流程</h1><p>先确认每一步的输入和输出，再打开具体步骤填写参数。节点与脚本仍由 ComfyUI 和本地适配器执行。</p></div><div className="page-intro-actions"><span>{pipeline.length} 个步骤</span><button className="button secondary" onClick={() => setStageFormOpen(open => !open)}><Plus size={15} />新增步骤</button></div></section>}
-           {page === 'review' && <section className="page-intro" aria-label="片段审核页面说明"><div><span className="eyebrow">工作台 / 片段审核</span><h1>片段审核</h1><p>按视频、音频和图片分别查看结果。每个片段都保留提示词、首尾帧、工作流和审核意见。</p></div><div className="page-intro-actions"><span>{library.length} 个素材</span><button className="button secondary" onClick={() => setPage('overview')}><LayoutDashboard size={15} />回到总览</button></div></section>}
-           {page === 'segment' && <section className="segment-detail-page" aria-label="片段详情"><div className="segment-detail-head"><div><span className="eyebrow">片段详情 · 审核页面</span><h2>{current.title}</h2><p>{current.intent || '这段素材还没有填写表演意图。'}</p></div><button className="button secondary" onClick={() => setPage('review')}><ChevronLeft size={15} />返回片段审核</button></div><div className="segment-detail-meta"><div><span>时间范围</span><strong>{range(current)}</strong></div><div><span>规格</span><strong>{current.specs || '尚未登记'}</strong></div><div><span>生成来源</span><strong>{current.origin || '尚未登记'}</strong></div></div><div className="segment-detail-columns"><div><label htmlFor={`segment-prompt-${current.id}`}>提示词草稿</label><textarea id={`segment-prompt-${current.id}`} rows={8} value={drafts[current.id]?.prompt ?? current.prompt} placeholder="记录这段画面、动作、表情和镜头意图。" onChange={e => updateDraft(current.id, { prompt: e.target.value })} /></div><div><label htmlFor={`segment-note-${current.id}`}>审核意见</label><textarea id={`segment-note-${current.id}`} rows={8} value={drafts[current.id]?.note ?? ''} placeholder="记录需要重做或保留的地方。" onChange={e => updateDraft(current.id, { note: e.target.value })} /><div className="segment-detail-source"><span>工作流与历史参数</span><p>{current.workflow || '尚未登记'}</p></div></div></div>{(current.image || current.lastImage) && <div className="segment-detail-frames">{current.image && <button onClick={() => { setKind('image'); setPage('review'); }}><img src={current.image} alt={`${current.title}首帧`} /><span>首帧参考</span></button>}{current.lastImage && <button onClick={() => { setKind('image'); setPage('review'); }}><img src={current.lastImage} alt={`${current.title}尾帧`} /><span>尾帧目标</span></button>}</div>}<div className="workflow-downloads segment-detail-workflows"><span>ComfyUI 工作流</span>{workflowEntriesForAsset(current).length ? workflowEntriesForAsset(current).map(entry => <a className="button secondary compact" key={`${entry.id}-${entry.path}`} href={workflowDownloadUrl(entry.path)} download={entry.path.split(/[\\/]/).pop()} title={entry.equivalence ?? (entry.comfyui_import === 'ui' ? '可导入 ComfyUI 界面查看' : '可提交到 ComfyUI API')}><ArrowDownToLine size={13} />{entry.comfyui_import === 'ui' ? '下载 UI 图' : '下载 API 图'}</a>) : <small>项目尚未登记可下载的 JSON 工作流</small>}</div></section>}
-          <section className="creation-hub" aria-label="项目创作入口"><div><span className="eyebrow">从这里开始</span><h2>把想法登记成可执行项目</h2><p>先导入素材，再登记制作步骤和分段计划。真正的模型加载、渲染和输出仍由 ComfyUI 完成。</p></div><div className="creation-hub-actions"><button className="button secondary compact" onClick={() => setStageFormOpen(open => !open)}><Plus size={14} />制作步骤</button><button className="button secondary compact" onClick={() => setSegmentFormOpen(open => !open)}><Plus size={14} />分段计划</button></div></section>
-          {stageFormOpen && <section className="creation-panel" aria-label="登记制作步骤"><div className="creation-panel-heading"><div><span className="eyebrow">新建步骤</span><p>先登记这一步让审核者准备什么、会产出什么；执行引用可稍后补齐。</p></div><button className="icon-button" aria-label="关闭新建步骤" onClick={() => setStageFormOpen(false)}><X size={16} /></button></div><div className="creation-grid"><label>步骤名称<input value={stageTitle} onChange={event => setStageTitle(event.target.value)} placeholder="例如：人声混音" /></label><label>执行方式<select value={stageBackend} onChange={event => setStageBackend(event.target.value)}><option>混合流程</option><option>ComfyUI 工作流</option><option>本地脚本</option></select></label><label className="creation-wide">用途说明<input value={stagePurpose} onChange={event => setStagePurpose(event.target.value)} placeholder="审核者能理解的这一步目的" /></label><label>输入（逗号分隔）<input value={stageInputs} onChange={event => setStageInputs(event.target.value)} placeholder="首帧, 引导音频, 提示词" /></label><label>输出（逗号分隔）<input value={stageOutputs} onChange={event => setStageOutputs(event.target.value)} placeholder="候选视频" /></label><label className="creation-wide">工作流或脚本引用（可选）<input value={stageWorkflow} onChange={event => setStageWorkflow(event.target.value)} placeholder="例如：workflows/api/motion.json 或 tools/render.py" /></label></div><div className="creation-actions"><span>步骤登记后，可在卡片中继续填写参数契约。</span><button className="button primary compact" onClick={() => void createPipelineStage()}>保存步骤</button></div></section>}
-          {segmentFormOpen && <section className="creation-panel" aria-label="登记分段计划"><div className="creation-panel-heading"><div><span className="eyebrow">新建分段</span><p>用审核者看得懂的字段描述镜头；首尾帧、提示词和工作流可以后补。</p></div><button className="icon-button" aria-label="关闭新建分段" onClick={() => setSegmentFormOpen(false)}><X size={16} /></button></div><div className="creation-grid"><label>片段编号（可选）<input value={segmentDraft.segment_id} onChange={event => setSegmentDraft(previous => ({ ...previous, segment_id: event.target.value }))} placeholder="留空则自动编号" /></label><label>时长（秒）<input type="number" min="0.1" step="0.1" value={segmentDraft.duration_seconds} onChange={event => setSegmentDraft(previous => ({ ...previous, duration_seconds: event.target.value }))} /></label><label>场景<input value={segmentDraft.location} onChange={event => setSegmentDraft(previous => ({ ...previous, location: event.target.value }))} placeholder="例如：阳光庭院" /></label><label>景别<input value={segmentDraft.shot_size} onChange={event => setSegmentDraft(previous => ({ ...previous, shot_size: event.target.value }))} /></label><label>镜头运动<input value={segmentDraft.camera} onChange={event => setSegmentDraft(previous => ({ ...previous, camera: event.target.value }))} /></label><label>服装 / 造型<input value={segmentDraft.wardrobe} onChange={event => setSegmentDraft(previous => ({ ...previous, wardrobe: event.target.value }))} /></label><label className="creation-wide">表演与动作<input value={segmentDraft.performance} onChange={event => setSegmentDraft(previous => ({ ...previous, performance: event.target.value }))} placeholder="例如：唱到呼音时抬爪并眨眼" /></label><label className="creation-wide">提示词<input value={segmentDraft.prompt} onChange={event => setSegmentDraft(previous => ({ ...previous, prompt: event.target.value }))} placeholder="描述这一段的画面、表情、动作和镜头" /></label>{advancedOpen && <label>工作流引用（可选）<input value={segmentDraft.workflow} onChange={event => setSegmentDraft(previous => ({ ...previous, workflow: event.target.value }))} placeholder="workflows/api/...json" /></label><label>首帧路径（可选）<input value={segmentDraft.first_frame} onChange={event => setSegmentDraft(previous => ({ ...previous, first_frame: event.target.value }))} placeholder="从已登记图片中选择或填路径" /></label><label>尾帧路径（可选）<input value={segmentDraft.last_frame} onChange={event => setSegmentDraft(previous => ({ ...previous, last_frame: event.target.value }))} placeholder="从已登记图片中选择或填路径" /></label></div><div className="creation-actions"><span>{planSegments.length ? `当前已有 ${planSegments.length} 段，新增片段会自动接在末尾。` : '这是空白项目的第一段计划。'}</span><button className="button primary compact" onClick={() => void createPlanSegment()}>保存分段</button></div></section>}
-         {pipeline.find(stage => stage.id === pipelineStageId)?.inputSpecs?.some(input => input.control === 'asset') && (() => { const stage = pipeline.find(item => item.id === pipelineStageId)!; return <section className="pipeline-asset-register-panel" aria-label="登记步骤素材"><div><span className="eyebrow">素材登记</span><p>直接从本机选择文件，工作台会把它登记到当前作品目录，并自动加入可复用资源。</p></div><div className="pipeline-asset-register-grid">{stage.inputSpecs!.filter(input => input.control === 'asset' && assetKindForInput(input.kind)).map(input => <label key={`register-${input.id}`}><span>{input.label}</span><input type="file" accept={assetKindForInput(input.kind) === 'audio' ? 'audio/*' : assetKindForInput(input.kind) === 'image' ? 'image/*' : 'video/*'} onChange={event => { const file = event.target.files?.[0]; if (file) void registerPipelineAsset(input.id, file); }} /><small>登记后可在下方输入控件中复用</small></label>)}</div></section>; })()}
-        <section className="project-heading"><div><div className="eyebrow">{project?.eyebrow ?? '导演工作台 / 当前项目'}</div><h1>{project?.title ?? '项目读取中'}<span className="title-tag">{project?.tag ?? '项目'}</span></h1><p>{project?.subtitle ?? '读取项目清单后显示作品说明。'}</p></div><div className="heading-actions"><button className="button secondary" onClick={exportPlan}><ArrowDownToLine size={15} />导出审阅计划</button><button className="button secondary" onClick={exportProjectBundle}><ArrowDownToLine size={15} />导出项目清单</button>{['preparing', 'submitting', 'queued', 'scheduler_waiting', 'running', 'stop_requested', 'stopping'].includes(taskState) && <button className="button secondary" onClick={stopCurrentTask}><Square size={14} />停止当前任务</button>}{['stopped', 'needs_reconcile'].includes(taskState) && <button className="button secondary" onClick={resumeCurrentTask}><Play size={14} />恢复当前片段</button>}<button className="button primary" disabled={!currentExecutable || Boolean(taskState && !['succeeded', 'failed', 'stopped', 'needs_reconcile'].includes(taskState)) || !current.id} title={!currentExecutable ? '请先登记该片段的 ComfyUI 工作流或执行引用' : '提交有效请求；所需资源暂不可用时等待排队'} onClick={() => void startCurrentTask()}>{taskState === 'preparing' || taskState === 'submitting' || (taskState === 'queued' || taskState === 'running') ? <Radio size={15} /> : <Play size={15} />}{taskState ? `${project?.default_task_asset_id ?? current.id} · ${taskState}` : !currentExecutable ? '先登记工作流' : `提交 ${project?.default_task_asset_id ?? current.id} 排队`}</button></div></section>
-        {page === 'overview' && <div className="overview-actions" aria-label="项目页面入口"><span>从总览进入具体工作</span><button className="button secondary" onClick={() => setPage('pipeline')}><Workflow size={15} />查看制作流程</button><button className="button secondary" onClick={() => setPage('review')}><ClipboardCheck size={15} />进入片段审核</button></div>}
-        <div className="scope-banner"><span className="status-dot" /><span>{assemblyIsStale ? '历史成片 · 需重新装配' : planAssembly ? '完整版候选已装配' : `${library.length} 个已登记素材 · 等待项目计划`}</span>{assemblyAsset && <button className="text-button" onClick={() => choose(assemblyAsset)}><Film size={13} />打开完整版候选</button>}<span>{assemblyIsStale ? '旧版本可预览，不能作为当前计划采用' : planAssembly ? '待导演审核 · 不代表已采用' : '可从侧栏导入或切换工作目录'}</span></div>
-
-        <section className="pipeline-section" aria-label="制作步骤"><div className="section-header pipeline-header"><div><h2>制作步骤 <span>PIPELINE</span></h2><p>每一步只关心输入、输出和审核结果；节点或脚本由后台按步骤契约执行。</p></div><span className="pipeline-caption">{pipeline.length} 个步骤 · 可逐步调试</span></div><div className="pipeline-grid">{pipeline.map(stage => <article className={`pipeline-card ${pipelineStageId === stage.id ? 'pipeline-card-selected' : ''}`} key={stage.id}><div className="pipeline-card-top"><span className="pipeline-order">{String(stage.order).padStart(2, '0')}</span><div><h3>{stage.title}</h3><p>{stage.purpose}</p></div><span className={`pipeline-status pipeline-${stage.status === '已接入' ? 'ready' : stage.status === '可调试' ? 'debug' : 'planned'}`}>{stage.status}</span></div><div className="pipeline-io"><div><span>输入</span>{(stage.inputSpecs ?? stage.inputs.map((label, index) => ({ id: `input-${index}`, label, kind: '参数' as const, required: true, description: '' }))).map(input => <em key={input.id}>{input.label}{input.required ? ' · 必需' : ''}</em>)}</div><div className="pipeline-arrow">→</div><div><span>输出</span>{(stage.outputSpecs ?? stage.outputs.map((label, index) => ({ id: `output-${index}`, label, kind: '参数' as const, description: '', state: '待生成' as const }))).map(output => <em key={output.id}>{output.label}</em>)}</div></div><div className="pipeline-meta"><span>{stage.execution?.label ?? stage.backend}</span><span>{stage.recipe}</span></div><div className="pipeline-card-actions"><span>{stage.execution?.state ?? stage.status}</span><button className="text-button" onClick={() => setPipelineStageId(stage.id)} aria-label={`查看${stage.title}步骤档案`}>查看步骤档案 <ArrowUpRight size={13} /></button></div><details><summary>查看调试说明</summary><p>{stage.note}</p></details></article>)}</div>{pipeline.find(stage => stage.id === pipelineStageId) && (() => { const stage = pipeline.find(item => item.id === pipelineStageId)!; return <article className="pipeline-inspector" aria-label={`${stage.title}步骤档案`}><div className="pipeline-inspector-head"><div><span className="eyebrow">步骤档案 · {String(stage.order).padStart(2, '0')}</span><h3>{stage.title}</h3><p>{stage.purpose}</p></div><button className="icon-button" onClick={() => setPipelineStageId('')} aria-label="关闭步骤档案"><X size={17} /></button></div><div className="pipeline-inspector-grid"><div><div className="pipeline-inspector-label">审核者需要准备的输入</div>{(stage.inputSpecs ?? []).map(input => <div className="contract-row" key={input.id}><span className="contract-kind">{input.kind}</span><div><strong>{input.label}{input.required && <small>必需</small>}</strong><p>{input.description}{input.example && ` 示例：${input.example}`}</p></div></div>)}</div><div><div className="pipeline-inspector-label">这一步会登记的输出</div>{(stage.outputSpecs ?? []).map(output => <div className="contract-row" key={output.id}><span className={`contract-state contract-${output.state === '已存在' ? 'ready' : output.state === '待接入' ? 'planned' : 'pending'}`}>{output.state}</span><div><strong>{output.label}</strong><p>{output.kind} · {output.description}</p></div></div>)}</div></div><div className="pipeline-inspector-foot"><span>执行来源：{stage.execution?.label ?? stage.backend} · {stage.execution?.references?.join(' / ') ?? stage.recipe}</span><button className="button secondary compact" onClick={() => exportStageContract(stage)}><ArrowDownToLine size={14} />导出步骤契约</button></div></article>; })()}</section>
-
-        <section className="preview-grid" aria-label="多媒体预览区">
-          <div className="preview-panel">
-            <div className="panel-toolbar"><span><span className="live-dot" />{labels[kind]}预览 <em>/ {current.id}</em></span><span>{current.ready ? '已有素材' : '计划占位'}{kind !== 'image' && <span className="muted"> · {range(current)}</span>}</span></div>
-            <div className={`stage stage-${kind} ${!current.ready ? 'stage-empty' : ''}`}>
-              {current.ready && kind === 'video' && <video key={source} ref={attachMedia} src={source} poster={current.image} {...mediaProps} aria-label={`${current.id} 视频预览`} />}
-              {current.ready && kind === 'image' && <><img src={current.image} alt={current.title} /><button className="image-zoom icon-button" aria-label="放大当前图片" onClick={() => setLightbox(true)}><Maximize2 size={17} /></button></>}
-              {current.ready && kind === 'audio' && <div className="audio-preview"><div className={`record ${playing ? 'record-playing' : ''}`}><div><Music2 size={30} /></div></div><span className="eyebrow">项目音频预览</span><h2>{current.title}</h2><p>{variant === 'A' ? '版本 A · 当前选定' : '版本 B · 对照试听'}</p><div className="audio-timeline">{baseAssets.filter(a => a.kind === 'audio' && a.start !== undefined).map(a => <button key={a.id} className={a.id === current.id ? 'selected' : ''} style={{ flex: (a.end! - a.start!) }} onClick={() => choose(a)} aria-label={`试听 ${a.id} ${a.title}`}>{a.id}<span>{a.end! - a.start!}s</span></button>)}</div><audio key={source} ref={attachMedia} src={source} {...mediaProps} aria-label={`${current.id} 音频预览`} /><small>母版时间轴 {range(current)} · 当前片段 {clock(position)} / {clock(duration)}</small></div>}
-              {!current.ready && <div className="empty-state"><Clapperboard size={32} /><h2>这一段，还在构思中</h2><p>{current.intent}</p><span>没有生成结果 · 不会自动跳过此段</span></div>}
-              {current.ready && kind === 'video' && <span className="stage-badge">实际生成画面 · v3-{variant} 配音</span>}
-            </div>
-            <div className="transport"><div className="transport-buttons"><button className="icon-button" aria-label="上一段" disabled={index === 0} onClick={() => choose(list[index - 1])}><ChevronLeft size={19} /></button>{kind === 'image' ? <span className="image-counter">{index + 1} / {list.length}</span> : <button className="play-button" aria-label={playing ? '暂停预览' : '播放当前片段'} disabled={playbackDisabled} title={current.ready && kind !== 'image' && mediaStatus === 'loading' ? '素材加载中…' : undefined} onClick={togglePlay}>{playing ? <Pause size={16} /> : <Play size={16} />}</button>}<button className="icon-button" aria-label="下一段" disabled={index === list.length - 1} onClick={() => choose(list[index + 1])}><ChevronRight size={19} /></button><span className="transport-title">{current.title}</span></div>{kind !== 'image' ? <label className="toggle"><input type="checkbox" checked={continuous} onChange={e => setContinuous(e.target.checked)} /><span />连续预览</label> : <span className="muted">逐张查看 · 保留各自提示词</span>}</div>
-          </div>
-
-          <aside className="inspector"><div className="inspector-heading"><span className="eyebrow">当前素材</span><span className="asset-code">{current.id}</span></div><h2>{current.title}</h2><p className="intent">{current.intent}</p><dl><div><dt>素材规格</dt><dd>{current.specs}</dd></div><div><dt>生成 / 来源</dt><dd>{current.origin}</dd></div></dl>{current.sources?.B && <div className="version-field"><label htmlFor="voice-version">试听版本</label><select id="voice-version" value={variant} onChange={e => { autoplayRef.current = false; setVariant(e.target.value as Variant); }}><option value="A">版本 A · 当前选定</option><option value="B">版本 B · 对照试听</option></select><small>{kind === 'video' ? '不同声音版本共用同一画面。' : '不同版本按同一时间轴试听。'}</small></div>}{current.lastImage && <div className="frame-pair"><button onClick={() => { switchKind('image'); setSelected(current.id); }}><img src={current.image} alt={`${current.title}首帧`} /><span>首帧 / 参考 <ArrowUpRight size={12} /></span></button><button onClick={() => { switchKind('image'); setSelected(current.id); }}><img src={current.lastImage} alt={`${current.title}尾帧`} /><span>尾帧 / 目标 <ArrowUpRight size={12} /></span></button></div>}<div className="inspector-bottom"><span className="small-label">审核标记 · 本浏览器保存</span><select aria-label="当前素材审核标记" value={drafts[current.id]?.review ?? '待审核'} onChange={e => updateDraft(current.id, { review: e.target.value })}><option>待审核</option><option>已采用</option><option>需调整</option></select></div></aside>
-        </section>
-
-        <section className="asset-section" aria-label="分段素材">
-          <div className="section-header"><div><h2>分段素材 <span>ASSETS</span></h2><p>从准备到结果，每一段都有自己的制作档案。</p></div><button className="text-button" onClick={() => setExpanded(list.every(a => expanded.includes(a.id)) ? expanded.filter(id => !list.some(a => a.id === id)) : [...new Set([...expanded, ...list.map(a => a.id)])])}><Layers3 size={15} />{list.every(a => expanded.includes(a.id)) ? '收起当前全部' : '展开当前全部'}</button></div>
-          <div className="asset-tabs" role="tablist" aria-label="素材类型">{(['video', 'audio', 'image'] as Kind[]).map(type => { const Icon = kindIcons[type]; const count = type === 'video' ? planVideoAssets.length : library.filter(asset => asset.kind === type).length; return <button key={type} role="tab" aria-selected={kind === type} className={kind === type ? 'selected' : ''} onClick={() => switchKind(type)}><Icon size={16} />{labels[type]}<span>{count}</span></button>; })}<span>{kind === 'video' ? `${library.filter(asset => asset.kind === 'video').length} 个视频资源` : kind === 'audio' ? `${library.filter(asset => asset.kind === 'audio').length} 个音频资源` : `${library.filter(asset => asset.kind === 'image').length} 个图片资源`}</span></div>
-          <div className="asset-cards">{list.map(asset => {
-            const Icon = kindIcons[asset.kind]; const open = expanded.includes(asset.id);
-            return <article key={asset.id} className={`asset-card ${asset.id === current.id ? 'current' : ''}`}><button className={`card-preview ${!asset.ready ? 'unready' : ''} ${asset.kind === 'audio' ? 'sound-card' : ''}`} onClick={() => choose(asset)} aria-label={`查看 ${asset.id} ${asset.title}`}>{asset.image ? <img src={asset.image} alt={asset.title} /> : <div className="card-placeholder"><Icon size={26} /><span>{asset.ready ? '已有资源' : '待准备'}</span></div>}<span className="card-code">{asset.id}</span>{asset.start !== undefined && <span className="duration">{asset.end! - asset.start}s</span>}{asset.id === current.id && <span className="current-label">预览中</span>}</button><div className="card-info"><div><h3>{asset.title}</h3><span className={`asset-state ${!asset.ready ? 'pending' : ''}`}>{asset.ready ? drafts[asset.id]?.review ?? '待审核' : '待准备'}</span></div><p>{range(asset)}<span>{asset.subtitle}</span></p><button className="detail-toggle" aria-expanded={open} onClick={() => setExpanded(ids => open ? ids.filter(id => id !== asset.id) : [...ids, asset.id])}>制作档案<ChevronDown size={15} className={open ? 'rotated' : ''} /></button></div>{open && <div className="card-details"><label htmlFor={`prompt-${asset.id}`}>提示词草稿{drafts[asset.id]?.prompt !== undefined && <span>已编辑</span>}</label><textarea id={`prompt-${asset.id}`} rows={5} value={drafts[asset.id]?.prompt ?? asset.prompt} placeholder="输入这一段的提示词或下一版意图…" onChange={e => updateDraft(asset.id, { prompt: e.target.value })} /><label htmlFor={`note-${asset.id}`}>审核意见</label><textarea id={`note-${asset.id}`} rows={2} value={drafts[asset.id]?.note ?? ''} placeholder="记录需要调整的动作、画面或声音。" onChange={e => updateDraft(asset.id, { note: e.target.value })} /><details><summary>工作流与历史参数</summary><p>{asset.workflow}</p>{asset.prompt && <><p>历史输入提示词：</p><p className="historical-prompt">{asset.prompt}</p></>}<div className="workflow-downloads"><span>ComfyUI 工作流</span>{workflowEntriesForAsset(asset).length ? workflowEntriesForAsset(asset).map(entry => <a className="button secondary compact" key={`${entry.id}-${entry.path}`} href={workflowDownloadUrl(entry.path)} download={entry.path.split(/[\\/]/).pop()} title={entry.equivalence ?? (entry.comfyui_import === 'ui' ? '可导入 ComfyUI 界面查看' : '可提交到 ComfyUI API')}><ArrowDownToLine size={13} />{entry.comfyui_import === 'ui' ? '下载 UI 图' : '下载 API 图'}</a>) : <small>项目尚未登记可下载的 JSON 工作流</small>}</div></details><div className="detail-actions"><span>{asset.ready ? '保留已有结果，新版本另存' : '素材准备完成后才能提交'}</span><button className="icon-button" disabled aria-label={`生成 ${asset.id}`} title="由当前项目工作流执行"><Play size={14} /></button></div></div>}</article>;
-          })}</div>
-        </section>
-        <section className="assembly-note"><span className="assembly-icon"><Layers3 size={19} /></span><div><strong>{kind === 'image' ? '多图作品，逐张审阅' : assemblyIsStale ? '历史成片 · 需重新装配' : assemblyAsset ? '完整版候选已由 ComfyUI 装配' : '先连续预览，再生成成品'}</strong><p>{kind === 'image' ? '每张图保留独立提示词、参考素材和版本，不强制转换为视频。' : assemblyAsset ? `${planAssembly?.notes ?? '完整候选保留片段顺序、剪辑点和工作流回执。'} 当前仍需人工检查音画、黑帧和段间连续性。` : '连续预览不会生成新文件。正式音视频拼接将提交给 ComfyUI；缺失的片段会明确提示。'}</p></div>{kind === 'image' ? <button disabled className="button secondary"><Plus size={15} />批量生成待接入</button> : <div className="assembly-actions"><div className="heading-actions"><button className="button secondary" disabled={Boolean(batchId && batchTasks.some(task => ['batch_waiting', 'preparing', 'submitting', 'queued', 'scheduler_waiting', 'running', 'stop_requested', 'stopping'].includes(task.status)))} onClick={startBatch}><Play size={14} />启动全片段批次</button>{batchId && batchTasks.some(task => ['batch_waiting', 'preparing', 'submitting', 'queued', 'scheduler_waiting', 'running', 'stop_requested', 'stopping'].includes(task.status)) && <button className="button secondary" onClick={stopBatch}><Square size={14} />停止批次</button>}{batchId && batchTasks.length > 0 && batchTasks.every(task => ['stopped', 'failed', 'succeeded'].includes(task.status)) && batchTasks.some(task => task.status !== 'succeeded') && <button className="button secondary" onClick={resumeBatch}><Play size={14} />恢复批次</button>}{['preparing', 'submitting', 'queued', 'scheduler_waiting', 'running', 'stop_requested', 'stopping'].includes(assemblyTaskState) && <button className="button secondary" onClick={stopAssembly}><Square size={14} />停止装配</button>}{['stopped', 'failed', 'needs_reconcile'].includes(assemblyTaskState) && <button className="button secondary" onClick={resumeAssembly}><Play size={14} />恢复装配</button>}{assemblyTaskState === 'needs_reconcile' && <button className="button secondary compact" onClick={() => void resolveMissingExecution(assemblyTaskId)}>确认装配执行已结束</button>}<button className="button secondary" disabled={resourceReleaseBlocked || ['preparing', 'submitting', 'queued', 'scheduler_waiting', 'running', 'stop_requested', 'stopping'].includes(assemblyTaskState)} onClick={() => void startAssembly()}><Plus size={15} />{assemblyTaskState === 'succeeded' ? '重新装配' : assemblyTaskState ? `装配 · ${assemblyTaskState}` : '启动完整版装配'}</button></div>{batchTasks.length > 0 && <div className="batch-progress"><span>{batchTasks.filter(task => task.status === 'succeeded').length}/{batchTasks.length} 段已完成</span><span>{batchTasks.find(task => ['preparing', 'submitting', 'queued', 'scheduler_waiting', 'running', 'stop_requested', 'stopping'].includes(task.status))?.asset_id ?? (batchTasks.every(task => task.status === 'succeeded') ? '批次完成' : '批次待处理')}</span></div>}</div>}</section>
-        <footer><span><span className={`status-dot ${storageError ? 'error' : ''}`} />{storageError ? '本地保存失败，请导出审阅计划备份' : '草稿自动保存于本浏览器'}</span><span>{comfyOnline ? `ComfyUI 已连接 · ${comfyInfo.gpu_free_mib ?? '?'} MiB 空闲` : '模型与渲染由 ComfyUI 完成'} <ArrowUpRight size={12} /></span></footer>
-      </div>
-    </main>
-    {notice && <div className="toast" role="status"><Check size={16} /><span>{notice}</span><button className="icon-button" onClick={() => setNotice('')} aria-label="关闭提示"><X size={15} /></button></div>}
-    <dialog ref={dialogRef} className="lightbox" onCancel={() => setLightbox(false)}><div><span>{current.id} · {current.title}</span><button className="icon-button" onClick={() => setLightbox(false)} aria-label="关闭大图"><X size={22} /></button></div>{lightbox && <img src={current.image} alt={current.title} />}</dialog>
-  </div>;
-  */
 }

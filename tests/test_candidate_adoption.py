@@ -5,8 +5,7 @@ from urllib.parse import quote
 import pytest
 
 from backend import app as backend
-from test_production_presets import preset_client
-from test_private_workbench import private_workbench, create
+from support import create
 
 BASE='/api/projects/preset-test'
 

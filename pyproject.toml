@@ -1,0 +1,28 @@
+# Development tooling configuration. Runtime dependencies stay in requirements.txt;
+# this file only teaches the linters which sources belong to the project.
+#
+# The gate starts deliberately small. The tree predates a formatter, so adopting
+# formatting or broad unused-import rules now would bury real defects in churn; the
+# selected rules are the ones that are already clean today and catch broken code
+# (syntax errors, undefined names, misused asserts) without touching style.
+
+[tool.ruff]
+target-version = "py313"
+line-length = 160
+# Runtime trees, dependencies and machine state are not source; the allowlist in
+# .gitignore decides what may be published, not what may be linted locally.
+extend-exclude = [".venv", "node_modules", "dist", "runtime", "projects", "workflows"]
+respect-gitignore = false
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]
+
+[tool.pytest.ini_options]
+# Markers for the fast CI layer.  A local `pytest tests` still runs every test; CI selects
+# `-m "not host_tool and not slow and not windows"` so a runner without this machine's
+# FFmpeg/ASR/ComfyUI installation and PowerShell can still exercise the core behaviour.
+markers = [
+    "slow: spends seconds on real subprocesses, browsers or media pipelines",
+    "host_tool: needs this machine's FFmpeg/ASR interpreter/ComfyUI installation",
+    "windows: relies on Windows-only system tools, junctions or frozen host paths",
+]

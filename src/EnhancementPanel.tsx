@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import TaskQueueStatus from './TaskQueueStatus';
 import type { MaterialOption } from './MaterialSelect';
+import { ApiError, mediaUrl, request as apiRequest } from './api/client';
 import './enhancement.css';
 
 type Facts = { width?: number; height?: number; duration_seconds?: number; frames?: number; fps?: number; audio_streams?: number };
@@ -10,7 +11,6 @@ type Pending = { source: string; idempotency_key: string };
 type Capability = { model: string; limits: string; kinds: Record<'image' | 'video', { available: boolean; missing: string[] }> };
 const terminal = ['succeeded', 'failed', 'stopped'];
 const statusLabel: Record<string, string> = { succeeded: '已完成 · 待比较', failed: '处理失败', stopped: '已停止', scheduler_waiting: '等待资源', preparing: '准备中', submitting: '正在提交', queued: '引擎排队中', running: '正在处理', stop_requested: '正在停止', stopping: '正在停止', needs_reconcile: '需要核对回执' };
-const mediaUrl = (path: string) => `/media-file?path=${encodeURIComponent(path)}`;
 const dimensions = (facts?: Facts) => facts?.width && facts.height ? `${facts.width} × ${facts.height}` : '尺寸待核验';
 class RequestError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string) { super(message); }
@@ -39,10 +39,12 @@ export default function EnhancementPanel({ projectId, initialSource = '', onBack
   const requestSequence = useRef(0);
   const listSequence = useRef(0);
   async function request<T>(url: string, init?: RequestInit): Promise<T> {
-    const response = await fetch(url, init);
-    const data = await response.json();
-    if (!response.ok) throw new RequestError(typeof data.detail === 'string' ? data.detail : data.detail?.message || '请求失败，请稍后核对', response.status, data.detail?.code);
-    return data;
+    try {
+      return await apiRequest<T>(url, { init });
+    } catch (cause) {
+      if (cause instanceof ApiError) throw new RequestError(cause.message, cause.status, cause.code);
+      throw cause;
+    }
   }
   function persist(value: { pending?: Pending; taskId?: string }) {
     localStorage.setItem(key, JSON.stringify(value));

@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from fastapi import HTTPException
 
 from backend import app as backend
+from support import seed_gpu_waiter, prepare_semantic
 
 
 @pytest.fixture()
@@ -39,15 +40,6 @@ def reverse_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         return {'queue_running': [], 'queue_pending': []}
     monkeypatch.setattr(backend, 'request_json', fake_request)
     return TestClient(backend.app), manifest, analysis_path
-
-
-def seed_gpu_waiter(task_id='waiting-generation'):
-    """An already-frozen GPU row in the isolated DB, without running any model."""
-    with backend.db() as connection:
-        connection.execute('INSERT INTO tasks(id,asset_id,status,created_at,updated_at,payload,project_id) VALUES (?,?,?,?,?,?,?)',
-            (task_id, 'S01', 'scheduler_waiting', time.time(), time.time(), json.dumps({'asset_id': 'S01'}), 'project-a'))
-        connection.commit()
-    return task_id
 
 
 def test_semantic_progress_requires_matching_checkpoint(reverse_client, monkeypatch):
@@ -225,14 +217,6 @@ def test_new_analysis_only_appends_its_own_drafts(reverse_client) -> None:
     assert len(segments) == 2
     assert [segment["source_analysis"] for segment in segments] == ["ref-test", "ref-second"]
     assert segments[1]["start_seconds"] == 5
-
-
-def prepare_semantic(monkeypatch, tmp_path):
-    model = tmp_path / "model.gguf"
-    model.write_bytes(b"test")
-    monkeypatch.setattr(backend, "PRIMARY_MODEL", model)
-    monkeypatch.setattr(backend, "PRIMARY_MMPROJ", model)
-    monkeypatch.setattr(backend, "comfy_status", lambda: {"online": False})
 
 
 def test_background_analysis_returns_receipt_deduplicates_and_survives_client_reload(reverse_client, monkeypatch, tmp_path):

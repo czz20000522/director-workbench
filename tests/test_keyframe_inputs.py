@@ -7,19 +7,7 @@ import pytest
 
 from backend.keyframes import prepare
 from tools.qwen_image_edit import graph, reference_size
-
-
-def reference_image(tmp_path):
-    path = tmp_path / 'reference.png'
-    with av.open(str(path), 'w', format='image2') as output:
-        stream = output.add_stream('png')
-        stream.width, stream.height, stream.pix_fmt = 32, 48, 'rgb24'
-        frame = av.VideoFrame.from_ndarray(np.zeros((48, 32, 3), dtype=np.uint8), format='rgb24')
-        for packet in stream.encode(frame):
-            output.mux(packet)
-        for packet in stream.encode():
-            output.mux(packet)
-    return path
+from support import reference_image
 
 
 def test_recipe_freezes_reference_and_preserves_existing_attempt(tmp_path):

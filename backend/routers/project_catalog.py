@@ -55,7 +55,7 @@ def select_project(request: ProjectSelectRequest) -> dict[str, Any]:
     backend.apply_project_manifest(manifest)
     catalog = backend.load_project_catalog()
     catalog["default_project_id"] = request.project_id
-    backend.PROJECT_CATALOG_PATH.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    backend.write_json_atomic(backend.PROJECT_CATALOG_PATH, catalog)
     return backend.public_project()
 
 
@@ -80,7 +80,7 @@ def retire_legacy_project(project_id: str) -> dict[str, Any]:
     if principal is None or not principal.administrator:
         raise HTTPException(404, '作品不存在')
     backend.require_project_manifest(project_id)
-    backend.ensure_no_release_blocking_tasks('移除旧作品登记')
+    backend.ensure_no_release_blocking_tasks('移除旧作品登记', project_id=project_id)
     backend.PRIVATE_WORKSPACES.retire_legacy_registration(project_id)
     return {'retired_project_id': project_id, 'source_files_preserved': True}
 

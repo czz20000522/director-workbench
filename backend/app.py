@@ -4,6 +4,7 @@ import asyncio
 import json
 import math
 import os
+import re
 import shlex
 import shutil
 import sqlite3
@@ -29,14 +30,15 @@ from urllib.parse import urlsplit, parse_qs
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile, Request as BrowserRequest
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictInt, field_validator, model_validator
 from . import production_presets, background_jobs, speech, keyframes, audio_edit_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, guide, readiness, task_scheduler, creative_inspection, shot_creation
 from . import output_resolution, enhancement
 import av
 import paths
-from .private_auth import current_principal
+from .private_auth import SecurityHeaders, current_principal
 from .atomic_files import replace_prepared
 from .storage import storage_roots, relocate_asset, legacy_mappings
 from .user_context import project_location
@@ -114,6 +116,91 @@ def write_plan_version(path: Path, document: dict[str, Any]) -> None:
     replace_prepared(temporary,path)
 
 
+def write_json_atomic(path: Path, document: Any, *, indent: int = 2) -> None:
+    """Write JSON through a prepared sibling and one atomic replacement.
+
+    Manifests, the project catalog and the per-project ``director.project.json`` are
+    rewritten by several operations and read by every request.  A crash between truncate
+    and write used to leave a half document behind; the prepared file is removed when the
+    replacement itself fails, so the previous document stays readable.
+    """
+    payload = json.dumps(document, ensure_ascii=False, indent=indent) + '\n'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f'.{uuid.uuid4().hex}.tmp')
+    try:
+        temporary.write_text(payload, encoding='utf-8')
+        replace_prepared(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+# Uploaded material is streamed to disk in bounded chunks.  The per-file ceiling matches
+# the media-operation ceiling (2 GiB); the request ceiling is checked before FastAPI parses
+# the multipart body, and the count bounds one folder batch.  Deployments can tighten them.
+MAX_UPLOAD_BYTES = int(os.environ.get('DIRECTOR_MAX_UPLOAD_BYTES', 2 * 1024 ** 3))
+MAX_UPLOAD_FILES = int(os.environ.get('DIRECTOR_MAX_UPLOAD_FILES', 200))
+MAX_UPLOAD_REQUEST_BYTES = int(os.environ.get('DIRECTOR_MAX_UPLOAD_REQUEST_BYTES', 4 * 1024 ** 3))
+UPLOAD_CHUNK_BYTES = 1024 * 1024
+UPLOAD_LIMIT_PATHS = re.compile(r'^/api/projects/[^/]+/(?:upload|reverse-analyses)$')
+
+
+class RequestBodyLimit:
+    """Reject an oversized multipart body before FastAPI spools it to a temp file.
+
+    Content-Length is advisory, but it is present on browser multipart uploads and lets the
+    request fail without parsing hundreds of megabytes.  The per-file streamed cap below
+    still applies when the header is absent or understates the body.
+    """
+
+    def __init__(self, app, *, max_bytes: int = MAX_UPLOAD_REQUEST_BYTES):
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope, receive, send):
+        if (scope['type'] == 'http' and scope.get('method') == 'POST'
+                and UPLOAD_LIMIT_PATHS.match(scope.get('path', ''))):
+            headers = dict(scope.get('headers') or ())
+            declared = headers.get(b'content-length')
+            try:
+                declared = int(declared) if declared is not None else None
+            except ValueError:
+                declared = None
+            if declared is not None and declared > self.max_bytes:
+                detail = f'上传请求超过 {self.max_bytes // (1024 ** 2)} MiB 上限'
+                await JSONResponse({'detail': detail}, status_code=413)(scope, receive, send)
+                return
+        return await self.app(scope, receive, send)
+
+
+async def stream_upload(upload: UploadFile, destination: Path) -> int:
+    """Write one upload to a prepared sibling, then put it in place atomically.
+
+    The body is counted as it is written, so a request that omits Content-Length still
+    cannot exceed the per-file cap.  A partial file is removed on any failure instead of
+    remaining as a material the manifest never registered.  Blocking file calls go to the
+    thread pool so a large upload does not stall the event loop (and its SSE streams).
+    """
+    temporary = destination.with_name(f'.{uuid.uuid4().hex}.upload')
+    written = 0
+    try:
+        handle = await run_in_threadpool(temporary.open, 'xb')
+        try:
+            while chunk := await upload.read(UPLOAD_CHUNK_BYTES):
+                written += len(chunk)
+                if written > MAX_UPLOAD_BYTES:
+                    raise HTTPException(413, f'单个文件超过 {MAX_UPLOAD_BYTES // (1024 ** 2)} MiB 上限')
+                await run_in_threadpool(handle.write, chunk)
+        finally:
+            await upload.close()
+            await run_in_threadpool(handle.close)
+        await run_in_threadpool(replace_prepared, temporary, destination)
+        return written
+    except BaseException:
+        await run_in_threadpool(temporary.unlink, missing_ok=True)
+        raise
+
+
 def check_plan_revision(document: dict[str, Any], expected: int | None) -> None:
     current = int(document.get('revision', 0) or 0)
     if expected is not None and expected != current:
@@ -123,16 +210,36 @@ def check_plan_revision(document: dict[str, Any], expected: int | None) -> None:
 PIPELINE_INPUT_CONTRACT_PATH = PROJECT / "contracts" / "pipeline-inputs.json"
 
 
-def ensure_no_release_blocking_tasks(action: str, *, gpu_only: bool = False) -> None:
-    """Prevent project mutations while any task may still own ComfyUI resources."""
+def ensure_no_release_blocking_tasks(action: str, *, gpu_only: bool = False,
+                                     project_id: str | None = None) -> None:
+    """Block a mutation only when a task that mutation can disturb is still active.
+
+    The check used to scan every row, so another account's long GPU task turned an
+    unrelated user's delete, preset install or reference analysis into a 409.  In a
+    private session the rows that matter are the ones that session owns, narrowed to the
+    named project when the route addresses one.  Legacy mode owns every row it can see
+    and keeps the original whole-table behaviour.
+    """
     placeholders = ",".join("?" for _ in RELEASE_BLOCKING_STATUSES)
     with DB_LOCK, db() as connection:
         rows = connection.execute(
             f"SELECT id,payload FROM tasks WHERE status IN ({placeholders})",
             RELEASE_BLOCKING_STATUSES,
         ).fetchall()
-    active = any(not gpu_only or json.loads(row['payload']).get('kind') not in {'audio_edit', 'media_operation'} for row in rows)
-    if active:
+    principal = current_principal.get()
+    owner = principal.identity.username if principal is not None else None
+
+    def blocks(row) -> bool:
+        payload = json.loads(row['payload'])
+        if gpu_only and payload.get('kind') in {'audio_edit', 'media_operation'}:
+            return False
+        if owner is None:
+            return True
+        if payload.get('owner_user') != owner:
+            return False
+        return project_id is None or payload.get('project_id') == project_id
+
+    if any(blocks(row) for row in rows):
         raise HTTPException(409, f"仍有任务运行中，请先停止并等待任务结束后再{action}")
 MEDIA: dict[str, Path] = {}
 PIPELINE_STAGES: list[dict[str, Any]] = []
@@ -337,14 +444,14 @@ def persist_project_manifest(manifest: dict[str, Any], make_default: bool = True
     project_id = str(manifest["id"])
     manifest_path = PROJECTS_ROOT / f"{project_id}.json"
     PROJECTS_ROOT.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_json_atomic(manifest_path, manifest)
     catalog = load_project_catalog()
     entries = [item for item in catalog.get("projects", []) if isinstance(item, dict) and item.get("id") != project_id]
     entries.append({"id": project_id, "manifest": manifest_path.name})
     catalog["projects"] = entries
     if make_default:
         catalog["default_project_id"] = project_id
-    PROJECT_CATALOG_PATH.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_json_atomic(PROJECT_CATALOG_PATH, catalog)
 
 
 def blank_project_manifest(project_id: str, series: str, title: str, workspace: Path) -> dict[str, Any]:
@@ -505,6 +612,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Outermost middleware: the static page shell bypasses the authentication layer, so the
+# browser-hardening headers are added here rather than in PrivateAuth.
+app.add_middleware(RequestBodyLimit)
+app.add_middleware(SecurityHeaders)
 
 
 def db() -> sqlite3.Connection:
@@ -1079,7 +1190,7 @@ def freeze_task_payload(payload: dict[str, Any], *, project_id: str) -> dict[str
         snapshot_root = task_snapshot_root(project_id)
         snapshot_root.mkdir(parents=True, exist_ok=True)
         destination = snapshot_root / f"api-{uuid.uuid4().hex[:16]}.json"
-        destination.write_text(json.dumps(graph, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        write_json_atomic(destination, graph)
         frozen["source_workflow"] = str(source)
         frozen["workflow"] = str(destination)
         frozen["execution_snapshot"] = {
@@ -1422,8 +1533,7 @@ def write_recipe_snapshot(payload: dict[str, Any], *, project_id: str | None = N
         audio_guide=str(shared_path(payload["audio_guide"])), preserve_source_audio=False,
     )
     destination = task_snapshot_root(project_id or CURRENT_PROJECT_ID) / f"api-{uuid.uuid4().hex[:16]}.json"
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(json.dumps(graph, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_json_atomic(destination, graph)
     return str(destination)
 
 
@@ -1713,7 +1823,7 @@ def build_assembly_snapshot(manifest: dict[str, Any] | None = None) -> Path:
     audio_reference = str(sound['path'] or '')
     filename_prefix = str(config.get("filename_prefix", f"导演台/{project_id}/assembly"))
     graph = module.build_graph(document, audio_reference, filename_prefix)
-    snapshot.write_text(json.dumps(graph, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_json_atomic(snapshot, graph)
     return snapshot
 
 
@@ -2749,7 +2859,7 @@ def create_project(request: ProjectCreateRequest) -> dict[str, Any]:
                 (workspace / folder).mkdir(parents=True, exist_ok=True)
             manifest = blank_project_manifest(project_id, request.series, request.title, workspace)
             manifest['default_creation_mode'] = request.creation_mode
-            (workspace / 'director.project.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+            write_json_atomic(workspace / 'director.project.json', manifest)
             persist_project_manifest(manifest, make_default=False)
             if request.select:
                 PRIVATE_WORKSPACES.select(project_id)
@@ -2768,7 +2878,7 @@ def create_project(request: ProjectCreateRequest) -> dict[str, Any]:
         (workspace / folder).mkdir(parents=True, exist_ok=True)
     manifest = blank_project_manifest(project_id, request.series, request.title, workspace)
     manifest['default_creation_mode'] = request.creation_mode
-    (workspace / "director.project.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_json_atomic(workspace / "director.project.json", manifest)
     persist_project_manifest(manifest, make_default=request.select)
     if request.select:
         apply_project_manifest(manifest)
@@ -2779,12 +2889,12 @@ def create_project(request: ProjectCreateRequest) -> dict[str, Any]:
 def save_project_manifest(manifest: dict[str, Any]) -> None:
     """Persist a project manifest and its workspace copy after an in-app edit."""
     manifest_path = PROJECTS_ROOT / f"{manifest['id']}.json"
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_json_atomic(manifest_path, manifest)
     workspace_value = manifest.get("workspace_root")
     if workspace_value:
         workspace = resolve_registered_path(str(workspace_value))
         workspace.mkdir(parents=True, exist_ok=True)
-        (workspace / "director.project.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        write_json_atomic(workspace / "director.project.json", manifest)
     persist_project_manifest(manifest, make_default=(str(manifest.get("id")) == CURRENT_PROJECT_ID))
 
 
@@ -2813,7 +2923,7 @@ def reusable_template_catalog(project_id: str) -> dict[str, Any]:
 @app.post("/api/projects/{project_id}/production-presets/{preset_id}")
 @gpu_admission
 def install_production_preset(project_id: str, preset_id: str) -> dict[str, Any]:
-    ensure_no_release_blocking_tasks("配置制作方案")
+    ensure_no_release_blocking_tasks("配置制作方案", project_id=project_id)
     if preset_id not in production_presets.PRESET_IDS:
         raise HTTPException(404, "制作方案不存在")
     manifest = require_project_manifest(project_id)
@@ -2849,7 +2959,7 @@ def configure_production_preset(manifest: dict[str, Any], preset_id: str, *, aut
     # Use project identifiers rather than user-entered filesystem paths.
     graph["92"]["inputs"]["filename_prefix"] = f"导演工作台工作目录/{project_id}/video/h3"
     graph["92"]["_meta"] = {"director_preset": preset_id}
-    destination.write_text(json.dumps(graph, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_json_atomic(destination, graph)
     workflow = root_relative_path(destination)
     manifest["pipeline"] = [*stages, production_presets.stage(workflow, len(stages) + 1, preset_id)]
     if not automatic or not manifest.get('production_preset'):
@@ -3038,6 +3148,8 @@ async def upload_project_files(project_id: str, files: list[UploadFile] = File(.
     workspace_value = manifest.get("workspace_root")
     workspace = (resolve_registered_path(str(workspace_value)) if workspace_value else (DIRECTOR_WORKSPACES_ROOT / project_id).resolve())
     workspace.mkdir(parents=True, exist_ok=True)
+    if len(files) > MAX_UPLOAD_FILES:
+        raise HTTPException(413, f'单次最多上传 {MAX_UPLOAD_FILES} 个文件')
     if PRIVATE_WORKSPACES is not None and current_principal.get() is not None:
         uploaded = []
         new_media = {}
@@ -3053,12 +3165,7 @@ async def upload_project_files(project_id: str, files: list[UploadFile] = File(.
             # Uploaded folders are material batches, never trusted project config.
             destination = PRIVATE_WORKSPACES.file(workspace / 'assets' / 'uploads' / (uuid.uuid4().hex + suffix))
             destination.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                with destination.open('xb') as handle:
-                    while chunk := await upload.read(1024 * 1024):
-                        handle.write(chunk)
-            finally:
-                await upload.close()
+            await stream_upload(upload, destination)
             stored = root_relative_path(destination)
             uploaded.append(stored)
             if material_kind(destination) in {'image', 'audio', 'video'}:
@@ -3084,11 +3191,8 @@ async def upload_project_files(project_id: str, files: list[UploadFile] = File(.
         if workspace != destination and workspace not in destination.parents:
             raise HTTPException(422, f"上传路径越界: {raw_name}")
         destination.parent.mkdir(parents=True, exist_ok=True)
-        with destination.open("wb") as handle:
-            while chunk := await upload.read(1024 * 1024):
-                handle.write(chunk)
+        await stream_upload(upload, destination)
         uploaded.append(root_relative_path(destination))
-        await upload.close()
     try:
         refreshed, report = scan_import_directory(workspace, project_id)
     except ValueError as exc:
@@ -3098,7 +3202,7 @@ async def upload_project_files(project_id: str, files: list[UploadFile] = File(.
     for key in ("tag", "eyebrow", "subtitle", "pipeline_contract", "assembly_asset_id", "default_task_asset_id", "pipeline", "task_templates", "assembly"):
         if key in manifest:
             refreshed[key] = manifest[key]
-    (workspace / "director.project.json").write_text(json.dumps(refreshed, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_json_atomic(workspace / "director.project.json", refreshed)
     persist_project_manifest(refreshed)
     if project_id == CURRENT_PROJECT_ID:
         apply_project_manifest(refreshed)

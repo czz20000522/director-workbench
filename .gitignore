@@ -3,6 +3,8 @@
 !/start-director-services.ps1
 !/start-director-services.cmd
 !/stop-director-services.cmd
+!/pyproject.toml
+!/requirements-dev.txt
 !/.agents/
 /.agents/*
 !/.github/
@@ -48,8 +50,20 @@
 /public/*
 !/src/
 /src/*
+# Shared HTTP/media client; each new src file is reviewed and listed explicitly below.
+!/src/api/
+/src/api/*
+!/src/api/client.ts
+# Types and pure helpers extracted from the shell; keep the allowlist exact.
+!/src/app/
+/src/app/*
+!/src/app/types.ts
+!/src/app/helpers.ts
+!/src/app/hooks.ts
 !/tests/
 /tests/*
+!/tests/conftest.py
+!/tests/support.py
 !/tools/
 /tools/*
 !/tools/qwen_image_t2i.py
@@ -58,6 +72,9 @@
 /.agents/skills/aigc-video-production/assets/workflows/*
 !/src/components/
 /src/components/*
+!/src/components/WorkbenchSidebar.tsx
+!/src/components/WorkbenchTopbar.tsx
+!/src/components/WorkbenchOverlays.tsx
 !/.agents/skills/director-workbench/
 /.agents/skills/director-workbench/*
 !/.agents/skills/aigc-video-production/assets/workflows/minimax-h3-current-api.json
@@ -232,6 +249,10 @@
 !/tests/test_project_create_selection.py
 !/tests/test_project_reads.py
 !/tests/test_project_test_runner.py
+!/tests/test_optimization_tenant_scope.py
+!/tests/test_optimization_auth_hardening.py
+!/tests/test_optimization_upload_limits.py
+!/tests/test_optimization_atomic_json.py
 !/tests/test_queue_readiness_integration.py
 !/tests/test_qwen_reference_conditioning.py
 !/tests/test_readiness.py

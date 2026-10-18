@@ -20,6 +20,9 @@ import pytest
 PROJECT = Path(__file__).resolve().parents[1]
 REPLY = 'restart-test: '
 
+# This module crashes and restarts real workbench processes against a loopback engine.
+pytestmark = pytest.mark.slow
+
 
 def workbench_process(root, engine_url):
     """Keep real lifecycle, routes, workers and urllib; isolate only storage/config."""

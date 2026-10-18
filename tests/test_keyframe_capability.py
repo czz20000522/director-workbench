@@ -2,7 +2,6 @@ from pathlib import Path
 
 from backend import app as backend, keyframes
 from tools.qwen_image_edit import graph
-from test_production_presets import preset_client
 
 
 def test_registry_must_include_nodes_and_exact_model_choices():

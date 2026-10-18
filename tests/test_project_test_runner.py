@@ -20,6 +20,12 @@ def setup_project(tmp_path):
     for script in (*scripts, *runner.BROWSER_MEDIA_TESTS.values()):
         (project / script).parent.mkdir(parents=True, exist_ok=True)
         (project / script).touch()
+    # The browser suite's environment probe checks that the driver dependencies are
+    # installed before a run can claim to have passed; the checkout's manifests stand in.
+    for module in runner.BROWSER_NODE_MODULES:
+        manifest = project / 'node_modules' / module / 'package.json'
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.touch()
     for spec in specs.values():
         # The browser suite drives node and carries no interpreter path.
         interpreter = spec.get('python')
@@ -159,6 +165,27 @@ def test_pytest_backed_drivers_receive_produced_fixtures(tmp_path, monkeypatch):
         driver = next(index for index, command in enumerate(calls)
                       if command[1:] == [f'tests/{name}.browser.mjs', str(target)])
         assert produced < driver
+
+
+def test_check_reports_missing_browser_prerequisites(tmp_path):
+    """--check must name a missing dependency install and a missing interpreter instead of
+    letting every driver fail on its own import or spawn, one confusing line at a time."""
+    project = setup_project(tmp_path)
+    report = tmp_path / 'browser-check.json'
+    (project / 'node_modules/esbuild/package.json').unlink()
+    assert runner.run('browser', check=True, report_path=report, project=project,
+                      **host_roots(tmp_path)) == 1
+    browser = json.loads(report.read_text(encoding='utf-8'))['suites']['browser']
+    assert browser['status'] == 'failed'
+    assert browser['test_exit_code'] is None
+    assert any('Missing browser dependencies under node_modules: esbuild' in error
+               for error in browser['errors'])
+
+    (project / '.venv/Scripts/python.exe').unlink()
+    assert runner.run('browser', check=True, report_path=report, project=project,
+                      **host_roots(tmp_path)) == 1
+    browser = json.loads(report.read_text(encoding='utf-8'))['suites']['browser']
+    assert any('require the project interpreter' in error for error in browser['errors'])
 
 
 def test_missing_interpreter_is_failure_not_skip(tmp_path):

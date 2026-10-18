@@ -6,8 +6,10 @@ import av
 
 from backend import output_resolution as output
 from backend import app as backend
-from test_keyframe_inputs import reference_image
-from test_production_presets import preset_client
+from support import reference_image
+
+# The real resize/re-encode cases need the installed FFmpeg.
+pytestmark = pytest.mark.host_tool
 
 
 @pytest.mark.parametrize('resolution,aspect,size', [

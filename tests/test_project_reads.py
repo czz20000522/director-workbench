@@ -3,7 +3,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 from fastapi.testclient import TestClient
 from backend import app as backend
-from test_production_presets import preset_client
 
 REAL_THREAD = threading.Thread
 

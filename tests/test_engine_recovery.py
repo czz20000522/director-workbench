@@ -6,6 +6,9 @@ import pytest
 
 from tools import restore_comfy_engine as recovery
 
+# These cases check Windows console identity and process handles.
+pytestmark = pytest.mark.windows
+
 
 @pytest.mark.skipif(os.name != 'nt', reason='Windows console behavior')
 def test_hidden_launch_runs_child_without_visible_console(tmp_path):

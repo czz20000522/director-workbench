@@ -3,7 +3,6 @@ import threading
 
 from fastapi.testclient import TestClient
 from backend import app as backend
-from test_production_presets import preset_client
 
 REAL_THREAD = threading.Thread
 URL = '/api/projects/preset-test/creative'

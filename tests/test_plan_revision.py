@@ -2,7 +2,6 @@ import threading
 import pytest
 from concurrent.futures import ThreadPoolExecutor
 from backend import app as backend
-from test_production_presets import preset_client
 
 REAL_THREAD = threading.Thread
 PATH = '/api/projects/preset-test/plan'

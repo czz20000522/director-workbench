@@ -344,7 +344,7 @@ def mark_segment_checkpoints_stale(project_id: str, segment_id: str, note: str) 
 def delete_plan_segment(project_id: str, segment_id: str, request: SegmentDeleteRequest) -> dict[str, Any]:
     if request.confirm != segment_id:
         raise HTTPException(422, '请填写完整分镜编号以确认删除')
-    backend.ensure_no_release_blocking_tasks('删除分镜')
+    backend.ensure_no_release_blocking_tasks('删除分镜', project_id=project_id)
     document, plan_path = backend.load_project_plan(project_id)
     backend.check_plan_revision(document, request.expected_revision)
     before = document['segments']

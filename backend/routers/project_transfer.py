@@ -56,10 +56,10 @@ def import_project(request: ProjectImportRequest) -> dict[str, Any]:
         raise HTTPException(422, f"项目清单包含工作区外路径: {exc}") from exc
     manifest_path = backend.PROJECTS_ROOT / f"{project_id}.json"
     backend.PROJECTS_ROOT.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    backend.write_json_atomic(manifest_path, manifest)
     catalog.setdefault("projects", []).append({"id": project_id, "manifest": manifest_path.name})
     catalog["default_project_id"] = project_id
-    backend.PROJECT_CATALOG_PATH.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    backend.write_json_atomic(backend.PROJECT_CATALOG_PATH, catalog)
     backend.apply_project_manifest(manifest)
     return {"project": backend.public_project(), "report": report, "manifest_path": backend.root_relative_path(manifest_path)}
 

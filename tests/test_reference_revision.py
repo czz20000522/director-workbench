@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 from backend import app as backend
 import pytest
-from test_reverse_workbench import reverse_client
 
 
 @pytest.mark.parametrize('suffix,body', [('/artifacts/story', {'summary': '人工新意见'}), ('/timeline/R01', {'user_note': '人工新动作'})])

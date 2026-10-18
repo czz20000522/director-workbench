@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import TaskQueueStatus, { type QueueReceipt } from './TaskQueueStatus';
 import MaterialSelect, { type MaterialOption } from './MaterialSelect';
+import { ApiError, request as apiRequest } from './api/client';
 
 type Submission = { gen_seconds?: number; seed?: number; text: string; mode?: 'reference' | 'design'; voice_reference?: string; voice_description?: string; idempotency_key: string };
 type Task = { id: string; status: string; queue?: QueueReceipt['queue']; error?: string; result?: { output?: string } };
@@ -51,10 +52,12 @@ export default function SpeechPanel({ projectId, options, onBrowse, onComplete }
     }
   }
   async function request(url: string, init?: RequestInit): Promise<Task> {
-    const response = await fetch(url, init);
-    const data = await response.json();
-    if (!response.ok) throw new RequestError(typeof data.detail === 'string' ? data.detail : data.detail?.message || '请求未获确认，请核对原任务。', response.status);
-    return data;
+    try {
+      return await apiRequest<Task>(url, { init });
+    } catch (cause) {
+      if (cause instanceof ApiError) throw new RequestError(cause.message, cause.status);
+      throw cause;
+    }
   }
   useEffect(() => {
     mounted.current = true;

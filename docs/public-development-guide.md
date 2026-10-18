@@ -61,13 +61,14 @@ UI、HTTP 和 MCP 共用后端授权与任务记录。任务先冻结输入和�
 Set-Location <项目目录>
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 npm ci
 npm run build
 .\run_tests.ps1 -Suite core -Check
 .\run_tests.ps1 -Suite core
 ```
 
-`python` 应由维护者选择已安装的基础 Python；既有 `.venv` 不需要重建。前端构建执行 TypeScript 检查并输出 `dist`，不代表后端或 GPU 生成通过。Python 依赖已包含 MCP；[requirements-mcp.txt](../requirements-mcp.txt)提供同一依赖入口。
+`python` 应由维护者选择已安装的基础 Python；既有 `.venv` 不需要重建。前端构建执行 TypeScript 检查并输出 `dist`，不代表后端或 GPU 生成通过。Python 依赖已包含 MCP；[requirements-mcp.txt](../requirements-mcp.txt)提供同一依赖入口。`requirements-dev.txt` 只装 lint 工具，不进入生产环境。
 
 完整离线回归用 `run_tests.ps1 -Check`、`run_tests.ps1`。统一入口调用 [run_project_tests.py](../tools/run_project_tests.py)：核心组在工作台 `.venv` 执行 pytest；AuK 组在 `ComfyUI-Shared/tools/AuK/.venv` 执行声音执行器 unittest。缺少 AuK 环境时完整检查失败，不能把核心组通过报告为完整通过，也不向 API 或 ComfyUI 基础环境安装模型依赖。报告和临时文件保存在隔离的 `ComfyUI-Workspace/runtime` 下，不提交。
 
@@ -91,6 +92,14 @@ npm run build
 | `guide_joins` | 运行目录，其夹具由 `tests/test_guide_joins.py` 先写入 |
 
 浏览器验收覆盖真实界面与真实媒体解码，但不覆盖真实 GPU 生成，也不替代跨设备访问验收。
+
+### 公开仓库的 CI 门禁
+
+[public-source.yml](../.github/workflows/public-source.yml) 在 PR 与 `main` 上执行四类门禁：公开源码白名单与敏感模式、Python 语法与文档相对链接、Python lint（`ruff` 的非侵入规则：语法错误、未定义名称、断言误用），以及前端类型检查与生产构建（`npm ci && npm run build`）。
+
+CI 另在 Windows runner 上运行 fast core 层：`pytest -m "not host_tool and not slow and not windows"`，覆盖不依赖本机 FFmpeg、ASR 解释器、ComfyUI 安装或 PowerShell/junction 的用例。[pyproject.toml](../pyproject.toml) 定义 `slow`、`host_tool`、`windows` 三个标记；本地 `run_tests.ps1` 仍运行全部用例，标记只用于筛选，不改变断言或跳过结果。
+
+CI 不安装 ComfyUI、模型或宿主媒体工具，也不运行 AuK 与浏览器验收。CI 通过代表公开边界、前端构建与 fast 后端回归通过，不代表完整主机回归、在线业务或真实生成通过；完整回归仍按本机入口执行。
 
 依赖已安装节点源码的主机探针还需相应 ComfyUI 安装；缺少主机资源导致的跳过须在结果中说明。通过其余测试不能替代该探针或真实 GPU 验证。
 

@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 
 from backend import app as backend
-from test_production_presets import preset_client
 
 ENDPOINT = '/api/projects/preset-test/audio-edit-tasks'
 REAL_CAPACITY = backend.require_submission_capacity
