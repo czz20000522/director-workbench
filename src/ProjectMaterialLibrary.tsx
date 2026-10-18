@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Copy, Film, FolderOpen, LoaderCircle, Search } from 'lucide-react';
+import { mediaUrl } from './api/client';
 
 type Project = { id: string; title: string; series?: string };
 type Material = { id: string; title: string; kind: string; path: string; size_bytes: number };
@@ -92,7 +93,7 @@ export default function ProjectMaterialLibrary({ projectId, onRegistered }: {
     {error && <div className="material-notice error" role="alert">{error} <button className="text-button" disabled={busy} onClick={() => setRefresh(value => value + 1)}>重试</button></div>}
     <div className="project-material-grid" aria-busy={loading || projectsLoading}>
       {loading || projectsLoading ? <div className="material-empty" role="status"><LoaderCircle size={22} className="spin" />正在读取作品素材</div> : error ? null : !visible.length ? <div className="material-empty"><FolderOpen size={24} />{!projects.length ? '还没有其他作品可供复用' : !materials.length ? '此作品暂无可复用素材' : '没有匹配素材，请调整搜索或类型'}</div> : visible.map(item => <article key={item.id} className={selected.has(item.id) ? 'selected' : ''}>
-        <div className="project-material-preview">{item.kind === 'image' ? <img src={`/media-file?path=${encodeURIComponent(item.path)}`} alt={item.title} loading="lazy" /> : item.kind === 'audio' ? <audio aria-label={`试听 ${item.title}`} src={`/media-file?path=${encodeURIComponent(item.path)}`} controls preload="none" /> : <Film size={32} />}</div>
+        <div className="project-material-preview">{item.kind === 'image' ? <img src={mediaUrl(item.path)} alt={item.title} loading="lazy" /> : item.kind === 'audio' ? <audio aria-label={`试听 ${item.title}`} src={mediaUrl(item.path)} controls preload="none" /> : <Film size={32} />}</div>
         <label className="project-material-choice"><input type="checkbox" checked={selected.has(item.id)} disabled={busy} onChange={() => setSelected(previous => { const next = new Set(previous); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })} /><span><strong>{item.title}</strong><small>{kinds.find(([id]) => id === item.kind)?.[1] ?? '素材'} · {(item.size_bytes / 1024 / 1024).toFixed(1)} MB</small></span></label>
       </article>)}
     </div>

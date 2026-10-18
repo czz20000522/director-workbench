@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { mediaUrl as url } from './api/client';
 
 type Facts = { known?: boolean; duration_seconds?: number | null; width?: number | null; height?: number | null; frames?: number | null; fps?: number | null; audio_streams?: number | null };
 type Timing = { requested_seconds?: number; expected_candidate?: { frame_count: number; playback_seconds: number; fps: number } | null; observed_candidate: Facts; assembly_take?: { start_seconds: number; duration_seconds: number; frame_count: number; playback_seconds: number; fps: number } | null };
@@ -11,7 +12,6 @@ export type Inspection = { revision: number; segment_id: string; candidate_versi
 type Data = { revision: number; inspection: Inspection; comparison_sources: Source[]; change_impact: { effects: { kind: string; id: string; effect: string; note?: string }[]; no_effect: string; old_candidates_preserved: boolean };
   items: { task_id: string; parameter_differences: { field: string; current?: unknown; previous?: unknown }[] }[];
   review_records: { revision: number; data: { note?: string; status?: string; candidate_ref?: string } }[] };
-const url = (path?: string | null) => path ? `/media-file?path=${encodeURIComponent(path)}` : undefined;
 const value = (v: unknown) => v === null || v === undefined ? '未知' : typeof v === 'object' ? JSON.stringify(v) : String(v);
 const names: Record<string, string> = { width: '宽度', height: '高度', duration_seconds: '播放时长', fps: '帧率', audio_strategy: '声音策略', prompt: '提示词', first_frame: '首帧', last_frame: '尾帧', audio_guide: '声音参考', workflow: '制作方案', seed: '随机种子' };
 

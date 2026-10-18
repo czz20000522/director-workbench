@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import TaskQueueStatus, { type QueueReceipt } from './TaskQueueStatus';
 import ResolutionPicker, { type OutputResolution } from './ResolutionPicker';
 import MaterialSelect, { type MaterialOption } from './MaterialSelect';
+import { ApiError, request as apiRequest } from './api/client';
 
 type Mode = 'text' | 'reference';
 type CreativeProfile = 'general' | 'adult-realism' | 'adult-anime';
@@ -55,10 +56,12 @@ export default function KeyframePanel({ projectId, options, onBrowse, onComplete
     }
   }
   async function request(url: string, init?: RequestInit): Promise<Task> {
-    const response = await fetch(url, init);
-    const data = await response.json();
-    if (!response.ok) throw new RequestError(typeof data.detail === 'string' ? data.detail : data.detail?.message || '请求未获确认，请核对原任务。', response.status);
-    return data;
+    try {
+      return await apiRequest<Task>(url, { init });
+    } catch (cause) {
+      if (cause instanceof ApiError) throw new RequestError(cause.message, cause.status);
+      throw cause;
+    }
   }
   useEffect(() => {
     mounted.current = true;

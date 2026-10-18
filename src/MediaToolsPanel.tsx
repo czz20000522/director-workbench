@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import TaskQueueStatus, { type QueueReceipt } from './TaskQueueStatus';
+import { ApiError, mediaUrl, request as apiRequest } from './api/client';
 
 type Operation = 'silence' | 'video_qc' | 'transcribe' | 'silent_video';
 type Props = { projectId: string; assets: Array<{ id: string; title: string; kind: string }>; onComplete: () => void; onBrowse: () => void };
@@ -67,9 +68,13 @@ function ProjectMediaToolsPanel({ projectId, assets, onComplete, onBrowse }: Pro
     }
   }
   async function request(url: string, init?: RequestInit): Promise<Task> {
-    const response = await fetch(url, init);
-    const data = await response.json();
-    if (!response.ok) throw new RequestError(typeof data.detail === 'string' ? data.detail : data.detail?.message || '请求未获确认，请核对原任务。', response.status);
+    let data: Task;
+    try {
+      data = await apiRequest<Task>(url, { init });
+    } catch (cause) {
+      if (cause instanceof ApiError) throw new RequestError(cause.message, cause.status);
+      throw cause;
+    }
     if (typeof data.id !== 'string' || typeof data.status !== 'string') throw new Error('任务回执不完整，请核对原提交。');
     return data;
   }
@@ -123,7 +128,6 @@ function ProjectMediaToolsPanel({ projectId, assets, onComplete, onBrowse }: Pro
   const report = task?.result?.report;
   const segments = Array.isArray(report?.segments) ? report.segments as Array<{ start?: number; end?: number; text?: string }> : [];
   const words = Array.isArray(report?.words) ? report.words as Array<{ start?: number; end?: number; word?: string }> : [];
-  const mediaUrl = (path: string) => `/media-file?path=${encodeURIComponent(path)}`;
   return <details className="director-operation-panel" aria-label="媒体工具">
     <summary>媒体工具 {task && `· ${labels[task.status] || task.status}`}</summary>
     <div className="director-creation-grid">

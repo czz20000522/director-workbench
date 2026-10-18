@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import AudioEditPanel from './AudioEditPanel';
+import { mediaUrl } from './api/client';
 import './AssemblyEditPanel.css';
 
 type Join = {
@@ -19,7 +20,6 @@ type Edit = {
   timing_summary?: { playback_seconds: number; frame_count: number; precision: string; segments: { segment_id: string; start_seconds: number; duration_seconds: number; frame_count: number; playback_seconds: number }[] } | null;
 };
 type Props = { projectId: string; planRevision: number; assemblyPath?: string; onPlanChanged: () => void | Promise<void>; onBrowse: () => void; onOpenShot: (shotId: string) => void };
-const mediaUrl = (path?: string | null) => path ? `/media-file?path=${encodeURIComponent(path)}` : undefined;
 const statusLabel: Record<Join['status'], string> = {
   pending: '待检查', approved: '已通过', redo_left: '重做前段', redo_right: '重做后段', stale: '版本已变化',
 };

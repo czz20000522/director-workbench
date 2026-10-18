@@ -50,6 +50,10 @@
 /public/*
 !/src/
 /src/*
+# Shared HTTP/media client; each new src file is reviewed and listed explicitly below.
+!/src/api/
+/src/api/*
+!/src/api/client.ts
 !/tests/
 /tests/*
 !/tests/conftest.py
