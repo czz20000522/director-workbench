@@ -54,6 +54,11 @@
 !/src/api/
 /src/api/*
 !/src/api/client.ts
+# Types and pure helpers extracted from the shell; keep the allowlist exact.
+!/src/app/
+/src/app/*
+!/src/app/types.ts
+!/src/app/helpers.ts
 !/tests/
 /tests/*
 !/tests/conftest.py
