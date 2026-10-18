@@ -20,10 +20,21 @@ BROWSER_TESTS = (
     'assembly_edit', 'automatic_creation', 'client_restore', 'enhancement',
     'generation_stage', 'guide_queue', 'guide_review', 'media_tools_panel',
     'queued_panels', 'reference_queue', 'speech_panel',
+    'quick_generation', 'media_qc', 'guide_joins', 'creative_review',
 )
 # These drivers additionally need the project interpreter and a fresh absolute runtime
 # directory (relative or pre-existing roots raise AccessDenied in backend/user_context.py).
-BROWSER_FIXTURE_TESTS = ('enhancement',)
+BROWSER_FIXTURE_TESTS = ('enhancement', 'quick_generation')
+# Three drivers read a fixture tree an earlier pytest run wrote and refuse to invent one,
+# so the suite runs the producing module first.  Each producer gets its own --basetemp:
+# pytest empties the directory it is handed, so one shared basetemp would delete the
+# previous producer's output.  The value says which path the driver receives -- its own
+# basetemp, or the run root, because guide_joins recurses that root for its eight files.
+BROWSER_PYTEST_FIXTURES = {
+    'media_qc': ('tests/test_media_qc.py', 'basetemp'),
+    'guide_joins': ('tests/test_guide_joins.py', 'run_root'),
+    'creative_review': ('tests/test_creative_inspection.py', 'basetemp'),
+}
 # These drivers take a media fixture after the script name. The producer runs on the
 # project interpreter because it encodes with PyAV, which is a test-time dependency
 # there; the driver then reads the file it wrote instead of being handed one by hand.
@@ -72,9 +83,11 @@ def suite_specs(project: Path, run_root: Path, desktop: Path | None = None) -> d
         },
         # Browser acceptance drivers bundle the front end themselves and intercept their
         # own HTTP. Those listed in BROWSER_FIXTURE_TESTS also take the project Python and
-        # a fresh absolute runtime directory; those listed in BROWSER_MEDIA_TESTS take a
-        # generated media file. Drivers needing ffmpeg or a completed fixture root are not
-        # listed yet; see the browser-suite notes in the project docs.
+        # a fresh absolute runtime directory; those in BROWSER_PYTEST_FIXTURES take a
+        # fixture root this suite produced with pytest first, and those in
+        # BROWSER_MEDIA_TESTS take a media file this suite generated with PyAV first.
+        # Drivers needing ffmpeg or a fixture no producer in this repository can write
+        # are not listed yet; see the browser-suite notes in the project docs.
         'browser': {
             'runner': 'node',
             'scripts': [f'tests/{name}.browser.mjs' for name in BROWSER_TESTS],
@@ -99,6 +112,10 @@ def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: b
     environment = dict(os.environ)
     environment['PYTHONNOUSERSITE'] = '1'
     environment.update({key: str(temporary) for key in ('TMP', 'TEMP', 'TMPDIR')})
+    # Drivers spawn bridges that have to write inside the machine runtime tree. Pointing
+    # them at this run root keeps that scratch inside the tree this run removes, instead of
+    # leaving it for the bounded retention under tests/runtime_scratch.py to age out.
+    environment['DIRECTOR_TEST_RUNTIME'] = str(run_root)
     runner = shutil.which('node')
     if runner is None:
         result['errors'].append('Required node runner is missing; this suite is failed, not skipped.')
@@ -111,16 +128,19 @@ def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: b
         commands = []
         fixtures = {}
         media = {}
+        producers = {}
         interpreter = project / '.venv/Scripts/python.exe'
         for script in spec['scripts']:
             if script in missing:
                 continue
             command = [runner, script]
             name = Path(script).name.removesuffix('.browser.mjs')
+            needs_python = (name in BROWSER_FIXTURE_TESTS or name in BROWSER_PYTEST_FIXTURES
+                            or name in BROWSER_MEDIA_TESTS)
+            if needs_python and not interpreter.is_file():
+                result['errors'].append(f'{script} needs the project interpreter; this suite is failed, not skipped.')
+                continue
             if name in BROWSER_FIXTURE_TESTS:
-                if not interpreter.is_file():
-                    result['errors'].append(f'{script} needs the project interpreter; this suite is failed, not skipped.')
-                    continue
                 # user_context.path() rejects asset paths over 240 characters on Windows and a
                 # fixture root grows ~172 characters of generated account, series and project
                 # names, so the fixture root is a short subdirectory of the short run root
@@ -128,12 +148,11 @@ def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: b
                 fixture = run_root / f'f{len(fixtures) + 1}'
                 fixtures[name] = str(fixture)
                 command += [str(interpreter), str(fixture)]
-            if name in BROWSER_MEDIA_TESTS:
-                if not interpreter.is_file():
-                    result['errors'].append(f'{script} needs the project interpreter; this suite is failed, not skipped.')
-                    continue
-                # The file sits in the run root, so it goes away with the run instead of
-                # joining whatever media a machine happens to keep around.
+            elif name in BROWSER_MEDIA_TESTS:
+                # The file sits in the run root beside the fixture roots, so it goes away
+                # with the run instead of joining whatever media a machine happens to keep
+                # around. The producer is not run through check(): encoding is cheap and
+                # its output is what the driver reads, so a missing file is caught below.
                 target = run_root / f'{name}.mp4'
                 producer = subprocess.run([str(interpreter), BROWSER_MEDIA_TESTS[name], str(target)],
                                           cwd=project, env=environment, capture_output=True, text=True,
@@ -143,6 +162,25 @@ def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: b
                     continue
                 media[name] = str(target)
                 command.append(str(target))
+            elif name in BROWSER_PYTEST_FIXTURES:
+                module, handed = BROWSER_PYTEST_FIXTURES[name]
+                basetemp = run_root / f'pytest-{name}'
+                # --basetemp creates its own directory but not the parent, and the run root
+                # already exists here. The producer's output is read-only in places (the
+                # ancestor-link fixtures hold a real .git), so retention removes it through
+                # remove_tree rather than a plain rmtree.
+                produced = subprocess.run(
+                    [str(interpreter), '-m', 'pytest', module, '-q', '--basetemp', str(basetemp)],
+                    cwd=project, env=environment)
+                producers[name] = {'module': module, 'basetemp': str(basetemp),
+                                   'exit_code': produced.returncode}
+                if produced.returncode:
+                    result['errors'].append(
+                        f'{module} did not produce fixtures for {script} (exit {produced.returncode}).')
+                    continue
+                destination = basetemp if handed == 'basetemp' else run_root
+                fixtures[name] = str(destination)
+                command.append(str(destination))
             commands.append(command)
             try:
                 completed = subprocess.run(command, cwd=project, env=environment)
@@ -153,6 +191,7 @@ def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: b
                 result['errors'].append(f'{script} failed (exit {completed.returncode}).')
         result['commands'] = commands
         result['fixture_roots'] = fixtures
+        result['fixture_producers'] = producers
         result['media_fixtures'] = media
         result['test_exit_code'] = int(bool(result['errors']))
     return result

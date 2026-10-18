@@ -4,15 +4,19 @@ import sys
 import tempfile
 from pathlib import Path
 
-import paths
 import pytest
+from runtime_scratch import scratch_root
 from backend import app as backend
 from test_private_workbench import private_workbench
 from test_automatic_creation import seed_test_models, complete_frozen_task
 
-# The scratch root is a machine location, not a repository one: derive it from the
-# configured runtime root so it survives the project directory moving.
-root = Path(tempfile.mkdtemp(prefix='dw2324-browser-', dir=paths.RUNTIME_ROOT))
+# The fixture root is a machine location, not a repository one, and a bridge is spawned by
+# a driver rather than by pytest, so it asks for scratch the same way the test modules do:
+# under the suite harness that lands inside the run root, and a hand-run keeps only the
+# newest entries — either way the directory does not accumulate in the live runtime tree.
+# The name stays short because this root carries the whole fixture path, and user_context.py
+# refuses asset paths past 240 characters: the deepest file is this root plus 141 characters.
+root = Path(tempfile.mkdtemp(dir=scratch_root('automatic-creation')))
 patch = pytest.MonkeyPatch()
 a, b, ownership, _ = private_workbench.__wrapped__(root, patch)
 seed_test_models(root)
