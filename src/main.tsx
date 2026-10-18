@@ -4,6 +4,25 @@ import App from './App';
 import LoginGate from './LoginGate';
 import './styles.css';
 
+class ErrorBoundary extends React.Component<React.PropsWithChildren, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error('Director Workbench 渲染异常', error, info.componentStack);
+  }
+
+  retry = () => this.setState({ error: null });
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return <main className="workspace-login" role="alert"><h1>工作台暂时遇到问题</h1><p>页面没有丢失数据。请重试；如果问题持续，请查看浏览器控制台日志。</p><button className="button primary" type="button" onClick={this.retry}>重试</button></main>;
+  }
+}
+
 // Safari and older Chromium builds expose Web Crypto but do not yet provide
 // crypto.randomUUID(). Install a small UUID v4 fallback before React mounts so
 // the creation panels can initialize on those browsers as well.
@@ -44,4 +63,4 @@ function WorkbenchEntry() {
   return privateMode ? <LoginGate /> : <App />;
 }
 
-ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><WorkbenchEntry /></React.StrictMode>);
+ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><ErrorBoundary><WorkbenchEntry /></ErrorBoundary></React.StrictMode>);

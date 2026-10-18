@@ -299,7 +299,7 @@ def test_queue_details_and_aggregate_do_not_expose_other_users(scheduler_db):
     assert scheduler.summary()["waiting_gpu"] == 2
 
 
-def test_claim_and_idle_release_use_same_admission_lock(scheduler_db):
+def test_claim_and_idle_release_do_not_hold_admission_lock_during_revalidate(scheduler_db):
     put(scheduler_db, "A1")
     lock = threading.RLock()
     before_claim, unblock, completed = threading.Event(), threading.Event(), threading.Event()
@@ -312,7 +312,8 @@ def test_claim_and_idle_release_use_same_admission_lock(scheduler_db):
     polling = threading.Thread(target=scheduler.tick)
     polling.start()
     assert before_claim.wait(3)
-    assert not lock.acquire(blocking=False)
+    assert lock.acquire(blocking=False)
+    lock.release()
     unblock.set()
     polling.join(3)
     assert not polling.is_alive()
