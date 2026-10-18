@@ -3448,77 +3448,19 @@ from .routers.task_control import (
 )
 
 
-@app.get("/api/projects/{project_id}/events")
-async def project_events(project_id: str) -> StreamingResponse:
-    require_project_manifest(project_id)
-    async def stream():
-        while True:
-            status_data, task_data = await asyncio.gather(asyncio.to_thread(status), asyncio.to_thread(project_task_list, project_id, 100, 0))
-            yield f"data: {json.dumps({'status': status_data, 'tasks': task_data['tasks'], 'project_id': project_id}, ensure_ascii=False)}\n\n"
-            await asyncio.sleep(3)
-    return StreamingResponse(stream(), media_type='text/event-stream', headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
-
-
-@app.get("/api/events")
-async def events() -> StreamingResponse:
-    async def stream():
-        while True:
-            status_data, task_data = await asyncio.gather(asyncio.to_thread(status), asyncio.to_thread(tasks))
-            yield f"data: {json.dumps({'status': status_data, 'tasks': task_data}, ensure_ascii=False)}\n\n"
-            await asyncio.sleep(3)
-    return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-
-@app.get("/media/{asset_name}")
-def media(asset_name: str) -> FileResponse:
-    path = MEDIA.get(asset_name)
-    if path is None or not path.is_file():
-        raise HTTPException(404, "素材不存在")
-    return FileResponse(path)
-
-
-@app.get("/media-file")
-def media_file(path: str) -> FileResponse:
-    """Serve an authorized asset from configured storage roots."""
-    try:
-        candidate = resolve_registered_path(path)
-    except ValueError as exc:
-        raise HTTPException(403, str(exc)) from exc
-    if not candidate.is_file():
-        raise HTTPException(404, "素材不存在")
-    return FileResponse(candidate)
-
-
-@app.get("/workflow-file")
-def workflow_file(path: str) -> FileResponse:
-    """Download a project-owned ComfyUI JSON graph for browser review/import."""
-    raw = str(path).replace("\\", "/").strip()
-    candidate = Path(raw)
-    if not candidate.is_absolute():
-        prefix = "ComfyUI-Workspace/projects/director-workbench/"
-        relative = raw[len(prefix):] if raw.startswith(prefix) else raw
-        candidate = PROJECT / relative
-    candidate = registered_candidate(candidate)
-    if PRIVATE_WORKSPACES is not None and current_principal.get() is not None:
-        candidate = PRIVATE_WORKSPACES.file(candidate)
-        if candidate.suffix.lower() != '.json':
-            raise HTTPException(415, '这里只允许下载 JSON 工作流')
-        if not candidate.is_file():
-            raise HTTPException(404, '工作流不存在')
-        return FileResponse(candidate, media_type='application/json', filename=candidate.name)
-    try:
-        candidate = candidate.resolve()
-        workflow_roots = [PROJECT.resolve(), DIRECTOR_WORKSPACES_ROOT.resolve()]
-        workflow_roots.extend(destination for source, destination in legacy_mappings(ROOT) if source == ROOT / 'ComfyUI-Workspace/projects/director-workbench/workspaces')
-        if not any(candidate.is_relative_to(root) for root in workflow_roots):
-            raise ValueError('Workflow outside configured project roots')
-    except ValueError as exc:
-        raise HTTPException(403, "工作流路径不在导演台项目目录内") from exc
-    if candidate.suffix.lower() != ".json":
-        raise HTTPException(415, "这里只允许下载 JSON 工作流")
-    if not candidate.is_file():
-        raise HTTPException(404, "工作流不存在")
-    return FileResponse(candidate, media_type="application/json", filename=candidate.name)
+# 事件流与媒体文件领域已拆到 backend/routers/events_media.py。
+# 下面两行必须留在原位置：路由注册顺序决定 /api/... 的匹配结果。
+from .routers.events_media import ROUTER as _events_media_router
+app.include_router(_events_media_router)
+# 这些名称原本定义在 app.py 模块层，拆出后按原样再导出：
+# app.py、private_mode.py 与既有测试都以 backend.<名称> 取用它们。
+from .routers.events_media import (
+    events,
+    media,
+    media_file,
+    project_events,
+    workflow_file,
+)
 
 
 class WorkbenchStaticFiles(StaticFiles):

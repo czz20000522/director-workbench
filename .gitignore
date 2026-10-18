@@ -37,6 +37,7 @@
 !/backend/routers/task_control.py
 !/backend/routers/gpu_idle.py
 !/backend/routers/queue_scheduler.py
+!/backend/routers/events_media.py
 !/contracts/
 /contracts/*
 !/docs/
