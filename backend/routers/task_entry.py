@@ -58,11 +58,12 @@ def start_project_task(project_id: str, request: StartRequest) -> dict[str, Any]
 def build_finish_workflow_snapshot(project_id: str, asset_id: str, source: Path, model_name: str,
                                    color_reference: str | None, color_method: str, color_strength: float) -> Path:
     """Build and persist the immutable API graph for a finish task."""
-    if not backend.FINISH_BUILDER.is_file():
-        raise FileNotFoundError(f'缺少高清处理工作流构建器: {backend.FINISH_BUILDER}')
-    module_spec = importlib.util.spec_from_file_location('director_finish_builder', backend.FINISH_BUILDER)
+    builder = backend.validate_execution_script_path(backend.FINISH_BUILDER, allowed_roots=(backend.PROJECT, backend.CODE_ROOT), label='高清处理构建器')
+    if not builder.is_file():
+        raise FileNotFoundError(f'缺少高清处理工作流构建器: {builder}')
+    module_spec = importlib.util.spec_from_file_location('director_finish_builder', builder)
     if module_spec is None or module_spec.loader is None:
-        raise RuntimeError(f'无法加载高清处理工作流构建器: {backend.FINISH_BUILDER}')
+        raise RuntimeError(f'无法加载高清处理工作流构建器: {builder}')
     module = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)
     project_label = ''.join(char if char.isalnum() or char in '-_' else '-' for char in project_id)

@@ -23,6 +23,10 @@ SAFE_METHODS = {'GET', 'HEAD', 'OPTIONS'}
 # deployment or test can tighten them in one place.
 LOGIN_FAILURE_LIMIT = 5
 LOGIN_FAILURE_WINDOW_SECONDS = 300
+# Bound the number of account/source keys retained by the in-process limiter.
+# A request can supply arbitrary usernames and sources, so this is a memory
+# safety limit rather than an authentication policy limit.
+LOGIN_FAILURE_MAX_KEYS = 4096
 
 
 class SecurityHeaders:
@@ -35,6 +39,12 @@ class SecurityHeaders:
         (b'x-content-type-options', b'nosniff'),
         (b'x-frame-options', b'DENY'),
         (b'referrer-policy', b'no-referrer'),
+        # Vite's production shell uses same-origin module/CSS assets.  Inline
+        # styles are retained for the existing React component styles while
+        # executable scripts remain same-origin only.
+        (b'content-security-policy', b"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http: https: ws: wss:"),
+        (b'permissions-policy', b'camera=(), microphone=(), geolocation=(), usb=()'),
+        (b'cross-origin-opener-policy', b'same-origin'),
     )
 
     def __init__(self, app):
@@ -87,6 +97,7 @@ class PrivateAuth:
         key = (username.lower(), source or '')
         now = time.monotonic()
         with self.login_lock:
+            self._prune_login_failures(now)
             attempts = [at for at in self.login_failures.get(key, ())
                         if now - at < LOGIN_FAILURE_WINDOW_SECONDS]
             if attempts:
@@ -98,11 +109,33 @@ class PrivateAuth:
     def record_login_failure(self, username: str, source: str) -> None:
         key = (username.lower(), source or '')
         with self.login_lock:
-            self.login_failures.setdefault(key, []).append(time.monotonic())
+            now = time.monotonic()
+            self._prune_login_failures(now)
+            self.login_failures.setdefault(key, []).append(now)
+            self._trim_login_failures()
 
     def clear_login_failures(self, username: str, source: str) -> None:
         with self.login_lock:
             self.login_failures.pop((username.lower(), source or ''), None)
+
+    def _prune_login_failures(self, now: float) -> None:
+        """Drop expired keys before every limiter operation."""
+        for key, attempts in tuple(self.login_failures.items()):
+            recent = [at for at in attempts if now - at < LOGIN_FAILURE_WINDOW_SECONDS]
+            if recent:
+                self.login_failures[key] = recent
+            else:
+                self.login_failures.pop(key, None)
+
+    def _trim_login_failures(self) -> None:
+        """Keep only the newest account/source keys under the memory cap."""
+        limit = max(0, int(LOGIN_FAILURE_MAX_KEYS))
+        overflow = len(self.login_failures) - limit
+        if overflow <= 0:
+            return
+        oldest = sorted(self.login_failures.items(), key=lambda item: item[1][-1] if item[1] else float('-inf'))[:overflow]
+        for key, _ in oldest:
+            self.login_failures.pop(key, None)
 
     def authenticate(self, request):
         authorization = request.headers.get('authorization')
