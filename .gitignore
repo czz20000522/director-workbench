@@ -29,6 +29,7 @@
 !/backend/routers/plan_editing.py
 !/backend/routers/private_series.py
 !/backend/routers/project_catalog.py
+!/backend/routers/project_transfer.py
 !/contracts/
 /contracts/*
 !/docs/
