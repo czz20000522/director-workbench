@@ -71,6 +71,7 @@ class TaskScheduler:
         self._wake = threading.Event()
         self._thread: threading.Thread | None = None
         self._thread_factory = threading.Thread
+        self._tick_lock = threading.Lock()
 
     def _rows(self, connection) -> list[dict[str, Any]]:
         # Batch rows share a timestamp and UUIDs have no sequence meaning.
@@ -202,78 +203,111 @@ class TaskScheduler:
         return ordered
 
     def tick(self, *, threaded: bool = True) -> list[str]:
-        claimed = []
+        with self._tick_lock:
+            return self._tick_once(threaded=threaded)
+
+    def _tick_once(self, *, threaded: bool) -> list[str]:
+        """Claim under the admission lock; run callbacks and threads outside it."""
+        waits: list[tuple[list[dict[str, Any]], Any, bool]] = []
+        candidates: dict[str, list[dict[str, Any]]] = {"gpu": [], "cpu": []}
         with self.admission_lock:
             with self.db_lock, self.connect() as connection:
                 self._meta(connection)
                 tasks = self._rows(connection)
-                last = {kind: self._ordered(connection, tasks, kind) for kind in ("gpu", "cpu")}
+                ordered = {kind: self._ordered(connection, tasks, kind) for kind in ("gpu", "cpu")}
                 connection.commit()
             for kind in ("gpu", "cpu"):
                 occupied_ids = {task["id"] for task in tasks if resource(task) == kind and task["status"] not in WAITING | TERMINAL}
                 occupied_ids.update(task_id for task_id, value in self._active.items() if value == kind)
                 slots = (1 if kind == "gpu" else self.cpu_workers) - len(occupied_ids)
                 if slots <= 0:
-                    self._record_wait(last[kind], "waiting_reconciliation" if any(task["status"] == "needs_reconcile" and resource(task) == kind for task in tasks) else "waiting_execution_slot")
+                    waits.append((ordered[kind], "waiting_reconciliation" if any(task["status"] == "needs_reconcile" and resource(task) == kind for task in tasks) else "waiting_execution_slot", False))
                     continue
-                if kind == "gpu" and last[kind]:
-                    try:
-                        reason = self.resource_reason()
-                    except Exception:
-                        reason = "resource_status_unknown"
-                    if reason:
-                        self._record_wait(last[kind], reason)
-                        continue
-                seen = set()
-                for task in last[kind]:
-                    if slots <= 0:
-                        break
+                seen: set[str] = set()
+                for task in ordered[kind]:
                     user = owner(task)
                     if user in seen:
-                        continue  # Preserve each user's FIFO even when their head is blocked.
+                        continue
                     seen.add(user)
                     reason, stop = self._dependency_reason(task, tasks)
                     if reason:
-                        self._record_wait([task], reason, stop=stop)
+                        waits.append(([task], reason, stop))
                         continue
-                    try:
-                        reason = self.revalidate(task)
-                    except Exception as exc:
-                        self._fail(task["id"], str(getattr(exc, "detail", None) or exc))
-                        continue
-                    if reason:
-                        self._record_wait([task], reason)
-                        continue
-                    with self.db_lock, self.connect() as connection:
+                    candidates[kind].append(task)
+
+        # Resource probes and revalidation may perform network or filesystem I/O.
+        for kind in ("gpu", "cpu"):
+            if not candidates[kind]:
+                continue
+            if kind == "gpu":
+                try:
+                    reason = self.resource_reason()
+                except Exception:
+                    reason = "resource_status_unknown"
+                if reason:
+                    waits.append((candidates[kind], reason, False))
+                    continue
+            for task in candidates[kind]:
+                try:
+                    reason = self.revalidate(task)
+                except Exception as exc:
+                    self._fail(task["id"], str(getattr(exc, "detail", None) or exc))
+                    continue
+                if reason:
+                    waits.append(([task], reason, False))
+                    continue
+                candidates[kind] = [item for item in candidates[kind] if item["id"] != task["id"]]
+                candidates.setdefault(kind + "_validated", []).append(task)
+
+        claimed: list[dict[str, Any]] = []
+        with self.admission_lock:
+            with self.db_lock, self.connect() as connection:
+                current_tasks = self._rows(connection)
+                by_id = {task["id"]: task for task in current_tasks}
+                for kind in ("gpu", "cpu"):
+                    validated = candidates.get(kind + "_validated", [])
+                    occupied_ids = {task["id"] for task in current_tasks if resource(task) == kind and task["status"] not in WAITING | TERMINAL}
+                    occupied_ids.update(task_id for task_id, value in self._active.items() if value == kind)
+                    slots = (1 if kind == "gpu" else self.cpu_workers) - len(occupied_ids)
+                    for candidate in validated:
+                        if slots <= 0:
+                            break
+                        task = by_id.get(candidate["id"])
+                        if not task or task["status"] not in WAITING or task.get("stop_requested"):
+                            continue
+                        dependency_reason, stop = self._dependency_reason(task, current_tasks)
+                        if dependency_reason:
+                            waits.append(([task], dependency_reason, stop))
+                            continue
                         count = connection.execute("UPDATE tasks SET status='preparing',updated_at=?,error=NULL WHERE id=? AND status IN ('scheduler_waiting','batch_waiting') AND stop_requested=0", (self.clock(), task["id"])).rowcount
-                        if count:
-                            self._set_meta(connection, "last_" + kind + "_user", user)
-                            self._set_meta(connection, "reason:" + task["id"], "dispatching")
-                        connection.commit()
-                    if not count:
-                        continue
-                    task["status"] = "preparing"
-                    self._active[task["id"]] = kind
-                    if kind == "gpu":
-                        self.note_activity()
-                    claimed.append(task)
-                    slots -= 1
-            for task in claimed:
-                if threaded:
-                    runner = None
-                    try:
-                        runner = self._thread_factory(target=self._run, args=(task,), name="task-" + task["id"], daemon=True)
-                        runner.start()
-                    except Exception as exc:
-                        if runner is None or runner.ident is None:
-                            # No executor thread started, so no submission is possible.
-                            self._active.pop(task["id"], None)
-                            self._fail(task["id"], "Executor could not start: " + str(exc))
-                            self.wake()
-                        else:
-                            # An unusual start failure after actual launch must retain
-                            # the slot; the executor's receipt still controls completion.
-                            log.exception("Executor thread startup uncertain for %s", task["id"])
+                        if not count:
+                            continue
+                        self._set_meta(connection, "last_" + kind + "_user", owner(task))
+                        self._set_meta(connection, "reason:" + task["id"], "dispatching")
+                        task["status"] = "preparing"
+                        self._active[task["id"]] = kind
+                        if kind == "gpu":
+                            self.note_activity()
+                        claimed.append(task)
+                        slots -= 1
+                connection.commit()
+
+        for task_group, reason, stop in waits:
+            self._record_wait(task_group, reason, stop=stop)
+        for task in claimed:
+            if not threaded:
+                continue
+            runner = None
+            try:
+                runner = self._thread_factory(target=self._run, args=(task,), name="task-" + task["id"], daemon=True)
+                runner.start()
+            except Exception as exc:
+                if runner is None or runner.ident is None:
+                    self._active.pop(task["id"], None)
+                    self._fail(task["id"], "Executor could not start: " + str(exc))
+                    self.wake()
+                else:
+                    log.exception("Executor thread startup uncertain for %s", task["id"])
         if not threaded:
             for task in claimed:
                 self._run(task)
