@@ -26,3 +26,16 @@ markers = [
     "host_tool: needs this machine's FFmpeg/ASR interpreter/ComfyUI installation",
     "windows: relies on Windows-only system tools, junctions or frozen host paths",
 ]
+
+[tool.coverage.run]
+source = ["backend", "mcp_server"]
+omit = [
+    "*/__init__.py",
+    "*/__main__.py",
+]
+
+[tool.coverage.report]
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]

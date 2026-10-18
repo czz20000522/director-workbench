@@ -2,3 +2,4 @@
 # Pinned exactly so a newer ruff cannot silently change the gate. Runtime dependencies
 # stay in requirements.txt so a production host is not asked to install lint tooling.
 ruff==0.14.4
+pytest-cov==6.1.1
