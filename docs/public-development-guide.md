@@ -8,18 +8,21 @@
 
 | 位置 | 职责 |
 | --- | --- |
-| [src](../src) | React 页面、当前会话请求、计划与候选展示 |
+| [src](../src) | React 页面、当前会话请求、计划与候选展示；`src/api/client.ts` 统一部分面板的 JSON 请求、错误映射、超时/取消和媒体 URL，重型面板在 `App.tsx` 中按需加载 |
 | [backend/private_app.py](../backend/private_app.py) | 认证服务入口，校验本机账号、管理员和存储配置 |
-| [backend/app.py](../backend/app.py) | HTTP 业务、作品登记、计划版本、任务/回执和队列接线 |
+| [backend/app.py](../backend/app.py) | 工作台级配置、共享业务函数、任务调度初始化，以及按既有顺序注册领域路由；保留兼容导出和 `backend.<name>` monkeypatch 语义 |
+| [backend/routers](../backend/routers) | 15 个领域路由模块：`private_series`、`project_catalog`、`plan_editing`、`material_library`、`reverse_analysis`、`project_transfer`、`workbench_status`、`task_entry`、`task_media`、`batch_assembly`、`gpu_idle`、`queue_scheduler`、`task_control`、`events_media`；`__init__` 只提供包说明 |
 | [backend/private_auth.py](../backend/private_auth.py)、[private_workspaces.py](../backend/private_workspaces.py) | Cookie/Bearer 会话、账号与作品归属 |
 | [backend/task_scheduler.py](../backend/task_scheduler.py) | 同一服务进程的持久任务调度 |
 | [backend/remote_mcp.py](../backend/remote_mcp.py) | 远程 MCP 入口，只开放固定的创作工具子集 |
 | [mcp_server/server.py](../mcp_server/server.py) | HTTP 业务的 MCP 薄适配，不另建执行队列 |
 | [tools](../tools)、[共享制作脚本](../.agents/skills/aigc-video-production/scripts) | 后端受控执行器；外部客户端通过工作台入口使用 |
 | [storage_layout.py](../production/storage_layout.py) | 读取本机存储根；路径配置不由客户端传入 |
-| [tests](../tests)、[contracts](../contracts) | 隔离回归和制作输入合同 |
+| [tests](../tests)、[contracts](../contracts) | 隔离回归和制作输入合同；`tests/conftest.py` 暴露共享 pytest fixtures，`tests/support.py` 集中放置接收 client/project 的纯 helper |
 
 UI、HTTP 和 MCP 共用后端授权与任务记录。任务先冻结输入和归属，再进入执行器；产物登记为候选，审核和采用需显式操作。技术报告、任务成功或页面播放回执均不能替代人的内容验收。
+
+路由拆分只改变代码组织，不改变公开接口、幂等键、`needs_reconcile`、`operationId`、任务冻结或路由注册顺序。新增领域接口应在对应 `backend/routers/` 模块中实现，并通过 `app.py` 的既有注册位置接入；需要被旧测试或其他模块 monkeypatch 的名称继续由 `backend.app` 重新导出。
 
 `tools` 中也保留早期开发辅助脚本；部分默认工作流不随仓库分发，须先检查参数并提供实际输入，不能将无参数脚本当作新设备制作入口。正式创作由 UI/API/MCP 负责登记与执行。
 
@@ -70,7 +73,15 @@ npm run build
 
 `python` 应由维护者选择已安装的基础 Python；既有 `.venv` 不需要重建。前端构建执行 TypeScript 检查并输出 `dist`，不代表后端或 GPU 生成通过。Python 依赖已包含 MCP；[requirements-mcp.txt](../requirements-mcp.txt)提供同一依赖入口。`requirements-dev.txt` 只装 lint 工具，不进入生产环境。
 
-完整离线回归用 `run_tests.ps1 -Check`、`run_tests.ps1`。统一入口调用 [run_project_tests.py](../tools/run_project_tests.py)：核心组在工作台 `.venv` 执行 pytest；AuK 组在 `ComfyUI-Shared/tools/AuK/.venv` 执行声音执行器 unittest。缺少 AuK 环境时完整检查失败，不能把核心组通过报告为完整通过，也不向 API 或 ComfyUI 基础环境安装模型依赖。报告和临时文件保存在隔离的 `ComfyUI-Workspace/runtime` 下，不提交。
+完整离线回归用 `run_tests.ps1 -Check`、`run_tests.ps1`。统一入口调用 [run_project_tests.py](../tools/run_project_tests.py)：`all`、`core`、`auk`、`browser` 是可选 suite；核心组在工作台 `.venv` 执行 pytest，AuK 组在 `ComfyUI-Shared/tools/AuK/.venv` 执行声音执行器 unittest。缺少 AuK 环境时完整检查失败，不能把核心组通过报告为完整通过，也不向 API 或 ComfyUI 基础环境安装模型依赖。报告和临时文件保存在隔离的 `ComfyUI-Workspace/runtime` 下，不提交。
+
+本地没有单独名为 `fast` 的 PowerShell suite；fast core 是 CI 使用的 pytest 标记过滤。需要快速复现公开后端层时可直接运行：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests tools/test_build_video_finish_workflow.py `
+  --ignore=tests/test_generate_auk_flash.py -q `
+  --basetemp <隔离临时目录> -m "not host_tool and not slow and not windows"
+```
 
 优先运行与修改相关的回归，再按交付范围执行完整入口。离线回归、在线业务、真实 GPU 输出与跨设备访问分别记录。
 
@@ -95,9 +106,9 @@ npm run build
 
 ### 公开仓库的 CI 门禁
 
-[public-source.yml](../.github/workflows/public-source.yml) 在 PR 与 `main` 上执行四类门禁：公开源码白名单与敏感模式、Python 语法与文档相对链接、Python lint（`ruff` 的非侵入规则：语法错误、未定义名称、断言误用），以及前端类型检查与生产构建（`npm ci && npm run build`）。
+[public-source.yml](../.github/workflows/public-source.yml) 在 PR 与 `main` 上执行四个 job：`public-source` 检查公开源码白名单、敏感模式、Python 语法和文档相对链接；`python-lint` 运行 `ruff` 的非侵入规则（语法错误、未定义名称、断言误用）；`frontend-build` 执行 `npm ci && npm run build`；`core-tests` 在 Windows runner 上运行 fast core。
 
-CI 另在 Windows runner 上运行 fast core 层：`pytest -m "not host_tool and not slow and not windows"`，覆盖不依赖本机 FFmpeg、ASR 解释器、ComfyUI 安装或 PowerShell/junction 的用例。[pyproject.toml](../pyproject.toml) 定义 `slow`、`host_tool`、`windows` 三个标记；本地 `run_tests.ps1` 仍运行全部用例，标记只用于筛选，不改变断言或跳过结果。
+CI 的 `core-tests` 使用 `pytest -m "not host_tool and not slow and not windows"`，覆盖不依赖本机 FFmpeg、ASR 解释器、ComfyUI 安装或 PowerShell/junction 的用例。[pyproject.toml](../pyproject.toml) 定义 `slow`、`host_tool`、`windows` 三个标记；本地 `run_tests.ps1 -Suite core` 仍运行完整核心组，标记只用于 CI 筛选，不改变断言或跳过结果。
 
 CI 不安装 ComfyUI、模型或宿主媒体工具，也不运行 AuK 与浏览器验收。CI 通过代表公开边界、前端构建与 fast 后端回归通过，不代表完整主机回归、在线业务或真实生成通过；完整回归仍按本机入口执行。
 
