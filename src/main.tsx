@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import LoginGate from './LoginGate';
+import ErrorBoundary from './components/ErrorBoundary';
 import './styles.css';
 
 // Safari and older Chromium builds expose Web Crypto but do not yet provide
@@ -44,4 +45,4 @@ function WorkbenchEntry() {
   return privateMode ? <LoginGate /> : <App />;
 }
 
-ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><WorkbenchEntry /></React.StrictMode>);
+ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><ErrorBoundary><WorkbenchEntry /></ErrorBoundary></React.StrictMode>);

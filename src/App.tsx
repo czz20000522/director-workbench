@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, InputHTMLAttributes, MouseEvent as ReactMouseEvent } from 'react';
 import { ArrowDownToLine, ArrowUpRight, Check, ChevronLeft, ChevronRight, Film, FolderOpen, Image as ImageIcon, Layers3, Maximize2, Music2, Pause, Play, Radio, Sparkles, Square, Workflow, X } from 'lucide-react';
 import { assets as fallbackAssets, labels, pipelineStages as defaultPipelineStages, range, type Asset, type Kind, type PipelineInput, type PipelineStage, type Variant } from './data';
@@ -236,8 +236,8 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const creatingSegment = useRef(false);
   const [planAssembly, setPlanAssembly] = useState<PlanAssembly | null>(null);
   const creativeStorageKey = `director-workbench:${project?.id ?? 'loading'}:creative:v1`;
-  const baseAssets = project ? (Array.isArray(project.assets) ? project.assets.filter(isCreativeMaterial).map(normalizeManifestAsset) : []) : privateMode ? [] : fallbackAssets;
-  const diagnosticPaths = diagnosticMaterialPaths(project);
+  const baseAssets = useMemo(() => project ? (Array.isArray(project.assets) ? project.assets.filter(isCreativeMaterial).map(normalizeManifestAsset) : []) : privateMode ? [] : fallbackAssets, [privateMode, project]);
+  const diagnosticPaths = useMemo(() => diagnosticMaterialPaths(project), [project]);
   const isDiagnosticPath = (path?: string | null) => !!path && diagnosticPaths.some(item => materialPathKey(item) === materialPathKey(path));
   const emptyAsset: Asset = { id: 'empty-project', kind, title: '尚未登记素材', subtitle: '先从上方登记资源或创建分段', ready: false, intent: '这个项目还没有可预览的素材。先选择文件、登记制作步骤或添加分段计划。', prompt: '', origin: '空白项目', specs: '', workflow: '待登记' };
   const mediaRef = useRef<HTMLMediaElement | null>(null);
@@ -251,7 +251,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const advancing = useRef(false);
   const refreshedPlanTaskRef = useRef('');
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const planVideoAssets: Asset[] = planSegments.map(segment => {
+  const planVideoAssets: Asset[] = useMemo(() => planSegments.map(segment => {
     const base = baseAssets.find(asset => asset.id === segment.id);
     const firstFrame = mediaUrl(segment.keyframes?.first);
     const videoSource = mediaUrl(segment.video?.path);
@@ -262,8 +262,8 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
       start: segment.start_seconds, end: segment.end_seconds, ready: Boolean(videoSource) || Boolean(base?.ready), image: firstFrame ?? base?.image, lastImage: mediaUrl(segment.keyframes?.last),
       sources: videoSource ? { A: videoSource, ...((reworkSource ?? finishSource) ? { B: reworkSource ?? finishSource } : {}) } : base?.sources, intent: segment.performance, prompt: segment.prompt ?? base?.prompt ?? '', origin: segment.video?.path ? `ComfyUI history 成功回执 · ${segment.comfyui_task_id ?? '任务 ID 未登记'}${segment.video.rework_candidate?.prompt_id ? ` · 重做样片 ${segment.video.rework_candidate.prompt_id}` : segment.video.finish_review?.prompt_id ? ` · 精细化候选 ${segment.video.finish_review.prompt_id}` : ''}` : (segment.keyframes?.first ? '生成前分段计划 · 已登记首帧' : '分镜草案 · 待准备本作关键帧'), specs: `${segment.duration_seconds} 秒 · ${segment.status}${segment.video?.rework_candidate?.specs ? ` · B ${segment.video.rework_candidate.specs}` : segment.video?.finish_review?.specs ? ` · B ${segment.video.finish_review.specs}` : ''}`, workflow: [segment.workflow ?? base?.workflow ?? '待登记', segment.video?.rework_candidate?.workflow ? `重做 ${segment.video.rework_candidate.workflow}` : '', segment.video?.rework_candidate?.ui_workflow ? `画布 ${segment.video.rework_candidate.ui_workflow}` : '', segment.video?.finish_review?.workflow ? `精细化 ${segment.video.finish_review.workflow}` : '', segment.keyframes?.first ? `首帧 ${segment.keyframes.first}` : '', segment.keyframes?.last ? `尾帧 ${segment.keyframes.last}` : '', segment.audio?.delivery_master ? `交付音频 ${segment.audio.delivery_master}` : '', segment.audio?.guide ? `引导音频 ${segment.audio.guide}` : '', segment.comfyui_task_id ? `ComfyUI 任务 ${segment.comfyui_task_id}` : ''].filter(Boolean).join(' · '),
     };
-  });
-  const planAudioAssets: Asset[] = planSegments.flatMap(segment => {
+  }), [baseAssets, planSegments]);
+  const planAudioAssets: Asset[] = useMemo(() => planSegments.flatMap(segment => {
     const audioPath = segment.audio?.delivery_master ?? segment.audio?.guide;
     const audioSource = mediaUrl(audioPath);
     if (!audioSource) return [];
@@ -273,8 +273,8 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
       start: 0, end: segment.duration_seconds, ready: true, sources: { A: audioSource }, intent: segment.performance,
       prompt: segment.prompt ?? '', origin: audioPath ?? '', specs: '44.1 kHz · 分段音频', workflow: segment.workflow ?? '待登记',
     }];
-  });
-  const planImageAssets: Asset[] = planSegments.flatMap(segment => {
+  }), [planSegments]);
+  const planImageAssets: Asset[] = useMemo(() => planSegments.flatMap(segment => {
     const image = mediaUrl(segment.keyframes?.first);
     if (!image || isDiagnosticPath(segment.keyframes?.first)) return [];
     return [{
@@ -282,7 +282,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
       ready: true, image, lastImage: mediaUrl(segment.keyframes?.last), intent: segment.performance,
       prompt: segment.prompt ?? '', origin: segment.keyframes?.first ?? '', specs: '首帧候选', workflow: segment.workflow ?? '待登记',
     }];
-  });
+  }), [diagnosticPaths, planSegments]);
   const assembly = planAssembly;
   const assemblyIsStale = assembly?.status === 'stale';
   const assemblySource = mediaUrl(assembly?.output);
@@ -296,12 +296,12 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
     specs: `${assembly.duration_seconds?.toFixed(2) ?? '—'} 秒 · 分辨率与编码待核验`,
     workflow: assembly.workflow ?? '待登记',
   } : null;
-  const derivedMaterialAssets = [...planAudioAssets, ...planImageAssets];
-  const remainingBaseAssets = baseAssets.filter(asset => !planVideoAssets.some(shot => asset.kind === 'video' && shot.id === asset.id) && !derivedMaterialAssets.some(derived => derived.kind === asset.kind && derived.id === asset.id));
-  const library = [...planVideoAssets, ...(assemblyAsset ? [assemblyAsset] : []), ...derivedMaterialAssets, ...remainingBaseAssets];
-  const list = kind === 'video' && assemblyAsset?.id === selected
+  const derivedMaterialAssets = useMemo(() => [...planAudioAssets, ...planImageAssets], [planAudioAssets, planImageAssets]);
+  const remainingBaseAssets = useMemo(() => baseAssets.filter(asset => !planVideoAssets.some(shot => asset.kind === 'video' && shot.id === asset.id) && !derivedMaterialAssets.some(derived => derived.kind === asset.kind && derived.id === asset.id)), [baseAssets, derivedMaterialAssets, planVideoAssets]);
+  const library = useMemo(() => [...planVideoAssets, ...(assemblyAsset ? [assemblyAsset] : []), ...derivedMaterialAssets, ...remainingBaseAssets], [assemblyAsset, derivedMaterialAssets, planVideoAssets, remainingBaseAssets]);
+  const list = useMemo(() => kind === 'video' && assemblyAsset?.id === selected
     ? [assemblyAsset]
-    : library.filter(asset => asset.kind === kind && (kind !== 'video' || asset.id !== assemblyAsset?.id));
+    : library.filter(asset => asset.kind === kind && (kind !== 'video' || asset.id !== assemblyAsset?.id)), [assemblyAsset, kind, library, selected]);
   const current = list.find(asset => asset.id === selected) ?? list[0] ?? emptyAsset;
   useEffect(() => {
     if (!pendingTreeItem || pendingTreeItem.projectId !== project?.id) return;
@@ -334,7 +334,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const currentReadiness = savedReadiness?.segments.find(segment => segment.asset_id === current.id);
   const isAssemblyAsset = Boolean(project?.assembly_asset_id && current.id === project.assembly_asset_id);
   const isProjectVideoMaterial = kind === 'video' && !currentPlanSegment && !isAssemblyAsset && current.id !== 'empty-project';
-  const focusList = kind === 'video' ? (isProjectVideoMaterial || isAssemblyAsset ? [current] : planVideoAssets) : list;
+  const focusList = useMemo(() => kind === 'video' ? (isProjectVideoMaterial || isAssemblyAsset ? [current] : planVideoAssets) : list, [current, isAssemblyAsset, isProjectVideoMaterial, kind, list, planVideoAssets]);
   const focusIndex = focusList.findIndex(asset => asset.id === current.id);
   const editableMaterial = !currentPlanSegment && !isAssemblyAsset ? project?.assets?.find(asset => asset.id === current.id && asset.kind === kind) : undefined;
   useEffect(() => { setMaterialTitle(editableMaterial ? String(editableMaterial.title ?? '') : ''); }, [project?.id, current.id, editableMaterial?.title]);
@@ -343,7 +343,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const materialCandidateRef = current.sources?.[variant] ?? (kind === 'image' && variant === 'A' ? current.image : undefined);
   const canReviewAsset = canReviewCurrent || ((kind === 'image' || kind === 'audio') && current.ready && Boolean(materialCandidateRef));
   const currentExecutable = kind === 'video' && !isAssemblyAsset && Boolean(currentReadiness?.stage_id);
-  const timelineAssets = kind === 'video' ? planVideoAssets : list;
+  const timelineAssets = useMemo(() => kind === 'video' ? planVideoAssets : list, [kind, list, planVideoAssets]);
   const currentAudioPath = currentPlanSegment?.audio?.delivery_master ?? currentPlanSegment?.audio?.guide;
   const currentAudioSource = currentAudioPath
     ? mediaUrl(currentAudioPath)
@@ -365,13 +365,13 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const currentFinishReview = reviewLabel(currentFinishRecord?.status);
   const currentPrompt = drafts[current.id]?.prompt ?? currentPlanSegment?.prompt ?? currentTaskTemplate?.prompt ?? current.prompt;
   const currentNote = drafts[current.id]?.note ?? (isAssemblyAsset ? currentFinalRecord?.note : currentSampleRecord?.note) ?? currentPlanSegment?.visual_review?.reason ?? '';
-  const currentPipeline = pipeline.filter(stage => isAssemblyAsset
+  const currentPipeline = useMemo(() => pipeline.filter(stage => isAssemblyAsset
     ? stage.id === 'assembly'
     : kind === 'audio'
       ? stage.id.includes('audio') || stage.id.includes('voice')
       : kind === 'image'
         ? stage.id.includes('frame') || stage.outputs.some(output => output.includes('图') || output.includes('帧'))
-        : !stage.id.includes('assembly') && !stage.id.includes('audio-master'));
+        : !stage.id.includes('assembly') && !stage.id.includes('audio-master')), [isAssemblyAsset, kind, pipeline]);
   const currentGenerationStage = kind === 'video' && !isAssemblyAsset && !isProjectVideoMaterial
     ? currentPipeline.find(stage => stage.id === currentReadiness?.stage_id) ?? selectVideoGenerationStage(currentPipeline, currentPlanSegment?.workflow || currentTaskTemplate?.workflow || undefined, project?.production_preset?.workflow) : undefined;
   const activePipelineStage = currentPipeline.find(stage => stage.id === pipelineStageId) ?? currentGenerationStage ?? currentPipeline[0];

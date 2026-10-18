@@ -3,7 +3,7 @@
  * Each hook owns one concern that used to live inline in `App.tsx`: the persisted sidebar
  * width and its drag handlers, the per-project draft store, and the engine status poll.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { loadDrafts } from './helpers';
 import type { Draft, Drafts } from './types';
@@ -47,24 +47,66 @@ export function useDrafts(projectId: string | undefined, options: DraftOptions) 
   const callbacks = useRef(options);
   callbacks.current = options;
   const storageKey = DRAFTS_KEY(projectId ?? 'loading');
+  const hydratedKey = useRef<string | null>(null);
+  const pendingDrafts = useRef<Drafts | null>(null);
+  const timer = useRef<number | null>(null);
 
-  useEffect(() => {
-    if (!projectId) return;
+  const flush = useCallback(() => {
+    if (!projectId || hydratedKey.current !== storageKey || pendingDrafts.current === null) return;
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
     try {
-      localStorage.setItem(storageKey, JSON.stringify(drafts));
+      localStorage.setItem(storageKey, JSON.stringify(pendingDrafts.current));
+      pendingDrafts.current = null;
       callbacks.current.onStorageError(false);
     } catch {
       callbacks.current.onStorageError(true);
     }
-  }, [drafts, projectId, storageKey]);
+  }, [projectId, storageKey]);
+
+  useEffect(() => {
+    if (!projectId || hydratedKey.current !== storageKey || pendingDrafts.current === null) return;
+    if (timer.current !== null) window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(flush, 400);
+    return () => {
+      if (timer.current !== null) {
+        window.clearTimeout(timer.current);
+        timer.current = null;
+      }
+    };
+  }, [drafts, flush, projectId, storageKey]);
+
+  useEffect(() => {
+    const flushOnExit = () => flush();
+    const flushWhenHidden = () => { if (document.visibilityState === 'hidden') flush(); };
+    window.addEventListener('pagehide', flushOnExit);
+    document.addEventListener('visibilitychange', flushWhenHidden);
+    return () => {
+      window.removeEventListener('pagehide', flushOnExit);
+      document.removeEventListener('visibilitychange', flushWhenHidden);
+      flush();
+    };
+  }, [flush]);
 
   function loadDraftsForProject(id: string) {
-    setDrafts(loadDrafts(DRAFTS_KEY(id)));
+    const key = DRAFTS_KEY(id);
+    if (hydratedKey.current !== key) {
+      if (timer.current !== null) window.clearTimeout(timer.current);
+      pendingDrafts.current = null;
+      hydratedKey.current = key;
+      setDrafts(loadDrafts(key));
+    }
   }
 
   function updateDraft(id: string, patch: Draft) {
     if ('prompt' in patch) callbacks.current.onPromptChange();
-    setDrafts(previous => ({ ...previous, [id]: { ...previous[id], ...patch } }));
+    setDrafts(previous => {
+      const next = { ...previous, [id]: { ...previous[id], ...patch } };
+      pendingDrafts.current = next;
+      return next;
+    });
   }
 
   /** Drop the local draft after a restored candidate replaces the edited segment. */
@@ -72,12 +114,14 @@ export function useDrafts(projectId: string | undefined, options: DraftOptions) 
     setDrafts(previous => {
       const next = { ...previous };
       delete next[id];
+      pendingDrafts.current = next;
       return next;
     });
   }
 
   /** A newly created project starts without any carried-over draft. */
   function resetDrafts() {
+    pendingDrafts.current = {};
     setDrafts({});
   }
 
