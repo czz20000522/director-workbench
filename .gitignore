@@ -34,6 +34,7 @@
 !/backend/routers/task_entry.py
 !/backend/routers/task_media.py
 !/backend/routers/batch_assembly.py
+!/backend/routers/task_control.py
 !/contracts/
 /contracts/*
 !/docs/
