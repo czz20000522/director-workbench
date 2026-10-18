@@ -124,6 +124,23 @@ def test_workflow_monitor_observes_running_then_records_original_error(task_db,m
     assert calls.count('/prompt')==1
 
 
+def test_workflow_monitor_timeout_reconciles_without_logging_prompt(task_db, monkeypatch, caplog):
+    workflow = task_db / 'timeout-graph.json'
+    workflow.write_text('{}')
+    payload = {'workflow': str(workflow), 'project_id': 'test', 'asset_id': 'S01', 'prompt': 'secret prompt'}
+    ticks = iter((0.0, 0.01, 0.02, 0.2))
+    monkeypatch.setattr(backend.time, 'monotonic', lambda: next(ticks, 0.2))
+    monkeypatch.setattr(backend, 'TASK_EXECUTION_TIMEOUT_SECONDS', 0.1)
+    monkeypatch.setattr(backend, 'sample_resources', lambda _: None)
+    monkeypatch.setattr(backend, 'request_json', lambda path, body=None: {'prompt_id': 'ours'} if path == '/prompt' else {'queue_running': [], 'queue_pending': []} if path == '/queue' else {})
+    backend.run_workflow_submission('task', payload)
+    task = backend.get_task('task')
+    assert task['status'] == 'needs_reconcile'
+    assert '总超时' in task['error']
+    assert 'secret prompt' not in caplog.text
+    assert 'task_id' in caplog.text and 'project_id' in caplog.text
+
+
 def test_running_task_blocks_resource_release_and_batch_stop_reaches_it(task_db):
     from fastapi import HTTPException
     with backend.db() as connection:

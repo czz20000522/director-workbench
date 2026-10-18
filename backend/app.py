@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import math
 import os
@@ -35,7 +36,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictInt, field_validator, model_validator
 from . import production_presets, background_jobs, speech, keyframes, audio_edit_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, guide, readiness, task_scheduler, creative_inspection, shot_creation
-from . import output_resolution, enhancement
+from . import output_resolution, enhancement, task_store
 import av
 import paths
 from .private_auth import SecurityHeaders, current_principal
@@ -83,12 +84,22 @@ from .workbench_config import (
     PIPELINE_INPUT_OVERRIDES,
     SEGMENT_GENERATION_FIELDS,
     MATERIAL_EXTENSIONS,
+    TASK_EXECUTION_TIMEOUT_SECONDS,
+    TASK_MONITOR_POLL_SECONDS,
 )
 
 PRIVATE_WORKSPACES = None
 
 ASSEMBLY_BUILDER = PROJECT / "tools" / "build_assembly_workflow.py"
 REFERENCE_DECOMPOSE_ACTIVE = 0
+
+_PROJECT_CACHE_LOCK = threading.RLock()
+_PROJECT_STATE_CACHE: dict[tuple[str, str], tuple[tuple[Any, ...], dict[str, Any]]] = {}
+
+
+def project_cache_scope() -> str:
+    principal = current_principal.get()
+    return str(principal.identity.username) if principal is not None else "__legacy__"
 
 
 def catalog_transaction(function):
@@ -620,41 +631,7 @@ app.add_middleware(SecurityHeaders)
 
 def db() -> sqlite3.Connection:
     RUNTIME.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(DB_PATH, check_same_thread=False)
-    connection.row_factory = sqlite3.Row
-    connection.execute("""CREATE TABLE IF NOT EXISTS tasks (
-        id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, status TEXT NOT NULL,
-        prompt_id TEXT, created_at REAL NOT NULL, updated_at REAL NOT NULL,
-        stop_requested INTEGER NOT NULL DEFAULT 0, payload TEXT NOT NULL,
-        result TEXT, error TEXT, batch_id TEXT, sequence INTEGER, project_id TEXT
-    )""")
-    # Existing pilot databases predate batch metadata; keep them readable.
-    for column, declaration in (("batch_id", "TEXT"), ("sequence", "INTEGER"), ("project_id", "TEXT")):
-        try:
-            connection.execute(f"ALTER TABLE tasks ADD COLUMN {column} {declaration}")
-        except sqlite3.OperationalError:
-            pass
-    connection.execute("""CREATE TABLE IF NOT EXISTS resource_samples (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT, timestamp REAL NOT NULL,
-        gpu_free_mib INTEGER, gpu_total_mib INTEGER, ram_free_gib REAL,
-        queue_running INTEGER, queue_pending INTEGER
-    )""")
-    connection.execute("""CREATE TABLE IF NOT EXISTS project_records (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id TEXT NOT NULL,
-        asset_id TEXT NOT NULL DEFAULT '',
-        record_type TEXT NOT NULL,
-        revision INTEGER NOT NULL,
-        source TEXT NOT NULL,
-        created_at REAL NOT NULL,
-        data TEXT NOT NULL,
-        UNIQUE(project_id, asset_id, record_type, revision)
-    )""")
-    connection.execute("CREATE INDEX IF NOT EXISTS idx_tasks_project_asset ON tasks(project_id, asset_id, created_at DESC)")
-    connection.execute("CREATE INDEX IF NOT EXISTS idx_records_project_type ON project_records(project_id, record_type, asset_id, revision DESC)")
-    connection.execute("CREATE TABLE IF NOT EXISTS user_settings (owner TEXT PRIMARY KEY, revision INTEGER NOT NULL, guide TEXT NOT NULL)")
-    connection.commit()
-    return connection
+    return task_store.configure(sqlite3.connect(DB_PATH, check_same_thread=False), DB_PATH)
 
 
 def request_json(path: str, payload: dict[str, Any] | None = None, timeout: float = 8) -> dict[str, Any]:
@@ -855,6 +832,30 @@ def project_records(project_id: str | None = None) -> list[dict[str, Any]]:
             (target_project,),
         ).fetchall()
     return [record_row(row) for row in rows]
+
+
+def project_cache_signature(project_id: str) -> tuple[Any, ...]:
+    """Return cheap revision tokens for project state and task queue reads."""
+    try:
+        manifest = load_project_manifest(project_id)
+        plan_path = resolve_registered_path(str(manifest.get("plan_path", "")))
+    except (RuntimeError, HTTPException, OSError, ValueError):
+        plan_path = PLAN_PATH if project_id == CURRENT_PROJECT_ID else Path("")
+    try:
+        stat = plan_path.stat()
+        plan_token = (stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        plan_token = (0, 0)
+    with DB_LOCK, db() as connection:
+        record = connection.execute(
+            "SELECT COALESCE(MAX(revision), 0), COUNT(*), COALESCE(MAX(id), 0) FROM project_records WHERE project_id=?",
+            (project_id,),
+        ).fetchone()
+        task = connection.execute(
+            "SELECT COALESCE(MAX(updated_at), 0), COUNT(*), COALESCE(MAX(rowid), 0) FROM tasks WHERE project_id=?",
+            (project_id,),
+        ).fetchone()
+    return (project_cache_scope(), str(project_id), *plan_token, *(record or (0, 0, 0)), *(task or (0, 0, 0)))
 
 
 def resolve_workflow_path(value: str | Path) -> Path:
@@ -1603,10 +1604,40 @@ def comfy_execution_error(payload: dict[str, Any], done: dict[str, Any]) -> str:
     return prefix
 
 
+class TaskExecutionTimeout(RuntimeError):
+    """The bounded monitor window expired before a terminal receipt arrived."""
+
+
+def _task_stage(payload: dict[str, Any]) -> str:
+    return str(payload.get("pipeline_stage_id") or payload.get("kind") or "generation")
+
+
+def _task_log(task_id: str, payload: dict[str, Any], phase: str, started: float, *, error_class: str | None = None) -> None:
+    record: dict[str, Any] = {
+        "task_id": str(task_id),
+        "project_id": str(payload.get("project_id") or ""),
+        "stage": _task_stage(payload),
+        "phase": phase,
+        "elapsed_seconds": round(max(0.0, time.monotonic() - started), 3),
+    }
+    if error_class:
+        record["error_class"] = error_class
+    logging.getLogger("uvicorn.error").info("task_monitor %s", json.dumps(record, ensure_ascii=False, sort_keys=True))
+
+
+def _check_task_timeout(task_id: str, payload: dict[str, Any], started: float) -> None:
+    if time.monotonic() - started >= max(0.1, float(TASK_EXECUTION_TIMEOUT_SECONDS)):
+        _task_log(task_id, payload, "timeout", started, error_class="TaskExecutionTimeout")
+        raise TaskExecutionTimeout("任务执行超过总超时限制，请核对 ComfyUI 回执")
+
+
 def run_submission(task_id: str, payload: dict[str, Any]) -> None:
     submission_attempted = False
     prompt_id = None
+    started = time.monotonic()
+    _task_log(task_id, payload, "started", started)
     try:
+        _check_task_timeout(task_id, payload, started)
         set_task(task_id, status="submitting")
         first = shared_path(payload["first_frame"])
         last = shared_path(payload["last_frame"])
@@ -1623,7 +1654,9 @@ def run_submission(task_id: str, payload: dict[str, Any]) -> None:
                    "--output-prefix", payload["output_prefix"]]
         recipe_path = str((payload.get("execution_snapshot") or {}).get("api_graph") or write_recipe_snapshot(payload, project_id=str(payload.get("project_id") or CURRENT_PROJECT_ID)))
         submission_attempted = True
-        result = subprocess.run(command, capture_output=True, text=True, cwd=RENDERER.parent, timeout=120, check=False)
+        _task_log(task_id, payload, "submitting", started)
+        remaining = max(0.1, float(TASK_EXECUTION_TIMEOUT_SECONDS) - (time.monotonic() - started))
+        result = subprocess.run(command, capture_output=True, text=True, cwd=RENDERER.parent, timeout=min(120, remaining), check=False)
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"h3_render exited {result.returncode}")
         submitted = None
@@ -1647,13 +1680,14 @@ def run_submission(task_id: str, payload: dict[str, Any]) -> None:
             raise RuntimeError(f"ComfyUI 未返回 prompt_id: {submitted}")
         set_task(task_id, status="queued", prompt_id=prompt_id, result=json.dumps({"submission": submitted, "recipe": recipe_path}, ensure_ascii=False))
         while True:
+            _check_task_timeout(task_id, payload, started)
             current = get_task(task_id)
             if not current:
                 return
             if current["stop_requested"]:
                 if advance_task_stop(current, str(prompt_id)):
                     return
-                time.sleep(2)
+                time.sleep(TASK_MONITOR_POLL_SECONDS)
                 continue
             sample_resources(task_id)
             done = history_done(prompt_id)
@@ -1668,13 +1702,16 @@ def run_submission(task_id: str, payload: dict[str, Any]) -> None:
                         target_plan, task_id=task_id, payload=payload,
                     )
                     set_task(task_id, status="succeeded", result=json.dumps(done, ensure_ascii=False))
+                    _task_log(task_id, payload, "succeeded", started)
                 else:
                     set_task(task_id, status="failed", result=json.dumps(done, ensure_ascii=False), error=comfy_execution_error(payload, done))
+                    _task_log(task_id, payload, "failed", started, error_class="ComfyExecutionError")
                 return
             update_comfy_execution_state(task_id, str(prompt_id))
-            time.sleep(2)
+            time.sleep(TASK_MONITOR_POLL_SECONDS)
     except Exception as exc:
         set_task(task_id, status="needs_reconcile" if submission_attempted else "failed", error=("提交或监控结果待核对: " if submission_attempted else "") + str(exc))
+        _task_log(task_id, payload, "error", started, error_class=type(exc).__name__)
 
 
 def assembly_duration(output: str) -> float | None:
@@ -1847,7 +1884,10 @@ def run_workflow_submission(task_id: str, payload: dict[str, Any]) -> None:
     submission_attempted = False
     prompt_id = None
     submission_acknowledged = False
+    started = time.monotonic()
+    _task_log(task_id, payload, "started", started)
     try:
+        _check_task_timeout(task_id, payload, started)
         if PRIVATE_WORKSPACES is not None:
             PRIVATE_WORKSPACES.verify_task({'project_id': payload.get('project_id'), 'payload': payload})
         set_task(task_id, status="submitting")
@@ -1860,6 +1900,7 @@ def run_workflow_submission(task_id: str, payload: dict[str, Any]) -> None:
         prompt_id = task_id
         set_task(task_id, prompt_id=prompt_id)
         submission_attempted = True
+        _task_log(task_id, payload, "submitting", started)
         submitted = request_json("/prompt", {"prompt": graph, "prompt_id": prompt_id, "client_id": "director-workbench-assembly-v2"})
         prompt_id = submitted.get("prompt_id")
         if not prompt_id:
@@ -1867,13 +1908,14 @@ def run_workflow_submission(task_id: str, payload: dict[str, Any]) -> None:
         submission_acknowledged = True
         set_task(task_id, status="queued", prompt_id=prompt_id, result=json.dumps({"submission": submitted, "workflow": str(workflow_path)}, ensure_ascii=False))
         while True:
+            _check_task_timeout(task_id, payload, started)
             current = get_task(task_id)
             if not current:
                 return
             if current["stop_requested"]:
                 if advance_task_stop(current, str(prompt_id)):
                     return
-                time.sleep(2)
+                time.sleep(TASK_MONITOR_POLL_SECONDS)
                 continue
             sample_resources(task_id)
             done = (keyframes.read_result(request_json(f'/history/{prompt_id}'), str(prompt_id), payload, OUTPUT_ROOT)
@@ -1906,19 +1948,24 @@ def run_workflow_submission(task_id: str, payload: dict[str, Any]) -> None:
                             target_plan, task_id=task_id, payload=payload,
                         )
                     set_task(task_id, status="succeeded", result=json.dumps(done, ensure_ascii=False))
+                    _task_log(task_id, payload, "succeeded", started)
                 else:
                     set_task(task_id, status="failed", result=json.dumps(done, ensure_ascii=False), error=comfy_execution_error(payload, done))
+                    _task_log(task_id, payload, "failed", started, error_class="ComfyExecutionError")
                 return
             update_comfy_execution_state(task_id, str(prompt_id))
-            time.sleep(2)
+            time.sleep(TASK_MONITOR_POLL_SECONDS)
     except output_resolution.OutputStopped as exc:
         set_task(task_id, status='stopped', error=str(exc))
+        _task_log(task_id, payload, "stopped", started, error_class=type(exc).__name__)
     except HTTPError as exc:
         uncertain = submission_acknowledged or exc.code >= 500
         fields = {} if uncertain else {'prompt_id': None}
         set_task(task_id, status="needs_reconcile" if uncertain else "failed", error=comfy_submission_error(exc), **fields)
+        _task_log(task_id, payload, "error", started, error_class=type(exc).__name__)
     except Exception as exc:
         set_task(task_id, status="needs_reconcile" if submission_attempted else "failed", error=("提交或监控结果待核对: " if submission_attempted else "") + str(exc))
+        _task_log(task_id, payload, "error", started, error_class=type(exc).__name__)
 
 
 def run_batch(batch_id: str, task_ids: list[str], payloads: list[dict[str, Any]]) -> None:
@@ -2013,6 +2060,12 @@ def current_project() -> dict[str, Any]:
 @plan_transaction
 def build_project_state(project_id: str | None = None) -> dict[str, Any]:
     target_project = project_id or CURRENT_PROJECT_ID
+    signature = project_cache_signature(target_project)
+    cache_key = (project_cache_scope(), str(target_project))
+    with _PROJECT_CACHE_LOCK:
+        cached = _PROJECT_STATE_CACHE.get(cache_key)
+        if cached and cached[0] == signature:
+            return copy.deepcopy(cached[1])
     records = project_records(target_project)
     latest: dict[tuple[str, str], dict[str, Any]] = {}
     for record in records:
@@ -2046,7 +2099,7 @@ def build_project_state(project_id: str | None = None) -> dict[str, Any]:
                     valid = False
                 if not valid:
                     review.update(status='stale', stale_reason='审核未绑定当前候选版本，请重新查看并确认；原审核保留在历史中')
-    return {
+    result = {
         "schema_version": 1,
         "project_id": target_project,
         "creative": ({**creative_record["data"], "revision": creative_record["revision"], "source": creative_record["source"], "created_at": creative_record["created_at_iso"]} if creative_record else None),
@@ -2055,6 +2108,9 @@ def build_project_state(project_id: str | None = None) -> dict[str, Any]:
         "artifacts": sorted(artifacts, key=lambda item: (item.get("kind", ""), item.get("asset_id", ""))),
         "history": records,
     }
+    with _PROJECT_CACHE_LOCK:
+        _PROJECT_STATE_CACHE[cache_key] = (signature, copy.deepcopy(result))
+    return result
 
 
 @app.get("/api/project-state")

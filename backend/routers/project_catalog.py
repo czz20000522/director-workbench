@@ -105,8 +105,9 @@ def project_task_list(project_id: str, limit: int = Query(50, ge=1, le=100), off
         rows = connection.execute("SELECT * FROM tasks WHERE project_id = ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?", (project_id, limit + 1, offset)).fetchall()
     more = len(rows) > limit
     values = [backend.task_row(row) for row in rows[:limit]]
+    queue_values = backend.TASK_SCHEDULER.queue_info_many([task['id'] for task in values])
     for task in values:
-        task['queue'] = backend.TASK_SCHEDULER.queue_info(task['id'])
+        task['queue'] = queue_values.get(task['id'], {})
     return {"project_id": project_id, "tasks": values, "next_offset": offset + limit if more else None}
 
 
