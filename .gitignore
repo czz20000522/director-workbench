@@ -59,6 +59,7 @@
 /src/app/*
 !/src/app/types.ts
 !/src/app/helpers.ts
+!/src/app/hooks.ts
 !/tests/
 /tests/*
 !/tests/conftest.py

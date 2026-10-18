@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { CSSProperties, InputHTMLAttributes, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react';
+import type { CSSProperties, InputHTMLAttributes, MouseEvent as ReactMouseEvent } from 'react';
 import { ArrowDownToLine, ArrowUpRight, Check, ChevronLeft, ChevronRight, Clapperboard, Film, FolderOpen, Image as ImageIcon, Layers3, LogOut, Maximize2, Music2, Pause, Play, Radio, Settings2, Sparkles, Square, Workflow, X } from 'lucide-react';
 import { assets as fallbackAssets, labels, pipelineStages as defaultPipelineStages, range, type Asset, type Kind, type PipelineInput, type PipelineStage, type Variant } from './data';
 // Split out of the initial bundle: mounted only in its own workspace mode.
@@ -34,9 +34,10 @@ import './quick-create.css';
 import ResolutionPicker from './ResolutionPicker';
 const CandidateComparison = lazy(() => import('./CandidateComparison'));
 import { downloadName, mediaUrl, workflowUrl } from './api/client';
+import { useComfyStatus, useDrafts, useSidebarWidth } from './app/hooks';
 
-import type { BatchTask, CheckpointRecord, CreativeConflict, CreativeDraft, CreativeProfile, Draft, Drafts, PipelineValidation, PlanAssembly, PlanSegment, ProductionStep, ProductionStepState, ProjectManifest, ProjectState, QuickAspect, ReusableTemplate, ReviewRecord, SegmentDraft, SegmentEdit, ShotGenerationSettings, ShotVersion, TaskRecord, WorkflowCatalogEntry } from './app/types';
-import { ASPECT_LABEL, QUICK_SERIES, adultVideoProfileNote, blankCreativeDraft, candidateOutputFacts, checkpointLabel, hasCreativeDraftContent, loadCreativeDraft, loadDrafts, localSystemTime, measureStillAspect, normalizeCreativeDraft, normalizeLiveTaskState, normalizeManifestAsset, outputMethodLabel, outputResolutionLabel, readNewSegmentDraft, reviewLabel, sameCreativeDraft, taskStateLabel, taskStateLabels, versionMaterial } from './app/helpers';
+import type { BatchTask, CheckpointRecord, CreativeConflict, CreativeDraft, CreativeProfile, PipelineValidation, PlanAssembly, PlanSegment, ProductionStep, ProductionStepState, ProjectManifest, ProjectState, QuickAspect, ReusableTemplate, ReviewRecord, SegmentDraft, SegmentEdit, ShotGenerationSettings, ShotVersion, TaskRecord, WorkflowCatalogEntry } from './app/types';
+import { ASPECT_LABEL, QUICK_SERIES, adultVideoProfileNote, blankCreativeDraft, candidateOutputFacts, checkpointLabel, hasCreativeDraftContent, loadCreativeDraft, localSystemTime, measureStillAspect, normalizeCreativeDraft, normalizeLiveTaskState, normalizeManifestAsset, outputMethodLabel, outputResolutionLabel, readNewSegmentDraft, reviewLabel, sameCreativeDraft, taskStateLabel, taskStateLabels, versionMaterial } from './app/helpers';
 
 export default function App({ privateMode = false, onLogout, logoutBusy = false, sessionError = '' }: { privateMode?: boolean; onLogout?: () => void; logoutBusy?: boolean; sessionError?: string } = {}) {
   const [project, setProject] = useState<ProjectManifest | null>(null);
@@ -49,10 +50,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const [deleteShotOpen, setDeleteShotOpen] = useState(false);
   const [deletingShot, setDeletingShot] = useState(false);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(() => {
-    const saved = Number(localStorage.getItem('director-workbench:sidebar-width'));
-    return Number.isFinite(saved) && saved >= 240 ? saved : 286;
-  });
+  const { sidebarWidth, resizeSidebar, beginSidebarResize } = useSidebarWidth();
   const [pendingTreeItem, setPendingTreeItem] = useState<{ projectId: string; kind: TreeKind; id: string } | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [quickMode, setQuickMode] = useState(true);
@@ -82,7 +80,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const [materialTitle, setMaterialTitle] = useState('');
   const [savingMaterialTitle, setSavingMaterialTitle] = useState(false);
   const [variant, setVariant] = useState<Variant>('A');
-  const [drafts, setDrafts] = useState<Drafts>({});
   const [continuous, setContinuous] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [mediaLoad, setMediaLoad] = useState<{ key: string; status: 'loading' | 'ready' | 'error' }>({ key: '', status: 'loading' });
@@ -118,8 +115,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const [resourceOpen, setResourceOpen] = useState(false);
   const [materialBridgeOpen, setMaterialBridgeOpen] = useState(false);
   const [materialBridgeDevice, setMaterialBridgeDevice] = useState(false);
-  const [comfyOnline, setComfyOnline] = useState(false);
-  const [comfyInfo, setComfyInfo] = useState<{ version?: string; gpu_free_mib?: number; queue_running?: number; queue_pending?: number }>({});
   const [taskState, setTaskState] = useState('');
   const submittingShot = useRef(false);
   const regeneratingShot = useRef(false);
@@ -171,6 +166,11 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const [pipelineValues, setPipelineValues] = useState<Record<string, string | number | boolean | string[]>>({});
   const [pipelineValidation, setPipelineValidation] = useState<PipelineValidation | null>(null);
   const [draftReadiness, setDraftReadiness] = useState<ReadinessItem | null>(null);
+  const { drafts, loadDraftsForProject, updateDraft, clearDraft, resetDrafts } = useDrafts(project?.id, {
+    onStorageError: setStorageError,
+    onPromptChange: () => setDraftReadiness(null),
+  });
+  const { comfyOnline, comfyInfo } = useComfyStatus();
   const [pipelineError, setPipelineError] = useState('');
   const [pipelineChecking, setPipelineChecking] = useState(false);
   const [stageFormOpen, setStageFormOpen] = useState(false);
@@ -234,7 +234,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   useEffect(() => { setMergeEnd(''); }, [project?.id, selected]);
   const creatingSegment = useRef(false);
   const [planAssembly, setPlanAssembly] = useState<PlanAssembly | null>(null);
-  const storageKey = `director-workbench:${project?.id ?? 'loading'}:drafts:v1`;
   const creativeStorageKey = `director-workbench:${project?.id ?? 'loading'}:creative:v1`;
   const baseAssets = project ? (Array.isArray(project.assets) ? project.assets.filter(isCreativeMaterial).map(normalizeManifestAsset) : []) : privateMode ? [] : fallbackAssets;
   const diagnosticPaths = diagnosticMaterialPaths(project);
@@ -435,7 +434,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
       // Open the production page in a quiet overview state. Parameter controls
       // appear only after the reviewer chooses a concrete step.
       setPipelineStageId('');
-      setDrafts(loadDrafts(`director-workbench:${String(data.id)}:drafts:v1`));
+      loadDraftsForProject(String(data.id));
       setCreativeDraft(loadCreativeDraft(`director-workbench:${String(data.id)}:creative:v1`));
       setCreativeConflict(null);
       void refreshProjects();
@@ -468,30 +467,9 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
 
   useEffect(() => {
     if (!project) return;
-    try { localStorage.setItem(storageKey, JSON.stringify(drafts)); setStorageError(false); }
-    catch { setStorageError(true); }
-  }, [drafts, project, storageKey]);
-
-  useEffect(() => {
-    if (!project) return;
     try { localStorage.setItem(creativeStorageKey, JSON.stringify(creativeDraft)); setStorageError(false); }
     catch { setStorageError(true); }
   }, [creativeDraft, creativeStorageKey, project]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const refresh = async () => {
-      try {
-        const response = await fetch('/api/status');
-        if (!response.ok) throw new Error('status');
-        const data = await response.json();
-        if (!cancelled) { setComfyOnline(Boolean(data.comfy?.online)); setComfyInfo(data.comfy ?? {}); }
-      } catch { if (!cancelled) setComfyOnline(false); }
-    };
-    void refresh();
-    const timer = window.setInterval(refresh, 4000);
-    return () => { cancelled = true; window.clearInterval(timer); };
-  }, []);
 
   useEffect(() => {
     void refreshPlan().catch(() => { /* the static pilot remains available while the plan is offline */ });
@@ -705,20 +683,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
     else if (item) openTreeItem(item.kind, item.id);
   }
 
-  function resizeSidebar(next: number) {
-    const width = Math.max(240, Math.min(Math.floor(window.innerWidth / 2), next));
-    setSidebarWidth(width);
-    localStorage.setItem('director-workbench:sidebar-width', String(width));
-  }
-
-  function beginSidebarResize(event: ReactPointerEvent<HTMLDivElement>) {
-    event.preventDefault();
-    const move = (pointer: PointerEvent) => resizeSidebar(pointer.clientX);
-    const finish = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', finish); };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', finish);
-  }
-
   function switchKind(next: Kind) {
     mediaRef.current?.pause();
     autoplayRef.current = false;
@@ -748,11 +712,6 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
     advancing.current = false;
     if (media.ended || (duration > 0 && media.currentTime >= start + duration - 0.08)) media.currentTime = start;
     try { await media.play(); if (mediaEpoch.current === epoch && mediaRef.current === media && media.isConnected) setNotice(''); } catch (error) { if (mediaEpoch.current === epoch && mediaRef.current === media && media.isConnected && !(error instanceof DOMException && error.name === 'AbortError')) setNotice('暂时无法播放，请检查素材是否可读取。'); }
-  }
-
-  function updateDraft(id: string, patch: Draft) {
-    if ('prompt' in patch) setDraftReadiness(null);
-    setDrafts(previous => ({ ...previous, [id]: { ...previous[id], ...patch } }));
   }
 
   async function persistReview(stage: 'sample' | 'finish' | 'final', status: ReviewRecord['status'], adoptedVariant?: Variant) {
@@ -820,7 +779,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail?.message || data.detail || '恢复历史版本失败');
       if (activeProjectId.current !== projectId) return;
-      setDrafts(previous => { const next = { ...previous }; delete next[segmentId]; return next; });
+      clearDraft(segmentId);
       setShotVersionsOffset(0);
       await refreshPlan();
       setNotice(`已恢复 ${localSystemTime(version.generated_at)} 生成的版本。原生成时间保留，本次恢复时间另行记录。`);
@@ -1032,7 +991,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
       if (reportFailure && data.id !== projectId) throw new Error('项目切换回执与目标不一致');
       if (reportFailure && expectedInteraction !== pageInteraction.current) throw new Error('用户已接管页面，未更换编辑器。');
       const nextAssets: Asset[] = Array.isArray(data.assets) ? data.assets.map((asset: Record<string, unknown>) => normalizeManifestAsset(asset)) : [];
-      setProject(data as ProjectManifest); setProjectState(null); setCreativeConflict(null); setProjectMenuOpen(false); setPlanSegments([]); setPlanAssembly(null); setTaskId(''); setTaskState(''); setCurrentTask(null); setProjectTasks([]); setAssemblyTaskId(''); setAssemblyTaskState(''); setBatchId(''); setBatchTasks([]); setSelected(kind === 'video' ? '' : nextAssets.find(asset => asset.kind === kind)?.id ?? ''); setDrafts(loadDrafts(`director-workbench:${String(data.id)}:drafts:v1`)); setCreativeDraft(loadCreativeDraft(`director-workbench:${String(data.id)}:creative:v1`));
+      setProject(data as ProjectManifest); setProjectState(null); setCreativeConflict(null); setProjectMenuOpen(false); setPlanSegments([]); setPlanAssembly(null); setTaskId(''); setTaskState(''); setCurrentTask(null); setProjectTasks([]); setAssemblyTaskId(''); setAssemblyTaskState(''); setBatchId(''); setBatchTasks([]); setSelected(kind === 'video' ? '' : nextAssets.find(asset => asset.kind === kind)?.id ?? ''); loadDraftsForProject(String(data.id)); setCreativeDraft(loadCreativeDraft(`director-workbench:${String(data.id)}:creative:v1`));
       setArchive(null);
       localStorage.setItem('director-workbench:last-project', data.id);
       setNotice(`已切换项目：${data.title ?? data.id}`);
@@ -1058,7 +1017,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || '创建项目失败');
       const saved = await fetch(`/api/projects/${encodeURIComponent(data.project.id)}/creative`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ values: initialCreative, status: 'pending_review', source: 'director-ui', expected_revision: 0 }) }).catch(() => null);
-      setProject(data.project as ProjectManifest); setProjectState(null); setCreativeConflict(null); setProjectMenuOpen(false); setCreateOpen(false); setPlanSegments([]); setPlanAssembly(null); setTaskId(''); setTaskState(''); setCurrentTask(null); setProjectTasks([]); setAssemblyTaskId(''); setAssemblyTaskState(''); setBatchId(''); setBatchTasks([]); setSelected(''); setDrafts({}); setCreativeDraft(initialCreative); setNewSeries(''); setNewTitle(''); setNewProjectId('');
+      setProject(data.project as ProjectManifest); setProjectState(null); setCreativeConflict(null); setProjectMenuOpen(false); setCreateOpen(false); setPlanSegments([]); setPlanAssembly(null); setTaskId(''); setTaskState(''); setCurrentTask(null); setProjectTasks([]); setAssemblyTaskId(''); setAssemblyTaskState(''); setBatchId(''); setBatchTasks([]); setSelected(''); resetDrafts(); setCreativeDraft(initialCreative); setNewSeries(''); setNewTitle(''); setNewProjectId('');
       localStorage.setItem('director-workbench:last-project', data.project.id);
       setWorkspaceMode(newCreationMode === 'reference-video' ? 'reverse' : 'production');
       setCreativeOpen(newCreationMode !== 'reference-video');
