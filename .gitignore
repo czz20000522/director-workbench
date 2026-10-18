@@ -361,3 +361,9 @@
 !/tests/client_restore.browser.mjs
 !/tests/client_restore_media.py
 !/tests/test_finish_tasks.py
+
+!/mcp_server/models.py
+!/mcp_server/tools_creative.py
+!/mcp_server/tools_generation.py
+!/mcp_server/tools_media.py
+!/mcp_server/tools_reference.py
