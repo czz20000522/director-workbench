@@ -20,10 +20,21 @@ BROWSER_TESTS = (
     'assembly_edit', 'automatic_creation', 'enhancement', 'generation_stage',
     'guide_queue', 'guide_review', 'media_tools_panel', 'queued_panels',
     'reference_queue', 'speech_panel',
+    'quick_generation', 'media_qc', 'guide_joins', 'creative_review',
 )
 # These drivers additionally need the project interpreter and a fresh absolute runtime
 # directory (relative or pre-existing roots raise AccessDenied in backend/user_context.py).
-BROWSER_FIXTURE_TESTS = ('enhancement',)
+BROWSER_FIXTURE_TESTS = ('enhancement', 'quick_generation')
+# Three drivers read a fixture tree an earlier pytest run wrote and refuse to invent one,
+# so the suite runs the producing module first.  Each producer gets its own --basetemp:
+# pytest empties the directory it is handed, so one shared basetemp would delete the
+# previous producer's output.  The value says which path the driver receives -- its own
+# basetemp, or the run root, because guide_joins recurses that root for its eight files.
+BROWSER_PYTEST_FIXTURES = {
+    'media_qc': ('tests/test_media_qc.py', 'basetemp'),
+    'guide_joins': ('tests/test_guide_joins.py', 'run_root'),
+    'creative_review': ('tests/test_creative_inspection.py', 'basetemp'),
+}
 # Run roots are named '<prefix><token>' with the current eight hex digits and the
 # historical twelve.  The match is anchored: the machine runtime tree also holds live
 # roots (accounts, the relocation backup) and a prefix test would eat them.
@@ -68,8 +79,9 @@ def suite_specs(project: Path, run_root: Path, desktop: Path | None = None) -> d
         },
         # Browser acceptance drivers bundle the front end themselves and intercept their
         # own HTTP. Those listed in BROWSER_FIXTURE_TESTS also take the project Python and
-        # a fresh absolute runtime directory. Drivers needing an MP4, ffmpeg or a completed
-        # fixture root are not listed yet; see the browser-suite notes in the project docs.
+        # a fresh absolute runtime directory; those in BROWSER_PYTEST_FIXTURES take a
+        # fixture root this suite produced with pytest first. The one remaining driver,
+        # client_restore, needs an MP4 the repository cannot produce and stays manual.
         'browser': {
             'runner': 'node',
             'scripts': [f'tests/{name}.browser.mjs' for name in BROWSER_TESTS],
@@ -109,16 +121,18 @@ def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: b
     if not check:
         commands = []
         fixtures = {}
+        producers = {}
         interpreter = project / '.venv/Scripts/python.exe'
         for script in spec['scripts']:
             if script in missing:
                 continue
             command = [runner, script]
             name = Path(script).name.removesuffix('.browser.mjs')
+            needs_python = name in BROWSER_FIXTURE_TESTS or name in BROWSER_PYTEST_FIXTURES
+            if needs_python and not interpreter.is_file():
+                result['errors'].append(f'{script} needs the project interpreter; this suite is failed, not skipped.')
+                continue
             if name in BROWSER_FIXTURE_TESTS:
-                if not interpreter.is_file():
-                    result['errors'].append(f'{script} needs the project interpreter; this suite is failed, not skipped.')
-                    continue
                 # user_context.path() rejects asset paths over 240 characters on Windows and a
                 # fixture root grows ~172 characters of generated account, series and project
                 # names, so the fixture root is a short subdirectory of the short run root
@@ -126,6 +140,25 @@ def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: b
                 fixture = run_root / f'f{len(fixtures) + 1}'
                 fixtures[name] = str(fixture)
                 command += [str(interpreter), str(fixture)]
+            elif name in BROWSER_PYTEST_FIXTURES:
+                module, handed = BROWSER_PYTEST_FIXTURES[name]
+                basetemp = run_root / f'pytest-{name}'
+                # --basetemp creates its own directory but not the parent, and the run root
+                # already exists here. The producer's output is read-only in places (the
+                # ancestor-link fixtures hold a real .git), so retention removes it through
+                # remove_tree rather than a plain rmtree.
+                produced = subprocess.run(
+                    [str(interpreter), '-m', 'pytest', module, '-q', '--basetemp', str(basetemp)],
+                    cwd=project, env=environment)
+                producers[name] = {'module': module, 'basetemp': str(basetemp),
+                                   'exit_code': produced.returncode}
+                if produced.returncode:
+                    result['errors'].append(
+                        f'{module} did not produce fixtures for {script} (exit {produced.returncode}).')
+                    continue
+                destination = basetemp if handed == 'basetemp' else run_root
+                fixtures[name] = str(destination)
+                command.append(str(destination))
             commands.append(command)
             try:
                 completed = subprocess.run(command, cwd=project, env=environment)
@@ -136,6 +169,7 @@ def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: b
                 result['errors'].append(f'{script} failed (exit {completed.returncode}).')
         result['commands'] = commands
         result['fixture_roots'] = fixtures
+        result['fixture_producers'] = producers
         result['test_exit_code'] = int(bool(result['errors']))
     return result
 
