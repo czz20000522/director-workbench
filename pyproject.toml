@@ -32,6 +32,9 @@ source = ["backend", "mcp_server"]
 omit = [
     "*/__init__.py",
     "*/__main__.py",
+    # test_public_source imports a clean checkout in-process; its duplicate copy
+    # must not dilute the real backend/mcp_server line coverage.
+    "*/test_clean_public_checkout_*/*",
 ]
 
 [tool.coverage.report]
