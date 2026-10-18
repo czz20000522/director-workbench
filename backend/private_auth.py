@@ -35,6 +35,12 @@ class SecurityHeaders:
         (b'x-content-type-options', b'nosniff'),
         (b'x-frame-options', b'DENY'),
         (b'referrer-policy', b'no-referrer'),
+        # Vite's production shell uses same-origin module/CSS assets.  Inline
+        # styles are retained for the existing React component styles while
+        # executable scripts remain same-origin only.
+        (b'content-security-policy', b"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http: https: ws: wss:"),
+        (b'permissions-policy', b'camera=(), microphone=(), geolocation=(), usb=()'),
+        (b'cross-origin-opener-policy', b'same-origin'),
     )
 
     def __init__(self, app):
