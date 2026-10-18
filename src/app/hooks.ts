@@ -194,20 +194,26 @@ export function useProjectTasks({ projectId, assemblyAssetId, currentAssetId, ba
     }
   }, [assemblyAssetId, currentAssetId, projectId]);
 
+  const refreshTasks = useCallback(async () => {
+    if (!projectId) return;
+    const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/tasks?limit=100`);
+    if (!response.ok) throw new Error('tasks');
+    const data = await response.json() as { tasks?: TaskRecord[] };
+    applyTasks(Array.isArray(data.tasks) ? data.tasks : []);
+  }, [applyTasks, projectId]);
+
   useEffect(() => {
     succeededTaskRef.current = '';
     setTaskId(''); setTaskState(''); setCurrentTask(null); setProjectTasks([]); setAssemblyTaskId(''); setAssemblyTaskState('');
   }, [projectId]);
 
   useEffect(() => {
-    let cancelled = false;
-    if (!projectId) return () => { cancelled = true; };
-    fetch(`/api/projects/${encodeURIComponent(projectId)}/tasks?limit=100`)
-      .then(response => response.ok ? response.json() : Promise.reject(new Error('tasks')))
-      .then(({ tasks: records }: { tasks: TaskRecord[] }) => { if (!cancelled) applyTasks(Array.isArray(records) ? records : []); })
-      .catch(() => { /* the reconnecting SSE stream remains the live source */ });
-    return () => { cancelled = true; };
-  }, [applyTasks, projectId]);
+    if (!projectId) return;
+    const poll = () => { void refreshTasks().catch(() => { /* SSE remains the live source when HTTP is unavailable */ }); };
+    poll();
+    const timer = window.setInterval(poll, 15000);
+    return () => window.clearInterval(timer);
+  }, [projectId, refreshTasks]);
 
   useEffect(() => {
     if (!projectId) return;
