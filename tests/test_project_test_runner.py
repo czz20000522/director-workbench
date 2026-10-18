@@ -14,10 +14,13 @@ def host_roots(tmp_path):
 def setup_project(tmp_path):
     project = tmp_path / 'ComfyUI-Workspace/projects/director-workbench'
     project.mkdir(parents=True)
-    for spec in runner.suite_specs(project, tmp_path, tmp_path).values():
-        for script in spec.get('scripts', ()):  # browser drivers live in the checkout
-            (project / script).parent.mkdir(parents=True, exist_ok=True)
-            (project / script).touch()
+    specs = runner.suite_specs(project, tmp_path, tmp_path)
+    # Browser drivers and the media producers those drivers call live in the checkout.
+    scripts = [script for spec in specs.values() for script in spec.get('scripts', ())]
+    for script in (*scripts, *runner.BROWSER_MEDIA_TESTS.values()):
+        (project / script).parent.mkdir(parents=True, exist_ok=True)
+        (project / script).touch()
+    for spec in specs.values():
         # The browser suite drives node and carries no interpreter path.
         interpreter = spec.get('python')
         if interpreter is None:
@@ -43,6 +46,9 @@ def test_failure_keeps_running_other_suite_with_explicit_paths(tmp_path, monkeyp
         calls.append((command, kwargs))
         if '-c' in command:
             return fake_probe(command)
+        if command[1] in runner.BROWSER_MEDIA_TESTS.values():
+            Path(command[2]).write_bytes(b'')  # the producer writes the media fixture
+            return SimpleNamespace(returncode=0)
         return SimpleNamespace(returncode=2 if 'pytest' in command else 0)
 
     monkeypatch.setattr(runner.subprocess, 'run', execute)
@@ -58,8 +64,9 @@ def test_failure_keeps_running_other_suite_with_explicit_paths(tmp_path, monkeyp
     specs = runner.suite_specs(project, Path(receipt['run_root']), tmp_path)
     # Two probes and two interpreter suites, plus one command per browser driver. This fake
     # fails every pytest command, so the three drivers in BROWSER_PYTEST_FIXTURES contribute
-    # their failed producer instead of a node command and the total is unchanged.
-    assert len(calls) == 4 + len(specs['browser']['scripts'])
+    # their failed producer instead of a node command and the total is unchanged; each
+    # driver in BROWSER_MEDIA_TESTS contributes its producer and then its node command.
+    assert len(calls) == 4 + len(specs['browser']['scripts']) + len(runner.BROWSER_MEDIA_TESTS)
     for index, name in ((0, 'core'), (2, 'auk')):
         command, kwargs = calls[index + 1]
         assert command == [str(specs[name]['python']), *specs[name]['args']]
@@ -104,6 +111,8 @@ def test_pytest_backed_drivers_receive_produced_fixtures(tmp_path, monkeypatch):
         calls.append(command)
         if '-c' in command:
             return fake_probe(command)
+        if command[1] in runner.BROWSER_MEDIA_TESTS.values():
+            Path(command[2]).write_bytes(b'')  # the producer writes the media fixture
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(runner.subprocess, 'run', execute)
@@ -132,6 +141,15 @@ def test_pytest_backed_drivers_receive_produced_fixtures(tmp_path, monkeypatch):
         assert fixture.parent == run_root and not fixture.exists()
         assert [interpreter, str(fixture)] in [
             command[2:] for command in calls if f'tests/{name}.browser.mjs' in command]
+    # The media-backed driver is handed a file this suite encoded into the run root first,
+    # because no fixture root holds an MP4 and the driver refuses to invent one.
+    for name, module in runner.BROWSER_MEDIA_TESTS.items():
+        target = run_root / f'{name}.mp4'
+        assert browser['media_fixtures'][name] == str(target)
+        produced = calls.index([interpreter, module, str(target)])
+        driver = next(index for index, command in enumerate(calls)
+                      if command[1:] == [f'tests/{name}.browser.mjs', str(target)])
+        assert produced < driver
 
 
 def test_missing_interpreter_is_failure_not_skip(tmp_path):

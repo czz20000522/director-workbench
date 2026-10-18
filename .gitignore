@@ -324,4 +324,9 @@
 # guide_joins asks paths.py for the machine runtime root rather than naming one.
 !/tests/creative_review.browser.mjs
 !/tests/guide_joins.browser.mjs
+# The media-backed driver takes a decodable MP4 path rather than a fixture root: its
+# producer encodes the file with PyAV into the run root the suite creates. It reads only
+# that file and intercepts its own HTTP, so it names no private path or work asset.
+!/tests/client_restore.browser.mjs
+!/tests/client_restore_media.py
 !/tests/test_finish_tasks.py
