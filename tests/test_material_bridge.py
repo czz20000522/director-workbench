@@ -6,6 +6,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend import app as backend
+from backend.routers import material_library
+from backend.user_context import AccessDenied
 
 
 @pytest.fixture()
@@ -156,3 +158,29 @@ def test_download_endpoint_is_limited_to_registered_roots(
     )
 
     assert response.status_code == 422
+
+
+def test_registration_returns_conflict_when_source_changes_during_copy(
+    material_client: tuple[TestClient, dict[str, object]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, paths = material_client
+    downloads = paths["downloads"]
+    manifest = paths["manifest"]
+    assert isinstance(downloads, Path) and isinstance(manifest, dict)
+    source = downloads / "race.wav"
+    source.write_bytes(b"original")
+
+    def replace_during_copy(source_path: Path, destination: Path, expected) -> tuple[Path, object]:
+        source_path.write_bytes(b"replacement")
+        raise AccessDenied("changed")
+
+    monkeypatch.setattr(material_library, "copy_checked", replace_during_copy)
+    response = client.post(
+        "/api/projects/project-a/materials/register",
+        json={"items": [{"source_id": "downloads", "relative_path": "race.wav"}]},
+    )
+
+    assert response.status_code == 409
+    assert manifest["assets"] == []
+    assert manifest["media"] == {}
