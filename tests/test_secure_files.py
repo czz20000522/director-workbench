@@ -4,6 +4,7 @@ from backend.secure_files import (
     VerifiedFileResponse,
     checked_directory,
     checked_file,
+    copy_checked,
     open_checked,
     verify_directory_identity,
     verify_identity,
@@ -33,6 +34,26 @@ def test_file_identity_rejects_metadata_change(tmp_path):
     path.write_bytes(b'changed')
     with pytest.raises(AccessDenied):
         verify_identity(path, identity)
+
+
+def test_copy_checked_keeps_existing_destination_when_source_changes(tmp_path, monkeypatch):
+    source = tmp_path / 'source.bin'
+    destination = tmp_path / 'destination.bin'
+    source.write_bytes(b'original')
+    destination.write_bytes(b'previous')
+    _, identity = checked_file(source)
+    from backend import secure_files
+    real_verify = secure_files.verify_identity
+
+    def replace_before_final_check(path, expected):
+        source.write_bytes(b'replaced')
+        return real_verify(path, expected)
+
+    monkeypatch.setattr(secure_files, 'verify_identity', replace_before_final_check)
+    with pytest.raises(AccessDenied):
+        copy_checked(source, destination, identity)
+    assert destination.read_bytes() == b'previous'
+    assert not list(tmp_path.glob('.destination.bin.*.tmp'))
 
 
 async def _messages(response: VerifiedFileResponse, method: str = 'GET', range_header: str | None = None):

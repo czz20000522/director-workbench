@@ -126,3 +126,25 @@ def test_source_change_during_copy_does_not_register_partial_batch(preset_client
     response = client.post('/api/projects/sequel/materials/reuse', json={'source_project_id': 'preset-test', 'material_ids': [item['id']]})
     assert response.status_code == 409
     assert backend.load_project_manifest('sequel')['assets'] == []
+
+
+def test_same_size_source_change_gets_a_new_copy(preset_client):
+    client, project = preset_client
+    image, _, _ = setup_source(client, project)
+    item = client.get('/api/projects/preset-test/reusable-materials').json()['materials'][0]
+    first = client.post('/api/projects/sequel/materials/reuse', json={
+        'source_project_id': 'preset-test', 'material_ids': [item['id']],
+    }).json()['registered'][0]
+    old_copy = backend.resolve_registered_path(first['image_path'])
+
+    image.write_bytes(b'changed source')
+    updated = client.get('/api/projects/preset-test/reusable-materials').json()['materials'][0]
+    assert updated['id'] != item['id']
+    second = client.post('/api/projects/sequel/materials/reuse', json={
+        'source_project_id': 'preset-test', 'material_ids': [updated['id']],
+    })
+    assert second.status_code == 200, second.text
+    new_copy = backend.resolve_registered_path(second.json()['registered'][0]['image_path'])
+    assert old_copy.read_bytes() == b'original image'
+    assert new_copy != old_copy
+    assert new_copy.read_bytes() == b'changed source'

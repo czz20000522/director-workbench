@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import stat
+import tempfile
 
 import anyio
 from starlette.responses import FileResponse, JSONResponse
@@ -112,8 +113,14 @@ def copy_checked(
     """
     handle, candidate, captured = open_checked(source, expected)
     destination_path = Path(destination)
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
     try:
-        with destination_path.open('wb') as output:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f'.{destination_path.name}.', suffix='.tmp', dir=destination_path.parent,
+        )
+        temporary_path = Path(temporary_name)
+        with os.fdopen(descriptor, 'wb') as output:
             while True:
                 chunk = handle.read(chunk_size)
                 if not chunk:
@@ -123,11 +130,18 @@ def copy_checked(
             verify_identity(candidate, captured)
         except (FileNotFoundError, OSError) as exc:
             raise AccessDenied('文件在复制期间发生变化，请重新读取后重试') from exc
-        if destination_path.stat().st_size != captured.size:
+        if temporary_path.stat().st_size != captured.size:
             raise AccessDenied('素材复制结果大小不一致，请重新读取后重试')
+        os.replace(temporary_path, destination_path)
+        temporary_path = None
         return destination_path, captured
     finally:
         handle.close()
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 class VerifiedFileResponse(FileResponse):
