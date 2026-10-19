@@ -143,12 +143,39 @@ def test_edit_saves_return_lightweight_result_without_continuity_analysis(edit_c
         'expected_revision': edit['revision'], 'status': 'pending', 'note': '保存轻量接点记录'})
     assert response.status_code == 200, response.text
     assert response.json()['continuity'] is None
+    assert response.json()['readiness_complete'] is False
+    assert response.json()['ready'] is False
     assert called == []
     sound = client.put(root + '/assembly/sound', json={
         'expected_revision': response.json()['revision'], 'policy': 'mute'})
     assert sound.status_code == 200, sound.text
     assert sound.json()['continuity'] is None
+    assert sound.json()['readiness_complete'] is False
+    assert sound.json()['ready'] is False
     assert called == []
+
+
+def test_saved_edit_does_not_claim_readiness_after_master_disappears(edit_client):
+    client, root, workspace, _ = edit_client
+    master_id = register_wav(workspace, 11)
+    current = client.get(root + '/assembly/edit').json()
+    chosen = client.put(root + '/assembly/sound', json={
+        'expected_revision': current['revision'], 'policy': 'complete_master', 'audio_asset_id': master_id,
+    })
+    assert chosen.status_code == 200, chosen.text
+    (workspace / 'master-11.wav').unlink()
+
+    checked = client.get(root + '/assembly/edit')
+    assert checked.status_code == 200, checked.text
+    assert checked.json()['sound']['error']
+    assert checked.json()['ready'] is False
+
+    saved = client.put(root + '/assembly/joins/S01/S02', json={
+        'expected_revision': chosen.json()['revision'], 'status': 'pending', 'note': '保存接点记录',
+    })
+    assert saved.status_code == 200, saved.text
+    assert saved.json()['readiness_complete'] is False
+    assert saved.json()['ready'] is False
 
 
 def test_sound_setting_can_explicitly_disable_legacy_master(edit_client):

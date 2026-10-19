@@ -4,6 +4,7 @@ from backend.secure_files import (
     VerifiedFileResponse,
     checked_directory,
     checked_file,
+    copy_checked,
     open_checked,
     verify_directory_identity,
     verify_identity,
@@ -33,6 +34,26 @@ def test_file_identity_rejects_metadata_change(tmp_path):
     path.write_bytes(b'changed')
     with pytest.raises(AccessDenied):
         verify_identity(path, identity)
+
+
+def test_copy_checked_keeps_existing_destination_when_source_changes(tmp_path, monkeypatch):
+    source = tmp_path / 'source.bin'
+    destination = tmp_path / 'destination.bin'
+    source.write_bytes(b'original')
+    destination.write_bytes(b'previous')
+    _, identity = checked_file(source)
+    from backend import secure_files
+    real_verify = secure_files.verify_identity
+
+    def replace_before_final_check(path, expected):
+        source.write_bytes(b'replaced')
+        return real_verify(path, expected)
+
+    monkeypatch.setattr(secure_files, 'verify_identity', replace_before_final_check)
+    with pytest.raises(AccessDenied):
+        copy_checked(source, destination, identity)
+    assert destination.read_bytes() == b'previous'
+    assert not list(tmp_path.glob('.destination.bin.*.tmp'))
 
 
 async def _messages(response: VerifiedFileResponse, method: str = 'GET', range_header: str | None = None):
@@ -84,6 +105,45 @@ async def test_verified_response_multiple_ranges_streams_each_chunk(tmp_path):
     assert bytes(range(20, 24)) in body_messages
     assert max(len(body) for body in body_messages[:-1]) <= 4 or any(b'Content-Range' in body for body in body_messages[:-1])
     assert body_messages[-1].startswith(b'--director-')
+
+
+@pytest.mark.anyio
+async def test_verified_response_single_range_terminates_after_short_read(tmp_path, monkeypatch):
+    path = tmp_path / 'range.bin'
+    path.write_bytes(b'x' * 64)
+    candidate, identity = checked_file(path)
+    response = VerifiedFileResponse(candidate, identity=identity, stat_result=candidate.stat())
+    response.chunk_size = 4
+    reads = iter((b'abcd', b''))
+
+    async def short_read(handle, size):
+        return next(reads)
+
+    monkeypatch.setattr(response, '_read', short_read)
+    messages = await _messages(response, range_header='bytes=0-9')
+    assert dict(messages[0]['headers'])[b'connection'] == b'close'
+    assert messages[-1] == {'type': 'http.response.body', 'body': b'', 'more_body': False}
+    assert [message['body'] for message in messages[1:] if message['type'] == 'http.response.body'] == [b'abcd', b'']
+
+
+@pytest.mark.anyio
+async def test_verified_response_multipart_range_terminates_after_short_read(tmp_path, monkeypatch):
+    path = tmp_path / 'range.bin'
+    path.write_bytes(b'x' * 64)
+    candidate, identity = checked_file(path)
+    response = VerifiedFileResponse(candidate, identity=identity, stat_result=candidate.stat())
+    response.chunk_size = 4
+    reads = iter((b'abcd', b''))
+
+    async def short_read(handle, size):
+        return next(reads)
+
+    monkeypatch.setattr(response, '_read', short_read)
+    messages = await _messages(response, range_header='bytes=0-9,20-29')
+    assert dict(messages[0]['headers'])[b'connection'] == b'close'
+    assert messages[-1] == {'type': 'http.response.body', 'body': b'', 'more_body': False}
+    body = b''.join(message['body'] for message in messages[1:] if message['type'] == 'http.response.body')
+    assert body.endswith(b'abcd')
 
 
 @pytest.mark.anyio

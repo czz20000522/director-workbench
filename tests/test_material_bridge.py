@@ -184,3 +184,26 @@ def test_registration_returns_conflict_when_source_changes_during_copy(
     assert response.status_code == 409
     assert manifest["assets"] == []
     assert manifest["media"] == {}
+
+
+def test_registration_same_size_replacement_gets_a_fresh_copy(material_client):
+    client, paths = material_client
+    downloads = paths["downloads"]
+    workspace = paths["workspace"]
+    manifest = paths["manifest"]
+    assert isinstance(downloads, Path) and isinstance(workspace, Path) and isinstance(manifest, dict)
+    source = downloads / "same-size.wav"
+    source.write_bytes(b"original")
+    request = {"items": [{"source_id": "downloads", "relative_path": source.name}]}
+    first = client.post("/api/projects/project-a/materials/register", json=request)
+    assert first.status_code == 200, first.text
+    old_copy = workspace / "assets" / "imported-windows" / "downloads" / source.name
+
+    source.write_bytes(b"changed!")
+    second = client.post("/api/projects/project-a/materials/register", json=request)
+    assert second.status_code == 200, second.text
+    copies = sorted((workspace / "assets" / "imported-windows" / "downloads").glob("same-size*.wav"))
+    assert len(copies) == 2
+    assert old_copy.read_bytes() == b"original"
+    assert any(path.read_bytes() == b"changed!" for path in copies if path != old_copy)
+    assert len(manifest["assets"]) == 2

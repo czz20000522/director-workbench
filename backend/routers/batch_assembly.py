@@ -156,7 +156,7 @@ def save_project_assembly_join(project_id: str, left_id: str, right_id: str,
     if request.status != 'approved' and isinstance(document.get('assembly'), dict) and (document['assembly'] or {}).get('output'):
         document['assembly'].update(status='stale', notes='接点审核要求修改，旧成片保留但需重新装配')
     backend.write_plan_version(plan_path, document)
-    return backend.assembly_edit_view(manifest, document, include_continuity=False)
+    return backend.assembly_edit_view(manifest, document, include_continuity=False, readiness_complete=False)
 
 
 @ROUTER.put('/api/projects/{project_id}/assembly/sound')
@@ -176,7 +176,8 @@ def save_project_assembly_sound(project_id: str, request: AssemblySoundRequest) 
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     backend.persist_plan_edit(project_id, document, plan_path)
-    return backend.assembly_edit_view(manifest, document, include_continuity=False, sound_override=sound)
+    return backend.assembly_edit_view(manifest, document, include_continuity=False,
+                                      sound_override=sound, readiness_complete=False)
 
 
 @ROUTER.get('/api/projects/{project_id}/assembly/preflight')
@@ -185,11 +186,13 @@ def preflight_project_assembly(project_id: str) -> dict[str, Any]:
     document, _ = backend.load_project_plan(project_id)
     try:
         sound = backend.assembly_sound_selection(manifest, document)
-        view = backend.assembly_edit_view(manifest, document, include_continuity=False, sound_override=sound)
+        view = backend.assembly_edit_view(manifest, document, include_continuity=False,
+                                          sound_override=sound, readiness_complete=True)
     except ValueError as exc:
         view = backend.assembly_edit_view(manifest, document, include_continuity=False,
-                                         sound_override={'policy': 'segment_native', 'audio_asset_id': None,
-                                                         'path': None, 'duration_seconds': None, 'error': str(exc)})
+                                          sound_override={'policy': 'segment_native', 'audio_asset_id': None,
+                                                          'path': None, 'duration_seconds': None, 'error': str(exc)},
+                                          readiness_complete=True)
     builder_blocker = backend.assembly_builder_blocker(manifest)
     if builder_blocker:
         view['blockers'].append(builder_blocker)
