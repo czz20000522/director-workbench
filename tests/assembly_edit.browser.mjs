@@ -34,6 +34,7 @@ try {
   await page.goto('http://localhost:4198/');
   await page.locator('.assembly-edit-panel > summary').click();
   await page.getByText('自动检查（仅供参考）').waitFor();
+  await page.getByText('已测量').waitFor();
   await page.getByRole('button', { name: /S01 → S02/ }).click();
   await page.getByLabel('连续性约束').fill('方向与雨声连续');
   await page.getByLabel('审核记录').fill('两个切点已听看');
