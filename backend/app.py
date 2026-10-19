@@ -469,7 +469,8 @@ def root_relative_path(path: Path) -> str:
     try:
         return resolved.relative_to(ROOT.resolve()).as_posix()
     except ValueError as exc:
-        allowed = [INPUT_ROOT.resolve(), OUTPUT_ROOT.resolve(), DIRECTOR_WORKSPACES_ROOT.resolve()]
+        allowed = [INPUT_ROOT.resolve(), OUTPUT_ROOT.resolve(), PROJECT.resolve(),
+                   PROJECTS_ROOT.resolve(), DIRECTOR_WORKSPACES_ROOT.resolve()]
         allowed.extend(destination for _, destination in legacy_mappings(ROOT))
         if PRIVATE_WORKSPACES is not None:
             allowed.append(PRIVATE_WORKSPACES.layout.root)

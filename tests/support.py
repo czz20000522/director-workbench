@@ -110,6 +110,7 @@ def seed_gpu_waiter(task_id='waiting-generation'):
 
 def prepare_semantic(monkeypatch, tmp_path):
     model = tmp_path / "model.gguf"
+    model.parent.mkdir(parents=True, exist_ok=True)
     model.write_bytes(b"test")
     monkeypatch.setattr(backend, "PRIMARY_MODEL", model)
     monkeypatch.setattr(backend, "PRIMARY_MMPROJ", model)

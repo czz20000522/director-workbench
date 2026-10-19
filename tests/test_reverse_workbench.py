@@ -26,7 +26,7 @@ def reverse_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "artifacts": {"story": {"summary": "模型猜测", "provenance": "model_inference", "user_status": "unreviewed", "status": "pending_analysis", "evidence": ["R01"]}},
     }), encoding="utf-8")
     manifest = {"id": "project-a", "workspace_root": str(workspace), "plan_path": str(workspace / "plans" / "plan.json")}
-    monkeypatch.setattr(backend, "ROOT", tmp_path)
+    monkeypatch.setattr(backend, "ROOT", tmp_path / "data-root")
     monkeypatch.setattr(backend, "PROJECT", tmp_path)
     monkeypatch.setattr(backend, "DB_PATH", tmp_path / "state.sqlite3")
     monkeypatch.setattr(backend, "load_project_manifest", lambda project_id: manifest)

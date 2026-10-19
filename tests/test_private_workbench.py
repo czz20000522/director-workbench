@@ -37,7 +37,7 @@ def private_workbench(tmp_path, monkeypatch):
     catalog.mkdir(parents=True)
     (catalog / 'catalog.json').write_text('{"projects": []}', encoding='utf-8')
     root = tmp_path / 'ComfyUI-Workspace' / 'private-workspaces'
-    for name, value in {'ROOT': tmp_path, 'COMFY_ROOT': tmp_path, 'SHARED_ROOT': tmp_path / 'ComfyUI-Shared',
+    for name, value in {'ROOT': tmp_path / 'data-root', 'COMFY_ROOT': tmp_path, 'SHARED_ROOT': tmp_path / 'ComfyUI-Shared',
                         'PROJECT': project, 'PROJECTS_ROOT': catalog,
                         'PROJECT_CATALOG_PATH': catalog / 'catalog.json', 'DIRECTOR_WORKSPACES_ROOT': project / 'workspaces',
                         'DB_PATH': tmp_path / 'tasks.sqlite3', 'RUNTIME': tmp_path / 'runtime', 'INPUT_ROOT': tmp_path / 'input',

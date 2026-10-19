@@ -23,11 +23,16 @@ def import_project(request: ProjectImportRequest) -> dict[str, Any]:
     backend.ensure_no_release_blocking_tasks("导入项目")
     raw_path = Path(request.path)
     source = raw_path if raw_path.is_absolute() else backend.ROOT / raw_path
+    allowed = [backend.ROOT, backend.DIRECTOR_WORKSPACES_ROOT, backend.PROJECT,
+               backend.INPUT_ROOT, backend.OUTPUT_ROOT]
+    if backend.PRIVATE_WORKSPACES is not None:
+        allowed.append(backend.PRIVATE_WORKSPACES.layout.root)
     try:
         source = source.resolve()
-        source.relative_to(backend.ROOT.resolve())
+        if not any(source.is_relative_to(root.resolve()) for root in allowed):
+            raise ValueError(source)
     except ValueError as exc:
-        raise HTTPException(403, f"只能导入 {backend.ROOT} 工作区内的目录") from exc
+        raise HTTPException(403, "只能导入工作台数据根、项目或作品目录内的目录") from exc
     if not source.is_dir():
         raise HTTPException(404, "导入目录不存在")
     project_id = request.project_id or source.name
