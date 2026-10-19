@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   ArrowRight, Check, ChevronLeft, ChevronRight, Clapperboard, FileText,
-  Film, Image, Layers3, LoaderCircle, Plus, Play, Sparkles, Upload, Wand2, X,
+  Film, Image, Layers3, LoaderCircle, Plus, Play, Sparkles, Upload, Volume2, Wand2, X,
 } from 'lucide-react';
 import './studio-flow-prototype.css';
 
@@ -10,9 +10,17 @@ type Step = 1 | 2 | 3 | 4 | 5 | 6;
 type QuickTool = 'text-video' | 'image-video' | 'text-image' | 'enhance';
 type ProjectSummary = { id: string; title: string; series: string; selected?: boolean };
 type Segment = { id: string; duration_seconds?: number; prompt?: string; status?: string; video?: { path?: string } };
-type Plan = { revision: number; segments: Segment[] };
+type Plan = { revision: number; segments: Segment[]; assembly?: { output?: string; prompt_id?: string; status?: string } };
 type Preset = { id: string; title: string; description?: string; available?: boolean; missing_models?: string[] };
 type ProjectView = ProjectSummary & { plan: Plan | null; step: string; progress: number };
+type Version = { task_id: string; video_path: string; is_current?: boolean; generated_at?: string; media?: Record<string, unknown> };
+type Join = { left_id: string; right_id: string; status: string; review_completed?: boolean; review_ready?: boolean };
+type AssemblyView = {
+  revision: number; joins?: Join[]; sound?: { policy?: string; selected?: boolean; audio_asset_id?: string | null };
+  adoption?: { ready?: boolean; blockers?: unknown[] }; continuity_check?: { ready?: boolean; blockers?: unknown[]; checks?: unknown[] };
+  ready?: boolean; blockers?: unknown[];
+};
+type ReviewState = { reviews?: Record<string, Record<string, { revision?: number; status?: string; candidate_ref?: string }>> };
 
 const steps = [
   { id: 1, label: '愿望', hint: '故事与规格' },
@@ -175,10 +183,44 @@ function StepThree({ segments, planRevision, prompt, setPrompt, duration, setDur
   </div>;
 }
 
-function NextStep({ step, projectId, onOpenOld }: { step: Step; projectId: string; onOpenOld: () => void }) {
-  const labels = { 4: ['④ 候选', '生成和候选'], 5: ['⑤ 装配', '装配和接点'], 6: ['⑥ 交付', '全片审核和下载'] } as const;
-  const label = labels[step as 4 | 5 | 6] || labels[4];
-  return <div className="sf-step-panel"><p className="sf-step-label">{label[0]}</p><h1>{label[1]}仍在现有工作台</h1><p className="sf-lede">新首页和愿望/方案/分镜已接通真实数据。生成、候选、装配和交付按计划在下一步迁移，当前请从现有工作台继续，避免出现“看起来能用但实际是假数据”的入口。</p><div className="sf-next-card"><Layers3 size={22} /><div><strong>当前作品已保存</strong><small>{projectId}</small></div><button className="sf-primary" onClick={onOpenOld}>进入现有工作台继续 <ArrowRight size={16} /></button></div></div>;
+function mediaFile(path: string) { return `/media-file?path=${encodeURIComponent(path)}`; }
+
+function StepFour({ segments, shotId, setShotId, versions, busy, error, onLoad, onAdopt, onOld, onNext }: {
+  segments: Segment[]; shotId: string; setShotId: (id: string) => void; versions: Version[]; busy: boolean; error: string;
+  onLoad: (id: string) => void; onAdopt: (version: Version) => void; onOld: () => void; onNext: () => void;
+}) {
+  const current = segments.find(segment => segment.id === shotId) || segments[0];
+  return <div className="sf-step-panel"><p className="sf-step-label">④ 候选</p><h1>比较候选</h1><p className="sf-lede">选择一段查看已有生成结果。工作台不会自动选“最佳”，采用只影响这一段。</p>
+    <div className="sf-shot-tabs">{segments.map(segment => <button key={segment.id} className={segment.id === (current?.id || '') ? 'selected' : ''} onClick={() => { setShotId(segment.id); onLoad(segment.id); }}>{segment.id}<span>{segment.video?.path ? '有候选' : '待生成'}</span></button>)}</div>
+    {versions.length ? <div className="sf-version-grid">{versions.map(version => <article className="sf-version" key={version.task_id}><video src={mediaFile(version.video_path)} controls preload="metadata" /><div><strong>{version.is_current ? '当前版本' : '历史候选'}</strong><small>{version.generated_at || version.task_id.slice(0, 8)}</small><button className="sf-secondary" disabled={busy} onClick={() => onAdopt(version)}>采用这个候选</button></div></article>)}</div>
+      : <div className="sf-next-card"><Film size={22} /><div><strong>这一段还没有生成候选</strong><small>生成和重做仍使用现有工作台；先生成，再回来做逐段采用。</small></div><button className="sf-primary" onClick={onOld}>去现有工作台生成 <ArrowRight size={16} /></button></div>}
+    {error && <p className="sf-error" role="alert">{error}</p>}
+    <div className="sf-step-actions"><span className="sf-fine">采用是显式操作；不会自动采用其他镜头。</span><button className="sf-primary" disabled={!segments.every(segment => segment.video?.path)} onClick={onNext}>下一步：装配 <ArrowRight size={16} /></button></div>
+  </div>;
+}
+
+function StepFive({ assembly, task, busy, error, onSound, onJoin, onSubmit, onReload, onOld }: {
+  assembly: AssemblyView | null; task: { id?: string; status?: string; error?: string } | null; busy: boolean; error: string; onSound: () => void; onJoin: (join: Join) => void;
+  onSubmit: () => void; onReload: () => void; onOld: () => void;
+}) {
+  if (!assembly) return <div className="sf-step-panel"><p className="sf-step-label">⑤ 装配</p><h1>检查后生成成片</h1><div className="sf-next-card"><Layers3 size={22} /><div><strong>正在读取装配状态</strong><small>需要先生成至少一个采用候选。</small></div><button className="sf-secondary" onClick={onReload}>重新读取</button><button className="sf-secondary" onClick={onOld}>现有工作台</button></div>{error && <p className="sf-error">{error}</p>}</div>;
+  const joins = assembly.joins || [];
+  return <div className="sf-step-panel"><p className="sf-step-label">⑤ 装配</p><h1>检查后生成成片</h1><p className="sf-lede">采用、接点、音轨和连续性都确认后，才允许生成成片。</p>
+    <div className="sf-checklist">
+      <div className={`sf-check ${assembly.adoption?.ready ? 'done' : 'active'}`}><Check size={16} /><span><strong>分镜采用</strong><small>{assembly.adoption?.ready ? '所有参与分镜均有当前采用' : '仍有分镜未采用，请回到④'}</small></span></div>
+      <div className={`sf-check ${joins.length && joins.every(join => join.review_completed) ? 'done' : 'active'}`}><Check size={16} /><span><strong>接点审核</strong><small>{joins.filter(join => !join.review_completed).length ? `${joins.filter(join => !join.review_completed).length} 个接点待审核` : '接点均已审核'}</small></span></div>
+      <div className={`sf-check ${assembly.sound?.selected ? 'done' : 'active'}`}><Volume2 size={16} /><span><strong>音轨方式</strong><small>{assembly.sound?.selected ? `已选择：${assembly.sound.policy}` : '尚未选择音轨方式'}</small></span>{!assembly.sound?.selected && <button className="sf-secondary" disabled={busy} onClick={onSound}>保留各段原音</button>}</div>
+      <div className={`sf-check ${assembly.continuity_check?.ready ? 'done' : 'active'}`}><Check size={16} /><span><strong>连续性检查</strong><small>{assembly.continuity_check?.ready ? '只读检查通过' : `${assembly.continuity_check?.blockers?.length || 0} 个阻断`}</small></span></div>
+    </div>
+    {joins.length > 0 && <div className="sf-join-list">{joins.map(join => <div className="sf-join" key={`${join.left_id}-${join.right_id}`}><span>{join.left_id} → {join.right_id}</span><span className={join.review_completed ? 'sf-ok' : ''}>{join.review_completed ? '已审核' : join.status}</span>{!join.review_completed && <button className="sf-secondary" disabled={busy} onClick={() => onJoin(join)}>通过接点</button>}</div>)}</div>}
+    {error && <p className="sf-error" role="alert">{error}</p>}
+    <div className="sf-step-actions"><button className="sf-secondary" onClick={onReload}>刷新检查</button><button className="sf-primary" disabled={busy || !assembly.ready} onClick={onSubmit}>{busy ? '提交中…' : '生成成片'} <ArrowRight size={16} /></button></div>
+    {task && <p className="sf-task-note">装配任务：{task.status || '已提交…'}{task.error ? ` · ${task.error}` : ''}</p>}
+  </div>;
+}
+
+function StepSix({ output, busy, error, assembly, onFinal, onOld }: { output: string; busy: boolean; error: string; assembly: AssemblyView | null; onFinal: () => void; onOld: () => void }) {
+  return <div className="sf-step-panel"><p className="sf-step-label">⑥ 交付</p><h1>成片</h1>{output ? <div className="sf-final-grid"><div className="sf-film"><video src={mediaFile(output)} controls preload="metadata" /><span className="sf-film-duration">{assembly?.revision !== undefined ? `计划 revision ${assembly.revision}` : ''}</span></div><div className="sf-final-meta"><h2>成片候选</h2><p>通过全片审核后才算交付；下载不等于采用。</p><div className="sf-final-actions"><button className="sf-primary" disabled={busy} onClick={onFinal}>{busy ? '提交中…' : '通过全片审核'}</button><a className="sf-secondary" href={mediaFile(output)} download>下载</a></div><button className="sf-secondary sf-wide-button" onClick={onOld}>返回现有工作台</button></div></div> : <div className="sf-next-card"><Film size={22} /><div><strong>还没有成片</strong><small>完成装配后在这里预览和审核。</small></div><button className="sf-secondary" onClick={onOld}>现有工作台</button></div>}{error && <p className="sf-error">{error}</p>}</div>;
 }
 
 export default function StudioFlowLive({ username, onLogout }: { username: string; onLogout: () => void }) {
@@ -200,6 +242,12 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [quickTool, setQuickTool] = useState<QuickTool>('text-video');
+  const [versions, setVersions] = useState<Version[]>([]);
+  const [versionShot, setVersionShot] = useState('');
+  const [reviews, setReviews] = useState<ReviewState>({});
+  const [assembly, setAssembly] = useState<AssemblyView | null>(null);
+  const [assemblyOutput, setAssemblyOutput] = useState('');
+  const [assemblyTask, setAssemblyTask] = useState<{ id?: string; status?: string; error?: string } | null>(null);
 
   const loadProjects = async () => {
     setLoading(true); setLoadError('');
@@ -224,7 +272,20 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
     finally { setLoading(false); }
   };
 
-  useEffect(() => { void loadProjects(); }, []);
+  useEffect(() => {
+    const deepLink = new URLSearchParams(window.location.search).get('project');
+    if (deepLink) { void openProject(deepLink); } else { void loadProjects(); }
+  }, []);
+  useEffect(() => {
+    if (!projectId || !plan) return;
+    if (step === 4) {
+      const shot = plan.segments.find(segment => segment.video?.path)?.id || plan.segments[0]?.id;
+      if (shot) void loadVersions(shot);
+      void loadAssembly();
+    }
+    if (step === 5) void loadAssembly();
+    if (step === 6) void loadAssembly();
+  }, [step, projectId]);
 
   const openProject = async (id: string) => {
     setBusy(true); setError('');
@@ -232,7 +293,7 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
       const projectPlan = await api<Plan>(`/api/projects/${id}/plan`);
       const detail = await api<{ production_preset?: { id?: string }; pipeline?: { id: string; execution?: { references?: string[] } }[] }>(`/api/projects/${id}`);
       setProjectId(id); setPlan(projectPlan); setPresetId(detail.production_preset?.id || ''); setWorkflow(detail.pipeline?.[0]?.execution?.references?.[0] || '');
-      setStep(projectPlan.segments.length ? 3 : 1); setScreen('wizard');
+      setStep(projectPlan.assembly?.output ? 6 : projectPlan.segments.length ? 3 : 1); setScreen('wizard');
     } catch (reason) { setError(reason instanceof Error ? reason.message : '无法读取作品计划'); }
     finally { setBusy(false); }
   };
@@ -279,6 +340,88 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
     window.location.href = '/';
   };
 
+  const loadVersions = async (shotId: string) => {
+    setVersionShot(shotId); setError('');
+    try {
+      const data = await api<{ items: Version[] }>(`/api/projects/${projectId}/segments/${encodeURIComponent(shotId)}/versions`);
+      setVersions(data.items || []);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '读取候选失败'); }
+  };
+
+  const loadAssembly = async () => {
+    if (!projectId) return;
+    try {
+      const [edit, currentPlan, state] = await Promise.all([
+        api<AssemblyView>(`/api/projects/${projectId}/assembly/edit`),
+        api<Plan & { assembly?: { output?: string; prompt_id?: string; status?: string } }>(`/api/projects/${projectId}/plan`),
+        api<ReviewState>(`/api/projects/${projectId}/state`),
+      ]);
+      setAssembly(edit); setAssemblyOutput(currentPlan.assembly?.output || '');  setReviews(state); setPlan(currentPlan);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '读取装配状态失败'); }
+  };
+
+  const adoptVersion = async (version: Version) => {
+    if (!versionShot) return;
+    setBusy(true); setError('');
+    try {
+      const record = reviews.reviews?.[versionShot]?.sample || reviews.reviews?.[versionShot]?.finish;
+      await api(`/api/projects/${projectId}/adoptions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ asset_id: versionShot, stage: 'sample', candidate_ref: version.video_path, expected_review_revision: record?.revision || 0, expected_plan_revision: plan?.revision || 0, note: '用户在新界面明确核对候选后采用', confirm_adoption: true }) });
+      setPlan(await api<Plan>(`/api/projects/${projectId}/plan`));
+      await loadVersions(versionShot);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '采用失败'); }
+    finally { setBusy(false); }
+  };
+
+  const setNativeSound = async () => {
+    if (!assembly) return;
+    setBusy(true); setError('');
+    try {
+      await api(`/api/projects/${projectId}/assembly/sound`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expected_revision: assembly.revision, policy: 'segment_native' }) });
+      await loadAssembly();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '设置音轨失败'); }
+    finally { setBusy(false); }
+  };
+
+  const approveJoin = async (join: Join) => {
+    if (!assembly) return;
+    setBusy(true); setError('');
+    try {
+      await api(`/api/projects/${projectId}/assembly/joins/${encodeURIComponent(join.left_id)}/${encodeURIComponent(join.right_id)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expected_revision: assembly.revision, status: 'approved', constraint: '', note: '用户在新界面明确审核接点' }) });
+      await loadAssembly();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '接点审核失败'); }
+    finally { setBusy(false); }
+  };
+
+  const submitAssembly = async () => {
+    if (!assembly) return;
+    setBusy(true); setError('');
+    try {
+      const task = await api<{ id: string; status?: string }>(`/api/projects/${projectId}/assembly`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ idempotency_key: crypto.randomUUID(), expected_revision: assembly.revision }) });
+      setAssemblyTask(task);
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        const current = await api<{ id: string; status: string; error?: string }>(`/api/projects/${projectId}/tasks/${encodeURIComponent(task.id)}`);
+        setAssemblyTask(current);
+        if (['succeeded', 'failed', 'stopped', 'needs_reconcile'].includes(current.status)) break;
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      }
+      await loadAssembly();
+      if ((assemblyOutput || '') !== '') setStep(6);
+      else setStep(6);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '装配提交失败'); }
+    finally { setBusy(false); }
+  };
+
+  const approveFinal = async () => {
+    if (!assemblyOutput) return;
+    setBusy(true); setError('');
+    try {
+      const record = reviews.reviews?.MASTER?.final;
+      await api(`/api/projects/${projectId}/adoptions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ asset_id: 'MASTER', stage: 'final', candidate_ref: assemblyOutput, expected_review_revision: record?.revision || 0, expected_plan_revision: plan?.revision || 0, note: '用户在新界面明确审核成片后采用', confirm_adoption: true }) });
+      setError(''); setAssemblyTask(null); await loadAssembly();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '成片采用失败'); }
+    finally { setBusy(false); }
+  };
+
   const startFull = () => { setTitle(''); setSeries('新作品'); setDuration(15); setPlan(null); setProjectId(''); setPresetId(''); setError(''); setStep(1); setScreen('wizard'); };
   const newProject = () => setScreen('intent');
   const quick = (tool: QuickTool) => { setQuickTool(tool); setScreen('quick'); };
@@ -293,7 +436,9 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
       {step === 1 && <StepOne title={title} setTitle={setTitle} series={series} setSeries={setSeries} duration={duration} setDuration={setDuration} busy={busy} error={error} onNext={() => void createProject()} />}
       {step === 2 && <StepTwo presets={presets} selected={presetId} setSelected={setPresetId} busy={busy} error={error} onNext={() => void installPreset()} />}
       {step === 3 && <StepThree segments={plan?.segments || []} planRevision={plan?.revision ?? 0} prompt={prompt} setPrompt={setPrompt} duration={shotDuration} setDuration={setShotDuration} onAdd={() => void addShot()} busy={busy} error={error} onNext={() => setStep(4)} />}
-      {step >= 4 && <NextStep step={step} projectId={projectId} onOpenOld={() => void openOldWorkspace()} />}
+      {step === 4 && <StepFour segments={plan?.segments || []} shotId={versionShot} setShotId={setVersionShot} versions={versions} busy={busy} error={error} onLoad={id => void loadVersions(id)} onAdopt={version => void adoptVersion(version)} onOld={() => void openOldWorkspace()} onNext={() => setStep(5)} />}
+      {step === 5 && <StepFive assembly={assembly} task={assemblyTask} busy={busy} error={error} onSound={() => void setNativeSound()} onJoin={join => void approveJoin(join)} onSubmit={() => void submitAssembly()} onReload={() => void loadAssembly()} onOld={() => void openOldWorkspace()} />}
+      {step === 6 && <StepSix output={assemblyOutput} assembly={assembly} busy={busy} error={error} onFinal={() => void approveFinal()} onOld={() => void openOldWorkspace()} />}
       {step > 1 && step < 4 && <div className="sf-bottom-bar"><button className="sf-secondary" onClick={() => setStep((step - 1) as Step)}><ChevronLeft size={15} /> 上一步</button><span>每一步都可以保存后离开</span></div>}
     </Wizard>}
   </div>;
