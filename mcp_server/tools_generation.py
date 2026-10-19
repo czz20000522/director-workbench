@@ -14,7 +14,8 @@ else:
     import media
 
 
-def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, write_record: ToolAnnotations) -> None:
+def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, write_record: ToolAnnotations,
+             idempotent_write: ToolAnnotations) -> None:
     request = client.request
     project_path = client.project_path
     path_id = client.path_id
@@ -27,23 +28,28 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
             result['data'] = await media.shape_task(client, project_id, data)
         return result
 
-    @server.tool(annotations=write_record)
-    async def submit_shot(project_id: str, asset_id: str, idempotency_key: str, pipeline_stage_id: str | None = None, pipeline_values: dict[str, Any] | None = None, prompt: str | None = None, seed: int | None = None,
+    @server.tool(annotations=idempotent_write)
+    async def submit_shot(project_id: str, asset_id: Annotated[str, Field(min_length=1, max_length=160)],
+                          idempotency_key: Annotated[str, Field(min_length=1, max_length=160, pattern=r'\S')],
+                          pipeline_stage_id: Annotated[str | None, Field(max_length=120)] = None,
+                          pipeline_values: dict[str, Any] | None = None,
+                          prompt: Annotated[str | None, Field(max_length=100000)] = None,
+                          seed: int | None = None,
                           expected_revision: Annotated[int | None, Field(strict=True, ge=0)] = None) -> dict[str, Any]:
         """提交已配置方案的单段生成，返回任务回执。先预检；每次新操作使用唯一请求标识，网络不确定时保留同一标识和参数核对，勿改键重发。不会自动采用结果。"""
-        if not idempotency_key.strip() or len(idempotency_key) > 160:
-            raise ValueError('请求标识必须为 1–160 个字符且非空白')
         result = await request('POST', project_path(project_id) + '/tasks', json={'asset_id': asset_id, 'idempotency_key': idempotency_key, 'pipeline_stage_id': pipeline_stage_id, 'pipeline_values': pipeline_values or {}, 'prompt': prompt, 'seed': seed,
             **({'expected_revision': expected_revision} if expected_revision is not None else {})})
         return await shape_task_result(result, project_id)
 
-    @server.tool(annotations=write_record)
-    async def submit_batch(project_id: str, asset_ids: list[str], idempotency_key: str,
-                           pipeline_stage_id: str | None = None, pipeline_values_by_asset: dict[str, dict[str, Any]] | None = None,
+    @server.tool(annotations=idempotent_write)
+    async def submit_batch(project_id: str,
+                           asset_ids: Annotated[list[Annotated[str, Field(min_length=1, max_length=160)]],
+                                                Field(min_length=1, max_length=128)],
+                           idempotency_key: Annotated[str, Field(min_length=1, max_length=160, pattern=r'\S')],
+                           pipeline_stage_id: Annotated[str | None, Field(max_length=120)] = None,
+                           pipeline_values_by_asset: dict[str, dict[str, Any]] | None = None,
                            expected_revision: Annotated[int | None, Field(strict=True, ge=0)] = None) -> dict[str, Any]:
         """按同一公开批次接口冻结并排队，每个分镜在任务边界参与用户轮换；不会自动采用候选。断线先查询请求回执。"""
-        if not asset_ids or any(not isinstance(asset_id, str) or not asset_id.strip() for asset_id in asset_ids):
-            raise ValueError('批次必须明确提供至少一个非空分镜 asset_id')
         return await request('POST', project_path(project_id) + '/batches', json={'asset_ids': asset_ids,
             'idempotency_key': idempotency_key, 'pipeline_stage_id': pipeline_stage_id,
             'pipeline_values_by_asset': pipeline_values_by_asset or {},
@@ -59,11 +65,10 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         """按 reference 改图或 text 文字生图检查节点与模型，不启动生成。"""
         return await request('GET', '/api/keyframe-capability', params={'mode': mode})
 
-    @server.tool(annotations=write_record)
-    async def submit_assembly(project_id: str, expected_revision: int, idempotency_key: str) -> dict[str, Any]:
+    @server.tool(annotations=idempotent_write)
+    async def submit_assembly(project_id: str, expected_revision: Annotated[int, Field(strict=True, ge=0)],
+                              idempotency_key: Annotated[str, Field(min_length=1, max_length=160, pattern=r'\S')]) -> dict[str, Any]:
         """按已审核候选和计划顺序提交成片装配。要求plan.revision及唯一请求标识；不批准分镜。同键同参数找回原任务，断线先get_submission_receipt查询，不能换键重提。完成后read_project读取成片候选，不代表最终采用。"""
-        if expected_revision < 0 or not idempotency_key.strip() or len(idempotency_key) > 160:
-            raise ValueError('需要非负计划版本及有效请求标识')
         result = await request('POST', project_path(project_id) + '/assembly', json={
             'expected_revision': expected_revision, 'idempotency_key': idempotency_key})
         return await shape_task_result(result, project_id)
@@ -77,7 +82,8 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
     async def review_assembly_join(project_id: str, left_id: str, right_id: str,
                                    expected_revision: Annotated[int, Field(strict=True, ge=0)],
                                    status: Literal['pending', 'approved', 'redo_left', 'redo_right'],
-                                   constraint: str = '', note: str = '') -> dict[str, Any]:
+                                   constraint: Annotated[str, Field(max_length=2000)] = '',
+                                   note: Annotated[str, Field(max_length=2000)] = '') -> dict[str, Any]:
         """审核当前相邻两段的视频接点，绑定两侧当前视频版本；更换视频后结论自动过期。先 read_assembly_edit 获取顺序和 revision。"""
         return await request('PUT', project_path(project_id) + '/assembly/joins/' +
                              path_id(left_id, '左分镜') + '/' + path_id(right_id, '右分镜'),
@@ -102,10 +108,15 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         """只读检查显式分镜顺序、明确采用、接点审核、音轨策略与参考/当前差异，返回可解释检查项和阻断项；不自动修复、不选候选、不审核、不采用。"""
         return await request('GET', project_path(project_id) + '/assembly/continuity-check')
 
-    @server.tool(annotations=write_record)
-    async def submit_keyframe(project_id: str, prompt: str, idempotency_key: str, reference_image: str | None = None,
-                              seed: int = 340921, mode: Literal['reference', 'text'] = 'reference',
-                              width: int = 768, height: int = 1344,
+    @server.tool(annotations=idempotent_write)
+    async def submit_keyframe(project_id: str,
+                              prompt: Annotated[str, Field(min_length=1, max_length=6000)],
+                              idempotency_key: Annotated[str, Field(min_length=1, max_length=160, pattern=r'\S')],
+                              reference_image: Annotated[str | None, Field(min_length=1, max_length=1000)] = None,
+                              seed: Annotated[int, Field(ge=0, le=2 ** 64 - 1)] = 340921,
+                              mode: Literal['reference', 'text'] = 'reference',
+                              width: Annotated[int, Field(ge=512, le=1536)] = 768,
+                              height: Annotated[int, Field(ge=512, le=1536)] = 1344,
                               creative_profile: Literal['general', 'adult-realism', 'adult-anime'] = 'general') -> dict[str, Any]:
         """生成独立图片候选。reference 需参考图片；text 不传图片、可设画幅。成人向配置仅支持虚构成年人和非露骨内容；断线保留原键查回执，不自动采用首尾帧。"""
         result = await request('POST', project_path(project_id) + '/keyframe-tasks', json={
@@ -118,11 +129,15 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         """检查本机声音执行器和模型文件，返回 available、missing 和语言；不加载模型或生成声音。文件就绪不等于显卡空闲或音频质量已确认。"""
         return await request('GET', '/api/speech-capability')
 
-    @server.tool(annotations=write_record)
-    async def submit_speech(project_id: str, text: str, idempotency_key: str,
-                            voice_reference: str | None = None,
-                            gen_seconds: float | None = None, seed: int | None = None,
-                            mode: str = 'reference', voice_description: str | None = None) -> dict[str, Any]:
+    @server.tool(annotations=idempotent_write)
+    async def submit_speech(project_id: str,
+                            text: Annotated[str, Field(min_length=1, max_length=2000)],
+                            idempotency_key: Annotated[str, Field(min_length=1, max_length=160, pattern=r'\S')],
+                            voice_reference: Annotated[str | None, Field(min_length=1, max_length=1000)] = None,
+                            gen_seconds: Annotated[float | None, Field(gt=0, le=30, allow_inf_nan=False)] = None,
+                            seed: Annotated[int | None, Field(strict=True, ge=0, le=4294967295)] = None,
+                            mode: Literal['reference', 'design'] = 'reference',
+                            voice_description: Annotated[str | None, Field(min_length=1, max_length=2000)] = None) -> dict[str, Any]:
         """使用本地 AuK-Flash 生成台词候选。默认mode=reference须提供作品内voice_reference且不传voice_description；mode=design须提供非空voice_description且不传参考，可在无音频的新作品设计声音。请求时长默认4.5秒，范围(0,30]，参考与请求总时长不超过30秒；不保证台词完整。seed默认20260923（uint32）。候选试听后可作后续参考，不自动采用。相同标识和参数返回原任务，历史请求重查勿追加参数。断线先get_submission_receipt核对。"""
         body = {'text': text, 'idempotency_key': idempotency_key}
         if mode != 'reference':
@@ -139,12 +154,13 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         return await shape_task_result(result, project_id)
 
     @server.tool(annotations=read_only)
-    async def get_submission_receipt(project_id: str, idempotency_key: str) -> dict[str, Any]:
+    async def get_submission_receipt(project_id: str,
+                                     idempotency_key: Annotated[str, Field(min_length=1, max_length=160, pattern=r'\S')]) -> dict[str, Any]:
         """按原请求标识查生成任务，无需 ComfyUI 在线，不提交生成。404 只代表尚未落库，不证明原请求失败；保留原键并稍后核对。远程回执以受控 media 引用替代服务器路径。"""
         result = await request('GET', project_path(project_id) + '/submission-receipt', params={'key': idempotency_key})
         return await shape_task_result(result, project_id)
 
-    @server.tool(annotations=write_record)
+    @server.tool(annotations=idempotent_write)
     async def reconcile_generation(project_id: str, task_id: str) -> dict[str, Any]:
         """核对待恢复任务：视频查原 ComfyUI 队列/历史，声音及媒体工具查独立完成回执；找回结果到原任务，不创建重试或提交生成。无法确认时保留原状态。"""
         if not task_id or task_id in {'.', '..'} or '/' in task_id or '\\' in task_id:

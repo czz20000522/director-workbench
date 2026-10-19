@@ -40,6 +40,10 @@ def create_server(base_url: str, transport: httpx.AsyncBaseTransport | None = No
     session_headers = {'Authorization': 'Bearer ' + session_token} if session_token else {}
     server = MCPServer('director-workbench')
     read_only = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
+    # Writes whose contract replays on the caller's original idempotency key:
+    # repeating the same key and parameters returns the original record/task.
+    idempotent_write = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
+    # Writes without a replayable key or with a new record/attempt per call.
     write_record = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False)
 
     def current_headers() -> dict[str, str] | None:
@@ -111,10 +115,10 @@ def create_server(base_url: str, transport: httpx.AsyncBaseTransport | None = No
 
     client = _Client(request, project_path, path_id, fetch, remote)
     guarded = errors.ToolServer(server)
-    tools_creative.register(guarded, client, read_only=read_only, write_record=write_record)
-    tools_reference.register(guarded, client, read_only=read_only, write_record=write_record)
-    tools_generation.register(guarded, client, read_only=read_only, write_record=write_record)
-    tools_media.register(guarded, client, read_only=read_only, write_record=write_record)
+    tools_creative.register(guarded, client, read_only=read_only, write_record=write_record, idempotent_write=idempotent_write)
+    tools_reference.register(guarded, client, read_only=read_only, write_record=write_record, idempotent_write=idempotent_write)
+    tools_generation.register(guarded, client, read_only=read_only, write_record=write_record, idempotent_write=idempotent_write)
+    tools_media.register(guarded, client, read_only=read_only, write_record=write_record, idempotent_write=idempotent_write)
     return server
 
 

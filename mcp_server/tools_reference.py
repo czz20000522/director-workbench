@@ -4,11 +4,12 @@ from __future__ import annotations
 import base64
 import math
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
 from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
+from pydantic import Field
 
 if __package__:
     from . import errors, media
@@ -20,7 +21,8 @@ MAX_REFERENCE_BYTES = 16 * 1024 * 1024
 MAX_REFERENCE_BASE64 = 22_369_624
 
 
-def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, write_record: ToolAnnotations) -> None:
+def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, write_record: ToolAnnotations,
+             idempotent_write: ToolAnnotations) -> None:
     request = client.request
     project_path = client.project_path
     path_id = client.path_id
@@ -68,7 +70,7 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
             result['data'] = {**result['data'], 'job': media.public_job(result['data'].get('job'))}
         return result
 
-    @server.tool(annotations=write_record)
+    @server.tool(annotations=idempotent_write)
     async def import_reference_from_material(project_id: str, asset_id: str) -> dict[str, Any]:
         """把本作品已上传的音频/视频素材登记为参考拆解，远程 Agent 无需服务器路径。
         只做媒体探测和参考登记，不抽帧、不切段、不运行 ASR 或语义模型，也不改制作分镜。
@@ -176,11 +178,11 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         result = await request('POST', project_path(project_id) + '/reverse-analyses/' + analysis_id + '/observations/asr', json={})
         return await shape_observation_result(result, project_id, analysis_id)
 
-    @server.tool(annotations=read_only)
-    async def list_references(project_id: str, limit: int = 20, offset: int = 0) -> dict[str, Any]:
+    @server.tool(annotations=read_only, meta=errors.PAGINATION_META)
+    async def list_references(project_id: str,
+                              limit: Annotated[int, Field(strict=True, ge=1, le=100)] = 20,
+                              offset: Annotated[int, Field(strict=True, ge=0)] = 0) -> dict[str, Any]:
         """分页列出作品已有参考拆解摘要；用 read_reference 读取时间线、分析工件或分析任务。不会上传或启动分析。"""
-        if not 1 <= limit <= 100 or offset < 0:
-            return errors.error('invalid_pagination', 'limit 须为 1–100，offset 须为非负整数', kind='argument')
         result = await request('GET', project_path(project_id) + '/reverse-analyses')
         if not result['ok']:
             return result
@@ -211,7 +213,7 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         result = await request('POST', project_path(project_id) + '/reverse-analyses/' + analysis_id + '/semantic-jobs')
         return await shape_job_result(result)
 
-    @server.tool(annotations=write_record)
+    @server.tool(annotations=idempotent_write)
     async def reconcile_reference_analysis(project_id: str, analysis_id: str) -> dict[str, Any]:
         """核对参考分析的独立完成回执并恢复原任务，不重新运行分析。仅用于 needs_reconcile；409 表示尚不能确认，保留待核对状态，不能据此重启分析。"""
         valid_analysis_id(analysis_id)

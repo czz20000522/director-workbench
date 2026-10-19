@@ -18,7 +18,8 @@ else:
     from models import ScriptScene, ShotChanges, ShotMaterials
     import errors, media
 
-def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, write_record: ToolAnnotations) -> None:
+def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, write_record: ToolAnnotations,
+             idempotent_write: ToolAnnotations) -> None:
     request = client.request
     project_path = client.project_path
     path_id = client.path_id
@@ -60,7 +61,7 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         return await request('GET', '/api/settings/guide', params={'project_id': project_id} if project_id else {})
 
     @server.tool(annotations=write_record)
-    async def update_guide_settings(expected_revision: int, changes: dict[str, Any]) -> dict[str, Any]:
+    async def update_guide_settings(expected_revision: Annotated[int, Field(strict=True, ge=0)], changes: dict[str, Any]) -> dict[str, Any]:
         """保存指南 status、project_id、route、completed_steps；服务端校验版本和作品归属。标记学习进度不代表作品审核通过。"""
         return await request('PATCH', '/api/settings/guide', json={**changes, 'expected_revision': expected_revision})
 
@@ -82,7 +83,9 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         return await request('POST', project_path(project_id) + '/production-presets/' + quote(preset_id, safe=''))
 
     @server.tool(annotations=write_record)
-    async def create_project(series: str, title: str, creation_mode: Literal['advanced'], project_id: str | None = None) -> dict[str, Any]:
+    async def create_project(series: Annotated[str, Field(min_length=1, max_length=120)],
+                             title: Annotated[str, Field(min_length=1, max_length=160)],
+                             creation_mode: Literal['advanced'], project_id: str | None = None) -> dict[str, Any]:
         """创建空白作品，不切换人的当前作品。必须显式提供 creation_mode='advanced'；auto 已移除，缺省会被拒绝。使用返回的实际 project.id；同名可能自动加后缀。请求结果不确定时先 list_projects 核对，不自动重发。创建后显式选择制作方案（configure_production_preset）再保存分镜。"""
         if project_id is not None: project_path(project_id)
         return await request('POST', '/api/projects/create', json={'series': series, 'title': title,
@@ -116,8 +119,10 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
             'scenes': [scene.model_dump() for scene in scenes],
         })
 
-    @server.tool(annotations=read_only)
-    async def list_tasks(project_id: str, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    @server.tool(annotations=read_only, meta=errors.PAGINATION_META)
+    async def list_tasks(project_id: str,
+                         limit: Annotated[int, Field(strict=True, ge=1, le=100)] = 50,
+                         offset: Annotated[int, Field(strict=True, ge=0)] = 0) -> dict[str, Any]:
         """分页读取指定作品的任务。使用 next_offset 继续；未知状态不等于失败。
         远程回执保留任务/素材 ID 和状态，以受控 media 引用替代服务器路径。
         """
@@ -134,7 +139,7 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         result = await request('GET', project_path(project_id) + '/tasks/' + quote(task_id, safe=''))
         return await shape_task_result(result, project_id)
 
-    @server.tool(annotations=read_only)
+    @server.tool(annotations=read_only, meta=errors.PAGINATION_META)
     async def list_shot_versions(
         project_id: str, segment_id: str,
         limit: Annotated[int, Field(strict=True, ge=1, le=100)] = 20,
@@ -160,7 +165,9 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         return await request('POST', path, json={'expected_plan_revision': expected_plan_revision})
 
     @server.tool(annotations=read_only)
-    async def preflight(project_id: str, asset_id: str, stage_id: str, values: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def preflight(project_id: str, asset_id: Annotated[str, Field(min_length=1, max_length=160)],
+                        stage_id: Annotated[str, Field(min_length=1, max_length=120)],
+                        values: dict[str, Any] | None = None) -> dict[str, Any]:
         """预检已保存分镜，不生成。必须显式提供 stage_id（来自 read_project 的 pipeline 或已安装方案）；自动方案已移除，缺省会被拒绝。"""
         if not stage_id or '/' in stage_id or '\\' in stage_id or stage_id in {'.', '..'}:
             raise ValueError('必须提供有效步骤 ID')
@@ -179,12 +186,17 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
                              json={'task_id': task_id, 'expected_revision': expected_revision, 'dry_run': dry_run})
 
     @server.tool(annotations=write_record)
-    async def save_creative_draft(project_id: str, expected_revision: int, values: dict[str, Any]) -> dict[str, Any]:
+    async def save_creative_draft(project_id: str, expected_revision: Annotated[int, Field(strict=True, ge=0)],
+                                  values: dict[str, Any]) -> dict[str, Any]:
         """保存创作草稿供人或 Agent 接续。先读取 state.creative 的 revision（不存在为 0）；冲突须重新读取比较。不会批准制作。"""
         return await request('POST', project_path(project_id) + '/creative', json={'expected_revision': expected_revision, 'values': values, 'status': 'draft', 'source': 'director-mcp'})
 
     @server.tool(annotations=write_record)
-    async def record_review(project_id: str, asset_id: str, stage: Literal['sample', 'finish', 'final'], expected_revision: int, note: str, status: Literal['pending_review', 'changes_requested'] = 'pending_review', candidate_ref: str | None = None) -> dict[str, Any]:
+    async def record_review(project_id: str, asset_id: str, stage: Literal['sample', 'finish', 'final'],
+                            expected_revision: Annotated[int, Field(strict=True, ge=0)],
+                            note: Annotated[str, Field(max_length=4000)],
+                            status: Literal['pending_review', 'changes_requested'] = 'pending_review',
+                            candidate_ref: Annotated[str | None, Field(max_length=1000)] = None) -> dict[str, Any]:
         """记录候选的初审意见或退回修改，不执行最终采用。版本取 state.reviews[asset_id][stage]，不存在为 0；409 后比较更新，不自动重发。"""
         return await request('POST', project_path(project_id) + '/reviews', json={'asset_id': asset_id, 'stage': stage, 'expected_revision': expected_revision, 'note': note, 'status': status, 'candidate_ref': candidate_ref, 'source': 'director-mcp'})
 
@@ -212,7 +224,8 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
             'note': note, 'confirm_adoption': confirm_adoption})
 
     @server.tool(annotations=write_record)
-    async def update_shot(project_id: str, asset_id: str, expected_revision: int, changes: ShotChanges) -> dict[str, Any]:
+    async def update_shot(project_id: str, asset_id: str, expected_revision: Annotated[int, Field(strict=True, ge=0)],
+                          changes: ShotChanges) -> dict[str, Any]:
         """修改已有分镜。版本来自 read_project(section='plan').revision；只提交需要修改的字段。workflow/preset_id 必须显式选择已安装方案；generation 只接受参数（mode 已移除）。素材路径使用作品返回的登记引用，不猜测路径。关联场次在 changes 传 script_scene_id 和 read_script 的 expected_script_revision；空串解除关联。不提交生成。"""
         if not asset_id or asset_id in {'.', '..'} or '/' in asset_id or '\\' in asset_id:
             raise ValueError('必须提供有效分镜 ID')
@@ -224,7 +237,10 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         return await request('PATCH', project_path(project_id) + '/plan/segments/' + quote(asset_id, safe=''), json={**patch, 'expected_revision': expected_revision})
 
     @server.tool(annotations=write_record)
-    async def arrange_shot(project_id: str, asset_id: str, expected_revision: int, operation: Literal['copy', 'move', 'split', 'merge', 'merge_range'], target_id: str | None = None, before_id: str | None = None, split_at_seconds: float | None = None) -> dict[str, Any]:
+    async def arrange_shot(project_id: str, asset_id: str, expected_revision: Annotated[int, Field(strict=True, ge=0)],
+                           operation: Literal['copy', 'move', 'split', 'merge', 'merge_range'],
+                           target_id: str | None = None, before_id: str | None = None,
+                           split_at_seconds: Annotated[float | None, Field(gt=0, le=600)] = None) -> dict[str, Any]:
         """整理制作分镜：copy 复制；move 用 before_id 指定插入位置（__end__ 表示末尾）；split 用 split_at_seconds 指定镜内拆分时间；merge 用 target_id 指定相邻分镜；merge_range 将当前分镜至 target_id 的连续范围一次合并（目标必须在当前之后）。版本取 plan.revision，必须提供。操作可能使候选和审核过期，不生成视频；回执不确定先读取计划，禁止盲目重试。"""
         if not asset_id or asset_id in {'.', '..'} or '/' in asset_id or '\\' in asset_id:
             raise ValueError('必须提供有效分镜 ID')
@@ -235,7 +251,12 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         return await request('POST', project_path(project_id) + '/plan/segments/' + quote(asset_id, safe='') + '/operate', json={'operation': operation, 'expected_revision': expected_revision, **supplied})
 
     @server.tool(annotations=write_record)
-    async def create_shot(project_id: str, segment_id: str, expected_revision: int, duration_seconds: float, prompt: str = '', performance: str = '', materials: ShotMaterials | None = None,
+    async def create_shot(project_id: str, segment_id: Annotated[str, Field(min_length=1, max_length=160)],
+                          expected_revision: Annotated[int, Field(strict=True, ge=0)],
+                          duration_seconds: Annotated[float, Field(gt=0, le=600)],
+                          prompt: Annotated[str, Field(max_length=100000)] = '',
+                          performance: Annotated[str, Field(max_length=1000)] = '',
+                          materials: ShotMaterials | None = None,
                           script_scene_id: Annotated[str | None, Field(max_length=160)] = None,
                           expected_script_revision: Annotated[int | None, Field(strict=True, ge=0)] = None,
                           generation: GenerationSettings | None = None,
