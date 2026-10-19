@@ -34,6 +34,8 @@ if ($publicEnabled) {
 $workbenchHost = if ($publicEnabled -and $public.WorkbenchHost) { [string]$public.WorkbenchHost } else { '0.0.0.0' }
 $workbenchOrigins = if ($publicEnabled -and $public.Origins) { [string]$public.Origins } else { '' }
 $secureCookie = [bool]($publicEnabled -and $public.SecureCookie)
+$mcpAllowedHosts = if ($publicEnabled -and $public.McpAllowedHosts) { [string]$public.McpAllowedHosts } else { '' }
+$mcpAllowedOrigins = if ($publicEnabled -and $public.McpAllowedOrigins) { [string]$public.McpAllowedOrigins } else { '' }
 $tunnelTarget = if ($publicEnabled) { [string]$public.TunnelTarget } else { '' }
 $tunnelRemotePort = if ($publicEnabled -and $public.TunnelRemotePort) { [int]$public.TunnelRemotePort } else { $WorkbenchPort }
 $tunnelLocalPort = if ($publicEnabled -and $public.TunnelLocalPort) { [int]$public.TunnelLocalPort } else { $WorkbenchPort }
@@ -309,11 +311,17 @@ if (Test-TcpPort '127.0.0.1' $WorkbenchPort) {
     )
     Write-Host '正在启动导演工作台……' -ForegroundColor Yellow
     $previousCookieSecure = $env:DIRECTOR_COOKIE_SECURE
+    $previousMcpHosts = $env:DIRECTOR_MCP_ALLOWED_HOSTS
+    $previousMcpOrigins = $env:DIRECTOR_MCP_ALLOWED_ORIGINS
     try {
         if ($secureCookie) { $env:DIRECTOR_COOKIE_SECURE = '1' } else { Remove-Item Env:DIRECTOR_COOKIE_SECURE -ErrorAction SilentlyContinue }
+        if ($mcpAllowedHosts) { $env:DIRECTOR_MCP_ALLOWED_HOSTS = $mcpAllowedHosts } else { Remove-Item Env:DIRECTOR_MCP_ALLOWED_HOSTS -ErrorAction SilentlyContinue }
+        if ($mcpAllowedOrigins) { $env:DIRECTOR_MCP_ALLOWED_ORIGINS = $mcpAllowedOrigins } else { Remove-Item Env:DIRECTOR_MCP_ALLOWED_ORIGINS -ErrorAction SilentlyContinue }
         $workbenchProcess = Start-Process -FilePath 'pwsh.exe' -ArgumentList $arguments -WorkingDirectory $projectRoot -WindowStyle Hidden -PassThru
     } finally {
         if ($null -ne $previousCookieSecure) { $env:DIRECTOR_COOKIE_SECURE = $previousCookieSecure } else { Remove-Item Env:DIRECTOR_COOKIE_SECURE -ErrorAction SilentlyContinue }
+        if ($null -ne $previousMcpHosts) { $env:DIRECTOR_MCP_ALLOWED_HOSTS = $previousMcpHosts } else { Remove-Item Env:DIRECTOR_MCP_ALLOWED_HOSTS -ErrorAction SilentlyContinue }
+        if ($null -ne $previousMcpOrigins) { $env:DIRECTOR_MCP_ALLOWED_ORIGINS = $previousMcpOrigins } else { Remove-Item Env:DIRECTOR_MCP_ALLOWED_ORIGINS -ErrorAction SilentlyContinue }
     }
     Wait-TcpPort '127.0.0.1' $WorkbenchPort 30 '导演工作台' $workbenchProcess
     $null = Invoke-RestMethod -Uri "http://127.0.0.1:$WorkbenchPort/api/auth/config" -TimeoutSec 5
