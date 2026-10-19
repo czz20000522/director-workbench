@@ -100,6 +100,11 @@ class PrivateAuth:
         # under a lock.  A reservation is made before password verification so
         # concurrent failures cannot all pass the same remaining quota.
         self.login_failures: dict[tuple[str, str], list[float]] = {}
+        # Reservations are kept separately so a failure callback can confirm
+        # the token already consumed by ``login_allowed`` without counting it
+        # a second time.  Direct callers that have no reservation retain the
+        # compatibility behaviour of recording one failure.
+        self.login_reservations: dict[tuple[str, str], int] = {}
         self.login_lock = threading.Lock()
 
     @staticmethod
@@ -245,15 +250,31 @@ class PrivateAuth:
             # reservation.  This avoids turning a persistence outage into an
             # unlimited guessing loop while keeping normal logins available.
             self.login_failures.setdefault(key, []).append(now)
+            self.login_reservations[key] = self.login_reservations.get(key, 0) + 1
             self._trim_login_failures()
             return True
 
     def record_login_failure(self, username: str, source: str) -> None:
+        """Confirm a failed login without consuming a reservation twice.
+
+        ``login_allowed`` reserves the failure token before password
+        verification.  The HTTP path calls this method after verification so
+        the reservation has an explicit confirmation point; when no
+        reservation exists, this remains a useful compatibility API for
+        callers that record failures directly.
+        """
         key = self._key(username, source)
         wall_now = time.time()
         with self.login_lock:
             now = time.monotonic()
             self._prune_login_failures(now)
+            pending = self.login_reservations.get(key, 0)
+            if pending:
+                if pending == 1:
+                    self.login_reservations.pop(key, None)
+                else:
+                    self.login_reservations[key] = pending - 1
+                return
             self.login_failures.setdefault(key, []).append(now)
             self._trim_login_failures()
         self._persistent_record(key[0], key[1], wall_now)
@@ -262,6 +283,7 @@ class PrivateAuth:
         key = self._key(username, source)
         with self.login_lock:
             self.login_failures.pop(key, None)
+            self.login_reservations.pop(key, None)
         self._persistent_clear(key[0], key[1])
 
     def _prune_login_failures(self, now: float) -> None:
@@ -272,6 +294,7 @@ class PrivateAuth:
                 self.login_failures[key] = recent
             else:
                 self.login_failures.pop(key, None)
+                self.login_reservations.pop(key, None)
 
     def _trim_login_failures(self) -> None:
         """Keep only the newest account/source keys under the memory cap."""
@@ -282,6 +305,7 @@ class PrivateAuth:
         oldest = sorted(self.login_failures.items(), key=lambda item: item[1][-1] if item[1] else float('-inf'))[:overflow]
         for key, _ in oldest:
             self.login_failures.pop(key, None)
+            self.login_reservations.pop(key, None)
 
     def authenticate(self, request):
         authorization = request.headers.get('authorization')
@@ -369,6 +393,7 @@ class PrivateAuth:
             try:
                 token = self.sessions.login(values['username'], values['password'])
             except (ValueError, TypeError, UnicodeError, AuthenticationError):
+                self.record_login_failure(username, source)
                 return await respond(401, '用户名或密码错误')
             self.clear_login_failures(username, source)
             old_token = request.cookies.get(COOKIE, '')

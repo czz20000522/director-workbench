@@ -66,6 +66,32 @@ def test_invalid_credentials_and_no_cookie_fallback(private_client):
     assert client.get('/api/probe', headers={'authorization': 'Bearer invalid'}).status_code == 401
 
 
+def test_http_login_failure_reservation_counts_once_and_success_clears(private_client, monkeypatch):
+    client, _, _ = private_client
+    monkeypatch.setattr('backend.private_auth.LOGIN_FAILURE_LIMIT', 5)
+
+    for _ in range(2):
+        assert login(client, password='wrong').status_code == 401
+    assert login(client).status_code == 200
+
+    # A successful login clears the two reservations, so a fresh five-failure
+    # window is available for the same account/source.
+    for _ in range(5):
+        assert login(client, password='wrong').status_code == 401
+    assert login(client, password='wrong').status_code == 429
+
+
+def test_http_login_failure_limit_survives_auth_restart(tmp_path, monkeypatch):
+    monkeypatch.setattr('backend.private_auth.LOGIN_FAILURE_LIMIT', 5)
+    first = _persistent_auth(tmp_path)
+    first_client = TestClient(first)
+    for _ in range(5):
+        assert login(first_client, password='wrong').status_code == 401
+
+    restarted_client = TestClient(_persistent_auth(tmp_path))
+    assert login(restarted_client, password='wrong').status_code == 429
+
+
 def test_cross_origin_missing_tab_and_stale_tab(private_client):
     client, _, _ = private_client
     assert client.post('/api/auth/login', json={'username': 'user001', 'password': 'test-one'}, headers={'origin': 'http://evil.test'}).status_code == 403
@@ -235,6 +261,18 @@ def test_login_reservation_is_atomic_across_auth_instances(tmp_path, monkeypatch
             'SELECT COUNT(*) FROM login_failure_events WHERE identity=? AND source=?',
             ('user001', '10.0.0.1'),
         ).fetchone()[0] == 5
+
+
+def test_failure_confirmation_does_not_duplicate_reserved_token(tmp_path, monkeypatch):
+    monkeypatch.setattr('backend.private_auth.LOGIN_FAILURE_LIMIT', 5)
+    auth = _persistent_auth(tmp_path)
+    assert auth.login_allowed('user001', '10.0.0.1')
+    auth.record_login_failure('user001', '10.0.0.1')
+    with sqlite3.connect(tmp_path / 'tasks.sqlite3') as connection:
+        assert connection.execute(
+            'SELECT COUNT(*) FROM login_failure_events WHERE identity=? AND source=?',
+            ('user001', '10.0.0.1'),
+        ).fetchone()[0] == 1
 
 
 def test_login_failure_logs_do_not_include_password(tmp_path, caplog):
