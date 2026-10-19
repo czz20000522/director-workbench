@@ -67,7 +67,7 @@ description: 通过用户给出的导演工作台 URL 和本人凭据，使用�
 
 ### 1.6 工具发现与 schema
 
-- 对远程 MCP：初始化后调用 `tools/list`，读取实际工具名和 `input_schema`（JSON Schema object）。本版本远程 54 个，名称见附录 A。
+- 对远程 MCP：初始化后调用 `tools/list`，读取实际工具名和 `input_schema`（JSON Schema object）。本版本远程 60 个，名称见附录 A。
 - 对 HTTP：认证后读取 `GET /openapi.json`，以当前部署的路径、参数和枚举为准；服务没有匿名发现入口。
 - MCP 工具上的 `read_only_hint` 等 annotations 只是客户端提示，不是授权；服务端仍会校验账号、作品归属、版本和状态。
 - 业务回执统一为 `{ok: true, data: ...}` 或 `{ok: false, error: ...}`；失败时 `error` 可能含 `code`、`message`、`retryable`、`outcome_unknown`、`http_status`、`detail`。MCP 传输成功不代表业务成功。
@@ -343,7 +343,7 @@ description: 通过用户给出的导演工作台 URL 和本人凭据，使用�
 验收前提：用户只提供工作台 URL、agent-token（或账号）和一个愿望；不手动打开界面、不手动上传/点击/采用。
 
 1. **认证**：`POST /api/auth/agent-token` 成功；`GET /api/auth/me` 返回本人；`GET /api/projects` 返回本人作品。
-2. **发现**：MCP `tools/list` 成功，记录工具数量和实际名称（本版本远程 54）；HTTP `/openapi.json` 可读。
+2. **发现**：MCP `tools/list` 成功，记录工具数量和实际名称（本版本远程 60）；HTTP `/openapi.json` 可读。
 3. **愿望**：Agent 复述愿望，向用户确认画幅、时长、参考/原创、方案和是否生成；记录用户回答。
 4. **作品**：`create_project` 显式 `creation_mode=advanced`；记录 `project.id`。若响应未知，`list_projects` 核对。
 5. **方案**：`list_production_presets` 读事实；用户选一个；`configure_production_preset` 安装；`read_project(section='pipeline')` 记录真实 `stage_id`。
@@ -382,7 +382,7 @@ description: 通过用户给出的导演工作台 URL 和本人凭据，使用�
 结论：PASS / FAIL / NOT_RUN
 ```
 
-## 附录 A：远程 MCP 工具清单（54）
+## 附录 A：远程 MCP 工具清单（60）
 
 以下为 2026-10-19 代码快照的固定远程名单；服务端 `tools/list` 为最终权威。所有远程工具都通过同一 Bearer 和既有 HTTP 业务路由执行。
 
@@ -390,17 +390,17 @@ description: 通过用户给出的导演工作台 URL 和本人凭据，使用�
 
 `list_projects`、`upload_material`、`read_guide_settings`、`read_queue`、`list_production_presets`、`configure_production_preset`、`create_project`、`read_project`、`read_script`、`save_script`、`list_tasks`、`get_task`、`list_shot_versions`、`preflight`、`save_creative_draft`、`record_review`、`approve_candidate`、`update_shot`、`arrange_shot`、`create_shot`、`reuse_materials`
 
-**参考（12）**
+**参考（14）**
 
-`extract_reference_range`、`extract_reference_audio`、`sample_reference_frames`、`transcribe_reference`、`list_references`、`read_reference`、`start_reference_analysis`、`reconcile_reference_analysis`、`annotate_reference_timeline`、`correct_reference_artifact`、`correct_reference_classification`、`convert_reference_to_shots`
+`import_reference_from_material`、`import_reference_content`、`extract_reference_range`、`extract_reference_audio`、`sample_reference_frames`、`transcribe_reference`、`list_references`、`read_reference`、`start_reference_analysis`、`reconcile_reference_analysis`、`annotate_reference_timeline`、`correct_reference_artifact`、`correct_reference_classification`、`convert_reference_to_shots`
 
-**生成、任务、媒体与装配（21）**
+**生成、任务、媒体与装配（25）**
 
-`submit_shot`、`submit_batch`、`get_keyframe_capability`、`submit_assembly`、`read_assembly_edit`、`review_assembly_join`、`set_assembly_sound`、`preflight_assembly_edit`、`submit_keyframe`、`get_speech_capability`、`submit_speech`、`get_submission_receipt`、`reconcile_generation`、`stop_generation`、`submit_audio_edit`、`submit_audio_master`、`get_media_capability`、`create_silence`、`inspect_video`、`transcribe_audio`、`export_silent_video`
+`submit_shot`、`submit_batch`、`get_keyframe_capability`、`submit_assembly`、`read_assembly_edit`、`check_assembly_continuity`、`list_media`、`get_media_url`、`download_media`、`review_assembly_join`、`set_assembly_sound`、`preflight_assembly_edit`、`submit_keyframe`、`get_speech_capability`、`submit_speech`、`get_submission_receipt`、`reconcile_generation`、`stop_generation`、`submit_audio_edit`、`submit_audio_master`、`get_media_capability`、`create_silence`、`inspect_video`、`transcribe_audio`、`export_silent_video`
 
 ## 附录 B：仅本机 stdio 的 7 个工具
 
-这些工具存在于本机 stdio（全量 61 个），不在远程 MCP 固定名单中。远程客户端如果需要，只能使用认证 HTTP 原业务入口，并自行承担相同的版本、门禁和审计要求：
+这些工具存在于本机 stdio（全量 67 个），不在远程 MCP 固定名单中。远程客户端如果需要，只能使用认证 HTTP 原业务入口，并自行承担相同的版本、门禁和审计要求：
 
 | 工具 | 远程/HTTP 替代 |
 | --- | --- |
