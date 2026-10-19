@@ -15,7 +15,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 import math
 import shlex
-from .. import production_presets, readiness
+from .. import production_presets, readiness, shot_creation
 from ..schemas import PipelineValidateRequest
 from .. import app as backend
 
@@ -327,6 +327,20 @@ def segment_dependency_blockers(document: dict[str, Any], segment: dict[str, Any
     return blockers
 
 
+def readiness_selection_options(manifest: dict[str, Any], stages: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return explicit selection facts only; nothing here chooses a recipe."""
+    options = shot_creation.creation_options(manifest)
+    installed = []
+    for stage in stages:
+        if not isinstance(stage, dict) or not stage.get('id'):
+            continue
+        references = (stage.get('execution') or {}).get('references') or []
+        installed.append({'stage_id': str(stage['id']), 'title': stage.get('title', stage['id']),
+                          'workflow': str(references[0]) if len(references) == 1 and references[0] else None})
+    options['installed_pipeline_stages'] = installed
+    return options
+
+
 def project_readiness(project_id: str, state: dict[str, Any]) -> dict[str, Any]:
     signature = backend.project_cache_signature(project_id)
     cache_key = (backend.project_cache_scope(), str(project_id))
@@ -356,13 +370,12 @@ def project_readiness(project_id: str, state: dict[str, Any]) -> dict[str, Any]:
         matched = next((stage for stage in executable if workflow in (stage.get('execution') or {}).get('references', [])), None)
         return (matched or {}).get('id')
     result = readiness.build_project_readiness(project_id=project_id, plan=document, stages=stages, project_state=state,
-        tasks=task_values, stage_selector=select_stage, assembly_asset_id=str(manifest.get('assembly_asset_id') or 'MASTER'),
+        tasks=task_values, stage_selector=select_stage, selection_options=readiness_selection_options(manifest, stages),
+        assembly_asset_id=str(manifest.get('assembly_asset_id') or 'MASTER'),
         validate=lambda stage, asset, values: backend.validate_project_pipeline(stage, PipelineValidateRequest(asset_id=asset, values=values), manifest),
         assembly_preflight=lambda: backend.preflight_project_assembly(project_id))
     result['installed_stages'] = [{'id': stage['id'], 'title': stage.get('title', stage['id'])} for stage in stages]
-    selected_stages = {row.get('stage_id') for row in result['segments']}
-    if not selected_stages:
-        selected_stages = {select_stage({}, stages)}
+    selected_stages = {row.get('stage_id') for row in result['segments'] if row.get('stage_id')}
     result['input_requirements'] = [spec for stage in stages if stage.get('id') in selected_stages
                                     for spec in backend.pipeline_contract(stage, manifest).get('input_specs', [])]
     with _READINESS_CACHE_LOCK:

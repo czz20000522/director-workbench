@@ -3147,17 +3147,22 @@ def production_preset_catalog() -> dict[str, Any]:
 
 @app.get('/api/projects/{project_id}/reusable-templates')
 def reusable_template_catalog(project_id: str) -> dict[str, Any]:
-    """Expose the small, safe template set used by the simplified entry point."""
+    """Expose the factual template catalog used by the simplified entry point.
+
+    The response lists what is available and whether the project already has a
+    compatible preset. It contains no recommendation or default choice: the
+    caller must explicitly pick and install one.
+    """
     manifest = require_project_manifest(project_id)
     installed = (manifest.get('production_preset') or {}).get('id')
     presets = [production_presets.catalog(SHARED_ROOT / 'models', preset_id)
                for preset_id in production_presets.PRESET_IDS]
     by_id = {item['id']: item for item in presets}
-    return {'templates': [
-        {'id': 'image', 'kind': 'image', 'title': '文生图', 'description': '只输入提示词，先得到一张可用图片。', 'recommended': True},
-        {'id': 'text-video', 'kind': 'video', 'title': '文生视频', 'description': '只输入提示词，使用纯文本视频制作方案。', 'recommended': True,
+    return {'available_templates': [
+        {'id': 'image', 'kind': 'image', 'title': '文生图', 'description': '只输入提示词，先得到一张可用图片。'},
+        {'id': 'text-video', 'kind': 'video', 'title': '文生视频', 'description': '只输入提示词，使用纯文本视频制作方案。',
          'preset': by_id.get(production_presets.TEXT_PORTRAIT_PRESET_ID), 'installed': installed in production_presets.TEXT_PRESET_IDS},
-        {'id': 'video', 'kind': 'video', 'title': '图生视频', 'description': '放入开始画面，再描述动作和镜头。', 'recommended': True,
+        {'id': 'video', 'kind': 'video', 'title': '图生视频', 'description': '放入开始画面，再描述动作和镜头。',
          'preset': by_id.get(production_presets.NATIVE_PORTRAIT_PRESET_ID), 'installed': installed == production_presets.NATIVE_PORTRAIT_PRESET_ID},
     ], 'project_id': project_id, 'installed_preset': installed}
 

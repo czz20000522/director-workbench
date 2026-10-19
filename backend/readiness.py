@@ -30,6 +30,19 @@ def _dedupe_actions(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
+def _stage_choice(root: str) -> dict[str, Any]:
+    return _action('choose_stage', '显式选择制作方案', 'GET', root + '/pipeline')
+
+
+def _stage_blocker(code: str, message: str, root: str,
+                   options: dict[str, Any] | None) -> dict[str, Any]:
+    """Describe an unresolved recipe with explicit, read-only selection facts."""
+    blocker = _blocker(code, message, _stage_choice(root))
+    if options is not None:
+        blocker['options'] = deepcopy(options)
+    return blocker
+
+
 def validation_readiness(
     validation: dict[str, Any], *, project_id: str, asset_id: str,
     stage_id: str | None, revision: Any, source: str = 'saved',
@@ -189,6 +202,7 @@ def build_project_readiness(
     validate: Callable[[str, str, dict[str, Any]], dict[str, Any]],
     assembly_preflight: Callable[[], dict[str, Any]] | None = None,
     stage_selector: Callable[[dict[str, Any], list[dict[str, Any]]], str | None] | None = None,
+    selection_options: dict[str, Any] | None = None,
     queue: dict[str, Any] | None = None, drafts: dict[str, dict[str, Any]] | None = None,
     assembly_asset_id: str = 'MASTER',
 ) -> dict[str, Any]:
@@ -196,7 +210,11 @@ def build_project_readiness(
 
     ``drafts`` is keyed by segment id: {stage_id?, values:{...}}. It affects
     preview rows only and never changes the saved plan/revision. Stage choice
-    comes from the app's execution resolver rather than recipe id assumptions.
+    comes only from an explicit draft/segment selection or the app's resolver
+    for an explicitly registered workflow: an unselected segment is never
+    assigned the first installed stage. ``selection_options`` is copied into
+    unresolved blockers as read-only facts so a caller can make an explicit
+    choice; this function never writes it anywhere.
     Queue metadata supplied here must already be sanitized for this user.
     """
     root = f'/api/projects/{quote(project_id, safe="")}'
@@ -209,15 +227,21 @@ def build_project_readiness(
         asset_id = str(segment['id'])
         draft = (drafts or {}).get(asset_id)
         source = 'draft' if draft is not None else 'saved'
-        stage_id = (draft or {}).get('stage_id')
-        if not stage_id:
-            stage_id = stage_selector(segment, stages) if stage_selector else (
-                segment.get('pipeline_stage_id') or segment.get('stage_id') or
-                (stages[0].get('id') if len(stages) == 1 else None))
+        requested_stage = ((draft or {}).get('stage_id') or segment.get('pipeline_stage_id') or
+                           segment.get('stage_id'))
+        stage_id = requested_stage
+        if not stage_id and stage_selector:
+            stage_id = stage_selector(segment, stages)
         values = deepcopy((draft or {}).get('values') or {})
         if stage_id not in known_stages:
-            choose = _action('choose_stage', '选择制作方案', 'GET', root + '/pipeline')
-            result = {'valid': False, 'blockers': [_blocker('stage_required', '请先选择当前作品的制作方案。', choose)]}
+            if requested_stage or segment.get('workflow'):
+                code = 'recipe_unresolved'
+                message = '本分镜登记的工作流或制作步骤不在作品已安装方案中；请显式选择可用方案后重新预检。'
+            else:
+                code = 'stage_required'
+                message = '请先为本分镜显式选择制作方案；工作台不会代为选择。'
+            result = {'valid': False, 'blockers': [
+                _stage_blocker(code, message, root, selection_options)]}
             stage_id = None
         else:
             result = _call_validation(validate, str(stage_id), asset_id, values)
@@ -226,7 +250,8 @@ def build_project_readiness(
         row['object'] = {'kind': 'segment', 'id': asset_id}
         row['saved_revision'] = revision
         if stage_id is None:
-            row['allowed_actions'] = [item for item in row['allowed_actions'] if item['id'] != 'validate']
+            row['allowed_actions'] = [item for item in row['allowed_actions']
+                                      if item['id'] not in {'validate', 'submit'}]
         if not _apply_task(row, _task_for_asset(tasks, project_id, asset_id), root):
             reviews = (project_state.get('reviews') or {}).get(asset_id) or {}
             _review_state(row, reviews.get('finish') or reviews.get('sample') or {},

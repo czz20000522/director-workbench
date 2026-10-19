@@ -2,6 +2,7 @@
 /*
 !/CODEX_REPORT.md
 !/TEST_MIGRATION_REPORT.md
+!/T4_REPORT.md
 !/start-director-services.ps1
 !/start-director-services.cmd
 !/stop-director-services.cmd
@@ -211,6 +212,7 @@
 !/tests/test_audio_edit_tasks.py
 !/tests/test_explicit_creation.py
 !/tests/test_backend_module_split.py
+!/tests/test_boundary_regression.py
 !/tests/test_candidate_adoption.py
 !/tests/test_comfy_execution_reporting.py
 !/tests/test_comfy_media_staging.py

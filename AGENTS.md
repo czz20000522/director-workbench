@@ -1,5 +1,17 @@
 # 开发仓库约定
 
+## 平台定位：确定性工具（锄头）
+
+导演工作台是确定性工具，不是智能体。理解、判断、选择、改编、审核、采用和验收由用户或用户自己的 Agent 完成；工作台只负责存储、校验、渲染、对照、装配和记录。以下为硬约束，后续改动不得违反：
+
+- 不替用户选择：缺少显式创作模式、制作方案、工作流、参考范围、分镜列表或采用确认时，返回结构化阻塞（如 `stage_required`、`recipe_unresolved`、`workflow_required`、`creation_plan_required`、`confirm_adoption`），不得取第一个可执行项、默认项或“推荐”项兜底，也不得自动写入。
+- 不替用户判断：模型输出只是 `observations`、`model_candidates`、`draft_seed` 等候选，必须保留 provenance、user_status 和待校订状态；不得自动写入 performance/prompt/计划，不得自动审核、自动采用或自动进入装配。
+- 不宣称能力：UI、API、MCP、文档和提示词不得把模型候选写成“平台已理解、已分析、已改编、已推荐”；只描述可观测事实、实际执行动作和显式选择。
+- 不静默回退：找不到精确方案、参数过旧、素材缺失或回执未知时，明确阻塞或要求人工核对；不做顺序兜底、静默降级或兼容猜测。
+- 事实而非推荐：模板等目录只返回 `available`/`installed`/`missing_models` 等事实，不携带 `recommended`、默认选择或无依据排序。
+- 入口一致：能通过 HTTP/MCP 完成的动作必须有对应公开入口与回归测试，不能只留在 UI；UI 只是可选的人工接管界面。
+- 显式路径仍须可用：调用方给出明确参数后，工作台完成生成、对照、装配和记录，不因去除智能兜底而阻断合法显式操作。
+
 ## 磁盘与环境
 
 - 本机存在工作台数据根下的 `.config/director-workbench/local-storage-policy.md` 时，先阅读其磁盘、环境和资产存储约定（默认 `D:/software/JetBrains/python_workspace/director-workbench-data/.config/director-workbench/local-storage-policy.md`）；此文件是本机有效配置，不公开提交。
