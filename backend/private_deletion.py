@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from fastapi import HTTPException
+from .secure_files import checked_directory
 
 
 def _script():
@@ -24,6 +25,8 @@ def _run(*arguments):
 
 
 def plan(root: Path, target: Path, manifest_dir: Path):
+    root, _ = checked_directory(root)
+    target, _ = checked_directory(target)
     manifest_dir.mkdir(parents=True, exist_ok=True)
     result = _run('plan', '--root', root, '--target', target,
                   '--manifest-dir', manifest_dir, '--ttl-minutes', '20', '--sample-size', '10')
@@ -33,6 +36,8 @@ def plan(root: Path, target: Path, manifest_dir: Path):
 
 
 def apply(root: Path, target: Path, manifest_dir: Path, plan_id: str):
+    root, _ = checked_directory(root)
+    target, _ = checked_directory(target)
     if not re.fullmatch(r'[0-9a-f]{24}', plan_id):
         raise HTTPException(422, '删除计划编号无效')
     manifest = manifest_dir / f'{plan_id}.json'

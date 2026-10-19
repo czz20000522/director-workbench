@@ -42,7 +42,8 @@ import paths
 from .private_auth import SecurityHeaders, current_principal
 from .atomic_files import replace_prepared
 from .storage import storage_roots, relocate_asset, legacy_mappings
-from .user_context import project_location
+from .user_context import AccessDenied, project_location
+from .secure_files import checked_directory, checked_file, verify_directory_identity, verify_identity
 
 # 模块级常量与共享锁集中在 workbench_config；这里重新导出，既有引用与 monkeypatch 不变。
 from .workbench_config import (
@@ -211,6 +212,10 @@ async def stream_upload(upload: UploadFile, destination: Path) -> int:
     remaining as a material the manifest never registered.  Blocking file calls go to the
     thread pool so a large upload does not stall the event loop (and its SSE streams).
     """
+    destination = Path(destination)
+    parent, parent_identity = checked_directory(destination.parent)
+    existing_identity = checked_file(destination)[1] if destination.exists() else None
+    destination = parent / destination.name
     temporary = destination.with_name(f'.{uuid.uuid4().hex}.upload')
     written = 0
     try:
@@ -224,8 +229,18 @@ async def stream_upload(upload: UploadFile, destination: Path) -> int:
         finally:
             await upload.close()
             await run_in_threadpool(handle.close)
+        verify_directory_identity(parent, parent_identity)
+        if existing_identity is not None and destination.exists():
+            verify_identity(destination, existing_identity)
+        prepared_identity = checked_file(temporary)[1]
         await run_in_threadpool(replace_prepared, temporary, destination)
+        verify_directory_identity(parent, parent_identity)
+        if checked_file(destination)[1] != prepared_identity:
+            raise AccessDenied('上传结果在替换期间发生变化，请重试')
         return written
+    except AccessDenied as exc:
+        await run_in_threadpool(temporary.unlink, missing_ok=True)
+        raise HTTPException(409, '上传期间目标目录或文件发生变化，请重试') from exc
     except BaseException:
         await run_in_threadpool(temporary.unlink, missing_ok=True)
         raise

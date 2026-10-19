@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from ..schemas import MaterialRegisterRequest, MaterialReuseRequest
 from .. import app as backend
+from ..secure_files import VerifiedFileResponse, checked_file
 
 
 ROUTER = APIRouter()
@@ -139,9 +140,13 @@ def browse_material_library(
 @ROUTER.get("/material-file")
 def download_material_file(project_id: str, source_id: str, path: str) -> FileResponse:
     _, _, target, _ = backend.resolve_material_path(project_id, source_id, path)
-    if not target.is_file() or backend.material_kind(target) == "other":
+    try:
+        target, identity = checked_file(target)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        raise HTTPException(404, "素材文件不存在") from exc
+    if backend.material_kind(target) == "other":
         raise HTTPException(404, "素材文件不存在")
-    return FileResponse(target, filename=target.name)
+    return VerifiedFileResponse(target, identity=identity, filename=target.name, stat_result=target.stat())
 
 
 @ROUTER.post("/api/projects/{project_id}/materials/register")
