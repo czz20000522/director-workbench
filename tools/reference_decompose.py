@@ -5,6 +5,7 @@ import json
 import math
 import subprocess
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,114 @@ def run_ffmpeg(ffmpeg: Path, args: list[str]) -> None:
     )
     if result.returncode:
         raise RuntimeError(result.stderr.strip() or "ffmpeg 执行失败")
+
+
+def validate_explicit_range(facts: dict[str, Any], start_seconds: float, end_seconds: float) -> None:
+    """Validate a caller supplied range without guessing a cut point."""
+    if start_seconds < 0 or end_seconds <= start_seconds:
+        raise ValueError("参考时间段必须满足 0 <= start < end")
+    duration = float(facts.get("duration_seconds") or 0)
+    if duration and end_seconds > duration + 0.05:
+        raise ValueError(f"参考时间段超出素材时长 {duration:.3f} 秒")
+
+
+def extract_explicit_range(
+    source: Path,
+    output: Path,
+    facts: dict[str, Any],
+    start_seconds: float,
+    end_seconds: float,
+    *,
+    frame_seconds: float | None = None,
+    artifact_id: str | None = None,
+) -> dict[str, Any]:
+    """Extract only the range and frame explicitly requested by the caller."""
+    validate_explicit_range(facts, start_seconds, end_seconds)
+    if frame_seconds is not None and not start_seconds <= frame_seconds <= end_seconds:
+        raise ValueError("帧时间必须位于显式参考时间段内")
+    artifact_id = artifact_id or f"range-{uuid.uuid4().hex[:10]}"
+    range_dir = output / "ranges"
+    range_dir.mkdir(parents=True, exist_ok=True)
+    segment_path = range_dir / f"{artifact_id}{source.suffix.lower() or '.mkv'}"
+    duration = end_seconds - start_seconds
+    run_ffmpeg(
+        DEFAULT_FFMPEG,
+        ["-ss", f"{start_seconds:.6f}", "-i", str(source), "-t", f"{duration:.6f}", "-c", "copy", str(segment_path)],
+    )
+    frame_path: Path | None = None
+    if frame_seconds is not None:
+        if not facts.get("has_video"):
+            raise ValueError("音频参考没有可提取的画面帧")
+        frames_dir = output / "frames"
+        frames_dir.mkdir(parents=True, exist_ok=True)
+        frame_path = frames_dir / f"{artifact_id}.jpg"
+        run_ffmpeg(
+            DEFAULT_FFMPEG,
+            ["-ss", f"{frame_seconds:.6f}", "-i", str(source), "-frames:v", "1", "-q:v", "3", str(frame_path)],
+        )
+    return {
+        "id": artifact_id,
+        "start_seconds": round(start_seconds, 3),
+        "end_seconds": round(end_seconds, 3),
+        "segment_path": segment_path,
+        "frame_path": frame_path,
+    }
+
+
+def extract_explicit_frames(source: Path, output: Path, facts: dict[str, Any], times_seconds: list[float], *, sample_id: str | None = None) -> list[dict[str, Any]]:
+    """Extract caller-selected frames as observations; equal spacing is never inferred here."""
+    if not facts.get("has_video"):
+        raise ValueError("音频参考没有可提取的画面帧")
+    duration = float(facts.get("duration_seconds") or 0)
+    if any(time < 0 or (duration and time > duration + 0.05) for time in times_seconds):
+        raise ValueError("采样时间超出素材时长")
+    sample_id = sample_id or f"sample-{uuid.uuid4().hex[:10]}"
+    frames_dir = output / "frames"
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    result: list[dict[str, Any]] = []
+    for index, timestamp in enumerate(times_seconds, start=1):
+        frame_path = frames_dir / f"{sample_id}-{index:03d}.jpg"
+        run_ffmpeg(
+            DEFAULT_FFMPEG,
+            ["-ss", f"{timestamp:.6f}", "-i", str(source), "-frames:v", "1", "-q:v", "3", str(frame_path)],
+        )
+        result.append({"time_seconds": round(timestamp, 3), "frame_path": frame_path})
+    return result
+
+
+def extract_explicit_audio(
+    source: Path,
+    output: Path,
+    facts: dict[str, Any],
+    start_seconds: float,
+    end_seconds: float,
+    *,
+    artifact_id: str | None = None,
+) -> Path:
+    """Extract only the caller supplied audio range as a read-only observation."""
+    validate_explicit_range(facts, start_seconds, end_seconds)
+    if not facts.get('has_audio'):
+        raise ValueError('参考素材没有可提取的音轨')
+    artifact_id = artifact_id or f"audio-{uuid.uuid4().hex[:10]}"
+    audio_dir = output / 'audio'
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = audio_dir / f'{artifact_id}.wav'
+    run_ffmpeg(
+        DEFAULT_FFMPEG,
+        [
+            '-ss', f'{start_seconds:.6f}', '-i', str(source), '-t', f'{end_seconds - start_seconds:.6f}',
+            '-vn', '-ac', '2', '-ar', '48000', '-c:a', 'pcm_s16le', str(audio_path),
+        ],
+    )
+    return audio_path
+
+
+def extract_audio_for_asr(source: Path, output: Path) -> Path:
+    """Create an ASR working copy only when the explicit ASR operation is called."""
+    output.mkdir(parents=True, exist_ok=True)
+    audio_path = output / "reference-asr.wav"
+    run_ffmpeg(DEFAULT_FFMPEG, ["-i", str(source), "-vn", "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le", str(audio_path)])
+    return audio_path
 
 
 def extract_materials(source: Path, output: Path, facts: dict[str, Any], frame_count: int) -> tuple[list[Path], Path | None]:

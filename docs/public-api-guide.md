@@ -92,7 +92,18 @@
 | 图片、声音、音频编辑、全片母版后期、媒体处理任务 | `/api/projects/{project_id}/keyframe-tasks`、`speech-tasks`、`audio-edit-tasks`、`audio-master-tasks`、`media-tasks` |
 | 批次任务 | `/api/projects/{project_id}/batches` |
 | 审核与显式采用 | `/api/projects/{project_id}/reviews`、`adoptions` |
-| 参考分析与校订 | `/api/projects/{project_id}/reverse-analyses` |
+| 参考素材登记、显式范围/帧/音频观察、ASR、模型分析与校订 | `/api/projects/{project_id}/reverse-analyses` |
+
+参考素材上传只登记原始文件和媒体探测事实，响应中的 `timeline`、`observations` 和任务表都保持为空；不会自动拆分、抽帧或运行 ASR。需要观察时，调用方必须明确调用：
+
+- `POST .../observations/range`：提交 `start_seconds`、`end_seconds`，可选 `frame_seconds`，生成只读范围和帧观察；
+- `POST .../observations/sample`：提交明确的 `times_seconds`，结果标为“等距采样/待确认范围”，不能当作镜头切点；
+- `POST .../observations/audio`：提交明确音频范围；
+- `POST .../observations/asr`：显式运行 ASR，结果标为 `model_inference` / `candidate_needs_review`。
+
+`POST .../semantic-jobs` 也要求先存在至少一帧显式观察。模型输出只能写入 `model_candidate`，保留 `provenance` 和 `user_status`，不会自动覆盖人工校订或制作字段。
+
+转制作使用 `POST .../convert` 时，必须提交非空 `shots` 列表；每项包含显式参考时间段和至少一个明确制作字段。空列表、采样观察或模型候选不会自动创建 `Rxx` 分镜或写入制作计划。
 
 这些为入口索引，不是免校验的参数模板。制作需通过 UI/API/MCP 完成；客户端不直接运行模型、FFmpeg 或 Whisper 补做产品未接入的步骤。保存剧本、计划、审核或采用时使用各自 schema 的版本字段，不能混用计划 revision 与剧本/审核 revision。审核证据与显式采用分别保存，技术报告不能替代画面、音色和表演验收。
 

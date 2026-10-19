@@ -17,17 +17,10 @@ def test_mcp_import_streams_local_reference_to_backend(reverse_client, tmp_path,
     before = existing.read_bytes()
     source = tmp_path / 'reference clip.wav'
     source.write_bytes(b'reference-audio-fixture')
-    calls = []
-    def decompose(args, **kwargs):
-        calls.append(args)
-        uploaded = Path(args[args.index('--source') + 1])
-        assert uploaded.read_bytes() == source.read_bytes()
-        output = Path(args[args.index('--output') + 1])
-        document = {'id': args[args.index('--analysis-id') + 1], 'project_id': 'project-a', 'timeline': []}
-        (output / 'analysis.json').write_text(json.dumps(document), encoding='utf-8')
-    monkeypatch.setattr(backend, 'run_reference_command', decompose)
-    # Admission persists a request; execution is driven only by this isolated
-    # scheduler tick with the existing fake decomposition command.
+    monkeypatch.setattr('tools.reference_decompose.media_facts', lambda path: {
+        'duration_seconds': 2.0, 'width': 640, 'height': 360, 'fps': 24.0,
+        'has_video': True, 'has_audio': False, 'audio_channels': 0, 'sample_rate': None,
+    })
     scheduler = TaskScheduler(lambda: backend.db(), backend.DB_LOCK, backend.GPU_ADMISSION_LOCK,
                               lambda: None, backend.revalidate_queued_task, backend.execute_scheduled_task)
     monkeypatch.setattr(backend, 'TASK_SCHEDULER', scheduler)
@@ -38,19 +31,15 @@ def test_mcp_import_streams_local_reference_to_backend(reverse_client, tmp_path,
             assert result['ok']
             assert result['data']['id'].startswith('ref-')
             assert result['data']['id'] != 'ref-test'
-            task_id = result['data']['import_task_id']
-            assert result['data']['import_status'] == 'scheduler_waiting'
-            assert backend.get_task(task_id)['payload']['kind'] == 'reference_decomposition'
-            assert calls == []
-            assert scheduler.tick(threaded=False) == [task_id]
-            assert len(calls) == 1
-            assert backend.get_task(task_id)['status'] == 'succeeded'
+            assert 'import_task_id' not in result['data']
+            assert result['data']['status'] == 'registered'
+            assert result['data']['timeline'] == []
+            assert scheduler.tick(threaded=False) == []
             archived = (await client.call_tool('read_reference', {
                 'project_id': 'project-a', 'analysis_id': result['data']['id'],
             })).structured_content
-            assert archived['ok'] and archived['data']['import_task_id'] == task_id
-            assert archived['data']['import_status'] == 'succeeded'
-            assert scheduler.tick(threaded=False) == [] and len(calls) == 1
+            assert archived['ok'] and archived['data']['status'] == 'registered'
+            assert archived['data']['timeline'] == []
             assert existing.read_bytes() == before
             assert source.read_bytes() == b'reference-audio-fixture'
     asyncio.run(verify())
@@ -97,7 +86,8 @@ def test_mcp_arranges_shots_with_revision_protection(reverse_client):
             assert 'expected_revision' in tool.input_schema['required']
             async def call(name, args):
                 return (await client.call_tool(name, args)).structured_content
-            converted = await call('convert_reference_to_shots', {'project_id': 'project-a', 'analysis_id': 'ref-test', 'expected_revision': 0})
+            shot_request = {'segment_id': 'caller-shot', 'start_seconds': 0, 'end_seconds': 5, 'fields': {'prompt': '明确制作提示'}}
+            converted = await call('convert_reference_to_shots', {'project_id': 'project-a', 'analysis_id': 'ref-test', 'expected_revision': 0, 'shots': [shot_request]})
             plan = converted['data']['plan']
             asset = plan['segments'][0]['id']
             args = {'project_id': 'project-a', 'asset_id': asset, 'expected_revision': plan['revision'], 'operation': 'split', 'split_at_seconds': 2}

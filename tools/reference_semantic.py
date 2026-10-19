@@ -39,7 +39,17 @@ CONTENT_MODES = ("narrative", "music_performance", "dance", "showcase", "mood", 
 
 
 def pick_frames(document: dict[str, Any], maximum: int = 36) -> list[tuple[str, Path]]:
-    candidates = [item for item in document.get("timeline", []) if isinstance(item, dict) and item.get("frame")]
+    candidates: list[dict[str, Any]] = []
+    for item in document.get("timeline", []):
+        if not isinstance(item, dict):
+            continue
+        if item.get("frame"):
+            candidates.append(item)
+        elif item.get("frame_path"):
+            candidates.append({**item, "frame": item["frame_path"]})
+        for frame in item.get("frames") or []:
+            if isinstance(frame, dict) and frame.get("path"):
+                candidates.append({"id": f"{item.get('id')}@{frame.get('time_seconds')}", "frame": frame["path"]})
     if len(candidates) <= maximum:
         selected = candidates
     else:
@@ -149,6 +159,20 @@ def run_visual_batch(frames: list[tuple[str, Path]]) -> list[dict[str, str]]:
 
 
 def transcript_candidate(document: dict[str, Any]) -> dict[str, Any] | None:
+    observations = document.get('observations') if isinstance(document.get('observations'), list) else []
+    for item in reversed(observations):
+        if not isinstance(item, dict) or item.get('type') != 'asr':
+            continue
+        transcript = item.get('transcript')
+        if isinstance(transcript, dict):
+            return transcript
+        transcript_path = item.get('transcript_path')
+        if transcript_path:
+            try:
+                value = json.loads(resolve_root_path(str(transcript_path)).read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                continue
+            return value if isinstance(value, dict) else None
     source = document.get("source") if isinstance(document.get("source"), dict) else {}
     source_path = source.get("path")
     if not source_path:
@@ -286,10 +310,33 @@ def apply_result(document: dict[str, Any], result: dict[str, Any]) -> None:
         if isinstance(item, dict)
     }
     for segment in document.get("timeline", []):
-        if isinstance(segment, dict) and observations.get(str(segment.get("id"))):
-            segment["inference"] = observations[str(segment["id"])]
+        if not isinstance(segment, dict):
+            continue
+        candidate = observations.get(str(segment.get("id")))
+        if candidate:
+            segment["model_candidate"] = {
+                "observation": candidate,
+                "provenance": "model_inference",
+                "user_status": "unreviewed",
+                "status": "candidate_needs_review",
+                "model": "Qwen3.8-27B-Uncensored-Q4_K_M",
+            }
             if segment.get("status") != "reviewed":
-                segment["status"] = "model_analyzed"
+                segment["status"] = "candidate_needs_review"
+        for frame in segment.get('frames') or []:
+            if not isinstance(frame, dict):
+                continue
+            frame_candidate = observations.get(f"{segment.get('id')}@{frame.get('time_seconds')}")
+            if frame_candidate:
+                frame['model_candidate'] = {
+                    'observation': frame_candidate,
+                    'provenance': 'model_inference',
+                    'user_status': 'unreviewed',
+                    'status': 'candidate_needs_review',
+                    'model': 'Qwen3.8-27B-Uncensored-Q4_K_M',
+                }
+                if segment.get('status') != 'reviewed':
+                    segment['status'] = 'candidate_needs_review'
     artifacts = document.get("artifacts") if isinstance(document.get("artifacts"), dict) else {}
     model_artifacts = result.get("artifacts") if isinstance(result.get("artifacts"), dict) else {}
     for artifact_id in ARTIFACT_IDS:
@@ -306,17 +353,18 @@ def apply_result(document: dict[str, Any], result: dict[str, Any]) -> None:
             "user_status": "unreviewed",
             "model": "Qwen3.8-27B-Uncensored-Q4_K_M",
         }
-        if target.get("user_status") == "reviewed":
-            target["model_candidate"] = candidate
-        else:
-            target.update(candidate)
+        target["model_candidate"] = candidate
+        if target.get("user_status") != "reviewed":
+            target["status"] = "candidate_needs_review"
     classification = {'content_mode': str(result.get('content_mode', 'other')),
                       'content_mode_reason': str(result.get('content_mode_reason', '')).strip()}
-    if document.get('content_mode_user_status') == 'reviewed':
-        document['content_mode_model_candidate'] = classification
-    else:
-        document.update(classification)
-        document['content_mode_user_status'] = 'unreviewed'
+    document['content_mode_model_candidate'] = {
+        **classification,
+        'provenance': 'model_inference',
+        'user_status': 'unreviewed',
+        'status': 'candidate_needs_review',
+    }
+    document.setdefault('content_mode_user_status', 'unreviewed')
     document["semantic_route"] = result.get("analysis_route", {})
     for stage in document.get("stages", []):
         if isinstance(stage, dict) and stage.get("id") == "semantic":

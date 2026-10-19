@@ -50,11 +50,14 @@ stdio 供服务器本机客户端或主动诊断使用，需要项目 Python 环
 | 停止、核对与恢复 | `stop_generation`、`reconcile_generation`、`resume_generation` |
 | 候选历史和显式采用 | `list_shot_versions`、`restore_shot_version`、`record_review`、`approve_candidate` |
 | 图片、声音与音频编辑 | `get_keyframe_capability`、`submit_keyframe`、`get_speech_capability`、`submit_speech`、`submit_audio_edit`、`submit_audio_master` |
-| 参考分析与人工校订 | `import_reference`、`read_reference`、`start_reference_analysis`、`correct_reference_artifact` |
+| 参考素材登记与显式观察 | `import_reference`、`read_reference`、`extract_reference_range`、`extract_reference_audio`、`sample_reference_frames`、`transcribe_reference` |
+| 参考分析与人工校订 | `start_reference_analysis`、`correct_reference_artifact`、`correct_reference_classification`、`convert_reference_to_shots` |
 | 装配接点、声音和成片 | `read_assembly_edit`、`review_assembly_join`、`set_assembly_sound`、`preflight_assembly_edit`、`submit_assembly` |
 | 媒体加工和检查 | `get_media_capability`、`create_silence`、`inspect_video`、`transcribe_audio`、`export_silent_video` |
 
 `import_reference` 读取 stdio 进程所在机器的绝对音视频路径，再 multipart 上传；不是读取远程客户机的文件。创作、媒体加工和审核应通过工作台入口完成，客户端不临时直跑 FFmpeg/Whisper 代替产品能力。
+
+`import_reference` 只登记文件和原始媒体事实，不创建拆分/ASR 任务。Agent 需要先调用 `extract_reference_range`、`extract_reference_audio` 或 `sample_reference_frames` 生成明确范围观察，再按需调用 `transcribe_reference` 或 `start_reference_analysis`。采样结果是“等距采样/待确认范围”，模型内容和 ASR 都标为“模型候选/待校订”。`convert_reference_to_shots` 只接受调用方明确提交的非空分镜列表、参考时间段和制作字段；它不会从观察时间轴自动生成分镜。
 
 ## 回执、版本与操作边界
 
