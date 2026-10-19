@@ -140,7 +140,7 @@ def test_pytest_backed_drivers_receive_produced_fixtures(tmp_path, monkeypatch):
     assert browser['errors'] == [] and browser['status'] == 'passed'
     assert sorted(browser['fixture_producers']) == sorted(runner.BROWSER_PYTEST_FIXTURES)
     for name, (module, handed) in runner.BROWSER_PYTEST_FIXTURES.items():
-        basetemp = run_root / f'pytest-{name}'
+        basetemp = run_root / f'p-{name}'
         assert browser['fixture_producers'][name] == {
             'module': module, 'basetemp': str(basetemp), 'exit_code': 0,
             'output': '3 passed in 1.2s'}
@@ -361,7 +361,7 @@ def test_fast_suite_runs_only_the_configured_list(tmp_path, monkeypatch):
     command = next(command for command in calls if '-m' in command)
     interpreter = str(project / '.venv/Scripts/python.exe')
     assert command == [interpreter, '-m', 'pytest', 'tests/test_smoke.py', '-q',
-                       '--basetemp', str(Path(fast['temporary']).parent / 'pytest')]
+                       '--basetemp', str(Path(fast['temporary']).parent / 'p')]
 
 
 def test_fast_suite_names_the_missing_timeout_plugin_install(tmp_path, monkeypatch):
@@ -397,7 +397,7 @@ def test_affected_suite_runs_the_selector_targets(tmp_path, monkeypatch):
     assert affected['selection']['status'] == 'selected'
     interpreter = str(project / '.venv/Scripts/python.exe')
     assert [interpreter, '-m', 'pytest', 'tests/test_widget.py', '-q', '--basetemp',
-            str(Path(affected['run_root']) / 'pytest')] in calls
+            str(Path(affected['run_root']) / 'p')] in calls
 
 
 def test_affected_shared_contract_runs_the_full_core_command(tmp_path, monkeypatch):
