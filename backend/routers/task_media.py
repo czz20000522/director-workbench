@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException
 import os
 import psutil
 from urllib.error import HTTPError, URLError
-from .. import audio_edit_tasks, audio_master_tasks, keyframes, media_operations, output_resolution, speech
+from .. import audio_edit_tasks, audio_master_tasks, keyframes, media_operations, output_resolution, secure_files, speech
 from ..schemas import AudioEditRequest, AudioMasterRequest, KeyframeRequest, MediaOperationRequest, SpeechRequest
 from .. import app as backend
 
@@ -308,11 +308,12 @@ def audio_edit_source(manifest: dict[str, Any], asset_id: str) -> tuple[Path, di
         raise HTTPException(422, '请选择当前作品已登记且有A来源的音频素材')
     try:
         path = backend.resolve_registered_path(value)
-        if not path.is_file():
-            raise ValueError('已登记音频文件不存在')
+        path, identity = secure_files.checked_file(path)
     except (OSError, ValueError) as exc:
         raise HTTPException(422, str(exc)) from exc
-    return path, {'asset_id': asset_id, 'source': value, 'size': path.stat().st_size, 'mtime_ns': path.stat().st_mtime_ns}
+    return path, {'asset_id': asset_id, 'source': value, 'size': identity.size, 'mtime_ns': identity.modified_ns,
+                  'identity': {'device': identity.device, 'inode': identity.inode, 'size': identity.size,
+                               'modified_ns': identity.modified_ns, 'mode': identity.mode}}
 
 
 @ROUTER.post('/api/projects/{project_id}/audio-edit-tasks', status_code=202)

@@ -1,5 +1,6 @@
 import wave
 from pathlib import Path
+import json
 
 import numpy as np
 import pytest
@@ -61,3 +62,48 @@ def test_master_limits_duration_and_parameters(tmp_path):
         audio_master_tasks.prepare('long', source, tmp_path / 'tasks', parameters={})
     with pytest.raises(ValueError, match='target_lufs'):
         audio_master_tasks.validate_parameters({'target_lufs': -30})
+
+
+def test_master_reports_ffmpeg_loudness_and_true_peak_measurements(tmp_path):
+    source = tmp_path / 'master.wav'
+    write_wav(source, np.sin(np.linspace(0, np.pi * 80, 16000))[:, None] * .8)
+    payload = audio_master_tasks.prepare('measured', source, tmp_path / 'tasks', parameters={})
+    receipt = audio_master_tasks.execute(payload)
+    report = receipt['report']
+    assert report['ffmpeg_version'].startswith('ffmpeg version')
+    assert -120 <= report['loudness_lufs_i'] <= 0
+    assert 0 <= report['loudness_lra'] <= 100
+    assert -120 <= report['output_true_peak_dbtp'] <= 0
+    assert report['true_peak_target_dbtp'] == -1.0
+    assert report['true_peak_limit_met'] is True
+    assert json.loads(Path(payload['request_path']).read_text())['frozen_source_identity']['size'] == source.stat().st_size
+
+
+def test_master_ducking_attack_and_release_are_sample_envelopes():
+    source = np.concatenate([np.zeros(8), np.ones(8) * .5, np.zeros(8)])[:, None]
+    background = np.ones_like(source)
+    duck = {'threshold_db': -30.0, 'ratio': 4.0, 'attack_seconds': .001, 'release_seconds': .01}
+    reduced, state = audio_master_tasks._duck_background(source, background, rate=1000, duck=duck, state=0.0, background_gain=1.0)
+    assert reduced[8, 0] < 1.0
+    assert reduced[15, 0] <= reduced[8, 0]
+    assert reduced[-1, 0] < 1.0
+    assert state > 0
+
+
+def test_master_timeout_keeps_task_directory_for_reconciliation(tmp_path):
+    source = tmp_path / 'master.wav'
+    write_wav(source, np.ones((8000, 1)) * .2)
+    payload = audio_master_tasks.prepare('timeout', source, tmp_path / 'tasks', parameters={})
+    with pytest.raises(audio_master_tasks.AudioMasterTimedOut):
+        audio_master_tasks.execute(payload, timeout_seconds=.001)
+    assert Path(payload['output_dir']).is_dir()
+
+
+def test_master_rejects_changed_frozen_copy_before_execution(tmp_path):
+    source = tmp_path / 'master.wav'
+    write_wav(source, np.ones((8000, 1)) * .2)
+    payload = audio_master_tasks.prepare('changed', source, tmp_path / 'tasks', parameters={})
+    frozen = Path(payload['request']['source'])
+    frozen.write_bytes(frozen.read_bytes() + b'changed')
+    with pytest.raises(ValueError, match='Frozen input changed'):
+        audio_master_tasks.execute(payload)
