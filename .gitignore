@@ -388,4 +388,9 @@
 !/mcp_server/tools_generation.py
 !/mcp_server/tools_media.py
 !/mcp_server/tools_reference.py
+!/mcp_server/media.py
 !/backend/task_store.py
+# Project-scoped short-lived media references; no server path leaves the remote API.
+!/backend/media_refs.py
+!/backend/routers/media_access.py
+!/tests/test_mcp_media_delivery.py

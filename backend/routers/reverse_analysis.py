@@ -18,6 +18,7 @@ from .. import background_jobs
 from ..schemas import (
     ReferenceAudioExtractRequest,
     ReferenceAsrRequest,
+    ReferenceFromMaterialRequest,
     ReferenceRangeExtractRequest,
     ReferenceSampleRequest,
     ReverseArtifactUpdateRequest,
@@ -125,37 +126,41 @@ def get_reverse_analysis(project_id: str, analysis_id: str) -> dict[str, Any]:
     return document
 
 
-@ROUTER.post("/api/projects/{project_id}/reverse-analyses", status_code=202)
-async def create_reverse_analysis(project_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
-    backend.require_project_manifest(project_id)
-    suffix = Path(file.filename or "").suffix.lower()
-    if suffix not in {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".mp3", ".wav", ".flac", ".m4a", ".aac"}:
-        raise HTTPException(422, "只支持常见音视频参考素材")
-    analysis_id = f"ref-{time.strftime('%Y%m%d')}-{uuid.uuid4().hex[:8]}"
-    output = backend.reverse_analysis_path(project_id, analysis_id)
-    source_dir = output / "source"
-    source_dir.mkdir(parents=True, exist_ok=False)
-    source = source_dir / f"reference{suffix}"
-    await backend.stream_upload(file, source)
-    try:
-        facts = reference_decompose.media_facts(source)
-    except Exception as exc:
-        document = {
-            'schema_version': 2, 'id': analysis_id, 'project_id': project_id,
-            'title': file.filename or '参考素材', 'status': 'registration_failed',
-            'source': {'original_name': file.filename or source.name, 'path': backend.root_relative_path(source),
-                       'probe_error': str(exc)},
-            'stages': [{'id': 'import', 'status': 'done'}, {'id': 'probe', 'status': 'failed'}],
-            'observations': [], 'timeline': [], 'artifacts': {},
-        }
-        backend.write_reverse_analysis(document, output / 'analysis.json')
-        raise HTTPException(422, f'参考素材媒体探测失败: {exc}') from exc
-    document = {
+REFERENCE_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".mp3", ".wav", ".flac", ".m4a", ".aac"}
+
+
+def registration_failure_document(project_id: str, analysis_id: str, original_name: str,
+                                  source: Path, exc: Exception, *,
+                                  material_asset_id: str | None = None) -> dict[str, Any]:
+    """A failed probe still records the registered source and the failure."""
+    record: dict[str, Any] = {'original_name': original_name or source.name,
+                              'path': backend.root_relative_path(source), 'probe_error': str(exc)}
+    if material_asset_id is not None:
+        record['material_asset_id'] = material_asset_id
+    return {
         'schema_version': 2, 'id': analysis_id, 'project_id': project_id,
-        'title': file.filename or '参考素材', 'status': 'registered', 'created_at': time.time(),
-        'source': {'asset_id': f'reference-{analysis_id}', 'original_name': file.filename or source.name,
-                   'path': backend.root_relative_path(source), 'size_bytes': source.stat().st_size,
-                   'registered': True, **facts},
+        'title': original_name or '参考素材', 'status': 'registration_failed',
+        'source': record,
+        'stages': [{'id': 'import', 'status': 'done'}, {'id': 'probe', 'status': 'failed'}],
+        'observations': [], 'timeline': [], 'artifacts': {},
+    }
+
+
+def registered_document(project_id: str, analysis_id: str, original_name: str,
+                        source: Path, facts: dict[str, Any], *,
+                        material_asset_id: str | None = None) -> dict[str, Any]:
+    """Registration stores media facts only; it never splits, samples or runs ASR."""
+    record: dict[str, Any] = {
+        'asset_id': f'reference-{analysis_id}', 'original_name': original_name or source.name,
+        'path': backend.root_relative_path(source), 'size_bytes': source.stat().st_size,
+        'registered': True, **facts,
+    }
+    if material_asset_id is not None:
+        record['material_asset_id'] = material_asset_id
+    return {
+        'schema_version': 2, 'id': analysis_id, 'project_id': project_id,
+        'title': original_name or '参考素材', 'status': 'registered', 'created_at': time.time(),
+        'source': record,
         'stages': [
             {'id': 'import', 'label': '参考素材登记', 'status': 'done', 'executor': 'script'},
             {'id': 'probe', 'label': '媒体探测', 'status': 'done', 'executor': 'script'},
@@ -172,9 +177,86 @@ async def create_reverse_analysis(project_id: str, file: UploadFile = File(...))
             'user_status': 'unreviewed',
         }},
     }
+
+
+def write_registered_analysis(project_id: str, analysis_id: str, original_name: str,
+                              source: Path, facts: dict[str, Any], *,
+                              material_asset_id: str | None = None) -> dict[str, Any]:
+    document = backend.registered_document(project_id, analysis_id, original_name, source, facts,
+                                           material_asset_id=material_asset_id)
     with backend.REVERSE_DOCUMENT_LOCK:
-        backend.write_reverse_analysis(document, output / 'analysis.json')
+        backend.write_reverse_analysis(document, backend.reverse_analysis_path(project_id, analysis_id) / 'analysis.json')
     return backend.get_reverse_analysis(project_id, analysis_id)
+
+
+@ROUTER.post("/api/projects/{project_id}/reverse-analyses", status_code=202)
+async def create_reverse_analysis(project_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+    backend.require_project_manifest(project_id)
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in REFERENCE_SUFFIXES:
+        raise HTTPException(422, "只支持常见音视频参考素材")
+    analysis_id = f"ref-{time.strftime('%Y%m%d')}-{uuid.uuid4().hex[:8]}"
+    output = backend.reverse_analysis_path(project_id, analysis_id)
+    source_dir = output / "source"
+    source_dir.mkdir(parents=True, exist_ok=False)
+    source = source_dir / f"reference{suffix}"
+    await backend.stream_upload(file, source)
+    try:
+        facts = reference_decompose.media_facts(source)
+    except Exception as exc:
+        document = backend.registration_failure_document(project_id, analysis_id, file.filename or '', source, exc)
+        with backend.REVERSE_DOCUMENT_LOCK:
+            backend.write_reverse_analysis(document, output / 'analysis.json')
+        raise HTTPException(422, f'参考素材媒体探测失败: {exc}') from exc
+    return backend.write_registered_analysis(project_id, analysis_id, file.filename or '', source, facts)
+
+
+@ROUTER.post("/api/projects/{project_id}/reverse-analyses/from-material", status_code=201)
+def create_reverse_analysis_from_material(project_id: str, request: ReferenceFromMaterialRequest) -> dict[str, Any]:
+    """Register an already uploaded, project-owned audio/video material as reference input.
+
+    The caller names a registered material ID; no server path and no new bytes are
+    accepted. An existing analysis registered from the same material is reused so a
+    repeated request after a lost response does not create a duplicate. Registration
+    still only stores media facts: it does not split, sample, run ASR or convert shots.
+    """
+    manifest = backend.require_project_manifest(project_id)
+    asset = next((item for item in manifest.get('assets', [])
+                  if isinstance(item, dict) and item.get('id') == request.asset_id), None)
+    if asset is None:
+        raise HTTPException(404, '此作品中不存在该素材')
+    if asset.get('kind') not in {'audio', 'video'}:
+        raise HTTPException(422, '参考分析只接受已上传的音频或视频素材')
+    value = (asset.get('sources') or {}).get('A')
+    if not value:
+        raise HTTPException(422, '该素材没有可登记的媒体来源')
+    try:
+        source = backend.resolve_registered_path(value)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(422, f'素材路径无法解析: {exc}') from exc
+    if not source.is_file():
+        raise HTTPException(404, '素材文件不存在')
+    if source.suffix.lower() not in REFERENCE_SUFFIXES:
+        raise HTTPException(422, '只支持常见音视频参考素材')
+    for existing in backend.list_reverse_analyses(project_id)['analyses']:
+        record = existing.get('source') if isinstance(existing.get('source'), dict) else {}
+        if record.get('material_asset_id') == request.asset_id:
+            return {'analysis': existing, 'created': False}
+    analysis_id = f"ref-{time.strftime('%Y%m%d')}-{uuid.uuid4().hex[:8]}"
+    output = backend.reverse_analysis_path(project_id, analysis_id)
+    output.mkdir(parents=True, exist_ok=False)
+    original_name = str(asset.get('original_filename') or asset.get('title') or source.name)
+    try:
+        facts = reference_decompose.media_facts(source)
+    except Exception as exc:
+        document = backend.registration_failure_document(project_id, analysis_id, original_name, source, exc,
+                                                         material_asset_id=request.asset_id)
+        with backend.REVERSE_DOCUMENT_LOCK:
+            backend.write_reverse_analysis(document, output / 'analysis.json')
+        raise HTTPException(422, f'参考素材媒体探测失败: {exc}') from exc
+    analysis = backend.write_registered_analysis(project_id, analysis_id, original_name, source, facts,
+                                                 material_asset_id=request.asset_id)
+    return {'analysis': analysis, 'created': True}
 
 
 def _reference_source(document: dict[str, Any]) -> Path:
