@@ -146,8 +146,8 @@ function ProjectMediaToolsPanel({ projectId, assets, onComplete, onBrowse }: Pro
       </>}
     </div>
     <p className="director-muted">检查报告与转写帮助定位问题，画面、表演和音色仍由导演判断。所有结果保存为本作品独立结果；质检图仅用于诊断。</p>
-    {!available && <p role="status">{capability ? '当前操作不可用：' + (capability[draft.operation]?.missing?.join('、') || '请检查资源与连接') : '正在读取媒体能力…'}</p>}
-    {message && <p role="status">{message}</p>}{task?.error && <p role="status">{task.error}</p>}
+    {!available && <p role="status" aria-live="polite">{capability ? '当前操作不可用：' + (capability[draft.operation]?.missing?.join('、') || '请检查资源与连接') : '正在读取媒体能力…'}</p>}
+    {message && <p role="status" aria-live="polite">{message}</p>}{task?.error && <p role="status" aria-live="polite">{task.error}</p>}
     <div className="director-form-actions">
       <button className="button secondary compact" onClick={onBrowse}>添加素材</button>
       {!locked && <button className="button primary compact" disabled={busy || !available || !valid(draft) || (draft.operation !== 'silence' && !eligible.some(a => a.id === draft.source_asset_id))} onClick={() => void act('submit')}>开始处理</button>}
@@ -158,7 +158,7 @@ function ProjectMediaToolsPanel({ projectId, assets, onComplete, onBrowse }: Pro
       {task && ['stopped', 'failed'].includes(task.status) && <button className="button secondary compact" disabled={busy} onClick={() => void act('resume')}>恢复原任务</button>}
       {task && terminal.includes(task.status) && <button className="button secondary compact" disabled={busy} onClick={() => { if (persist({ ...current.current, pending: undefined })) { setTask(null); setMessage(''); } }}>继续处理</button>}
       {task && <TaskQueueStatus task={{ ...task, asset_id: '媒体处理' }} />}
-      {task && <span role="status">{labels[task.status] || task.status}</span>}
+      {task && <span role="status" aria-live="polite">{labels[task.status] || task.status}</span>}
     </div>
     {report && <section aria-label="媒体检查报告"><h3>处理报告</h3>
       {typeof report.duration_seconds === 'number' && <p>时长 {report.duration_seconds.toFixed(2)} 秒{typeof report.width === 'number' ? ` · ${report.width} × ${report.height}` : ''}{typeof report.frame_count === 'number' ? ` · ${report.frame_count} 帧` : ''}{typeof report.sample_rate === 'number' ? ` · ${report.sample_rate} Hz` : ''}{typeof report.channels === 'number' ? ` · ${report.channels} 声道` : ''}</p>}

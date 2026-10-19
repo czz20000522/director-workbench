@@ -59,7 +59,7 @@ function WorkbenchEntry() {
     return () => controller.abort();
   }, []);
   if (failed) return <main className="workspace-login"><p role="alert">无法连接工作台，请刷新重试。</p></main>;
-  if (privateMode === null) return <main className="workspace-login"><p role="status">正在连接工作台…</p></main>;
+  if (privateMode === null) return <main className="workspace-login"><p role="status" aria-live="polite">正在连接工作台…</p></main>;
   return privateMode ? <LoginGate /> : <App />;
 }
 

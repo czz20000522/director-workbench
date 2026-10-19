@@ -140,7 +140,7 @@ function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse }:
       </div></details>
     </div>
     <p className="director-muted">PCM16 WAV，最多 120 秒；混音须同采样率、同声道。保存为新候选，原音频保留。</p>
-    {message && <p role="status">{message}</p>}{task?.error && <p role="status">{task.error}</p>}
+    {message && <p role="status" aria-live="polite">{message}</p>}{task?.error && <p role="status" aria-live="polite">{task.error}</p>}
     {result?.output && <div><audio controls preload="metadata" aria-label="音频编辑候选试听" src={mediaUrl(result.output)} /><p>新候选实测 {result.duration_seconds ?? '未知'} 秒；试听后再选择为完整母版，不会自动替换原音。</p></div>}
     <div className="director-form-actions">
       <button className="button secondary compact" onClick={onBrowse}>添加素材</button>
@@ -151,7 +151,7 @@ function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse }:
       {task && ['stopped', 'failed'].includes(task.status) && <button className="button secondary compact" disabled={busy} onClick={() => void act('resume')}>恢复原编辑任务</button>}
       {task && terminal.includes(task.status) && <button className="button secondary compact" disabled={busy} onClick={() => { if (persist({ ...current.current, pending: undefined })) { setTask(null); setMessage(''); } }}>继续编辑</button>}
       {task && <TaskQueueStatus task={{ ...task, asset_id: '音频编辑' }} />}
-      {task && <span role="status">{labels[task.status] || '处理中'}</span>}
+      {task && <span role="status" aria-live="polite">{labels[task.status] || '处理中'}</span>}
     </div>
   </details>;
 }

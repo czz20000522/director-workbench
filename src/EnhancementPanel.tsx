@@ -144,7 +144,7 @@ export default function EnhancementPanel({ projectId, initialSource = '', onBack
       <p className="enhancement-limits">{capability?.limits || '正在检查处理环境…'}</p>
       {chosen && capability && !available && <p role="alert">环境尚未就绪：{capability.kinds[chosen.kind as 'image' | 'video']?.missing.join('、')}</p>}
       <div className="enhancement-actions"><button className="button primary" disabled={busy || !pending && (!source || !available)} onClick={() => void submit()}>{pending ? '沿用原请求重试' : '开始 AI 清晰化 · 2×'}</button>{pending && <button className="button secondary" disabled={busy} onClick={() => { void request<Task>(`${base}/submission-receipt?key=${encodeURIComponent(pending.idempotency_key)}`).then(accept).catch(error => setMessage(error.message)); }}>核对提交回执</button>}</div>
-      {message && <p role="status">{message}</p>}
+      {message && <p role="status" aria-live="polite">{message}</p>}
     </section>
     {selectedTask && <section className="enhancement-result"><h2>处理结果</h2><p>{statusLabel[selectedTask.status] || selectedTask.status} · {selectedTask.id.slice(0, 8)}</p><TaskQueueStatus task={selectedTask} />{selectedTask.error && <p role="alert">{selectedTask.error}</p>}
       {!terminal.includes(selectedTask.status) && <div className="enhancement-actions"><button className="button secondary" disabled={busy || selectedTask.status === 'needs_reconcile'} onClick={() => void operate('stop')}>停止处理</button><button className="button secondary" disabled={busy} onClick={() => void operate('reconcile')}>核对处理回执</button></div>}

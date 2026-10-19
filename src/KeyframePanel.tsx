@@ -155,10 +155,10 @@ export default function KeyframePanel({ projectId, options, onBrowse, onComplete
       <details className="director-creation-wide"><summary>高级：固定种子</summary><label>种子<input type="number" min={0} max={4294967295} step={1} value={saved.seed} disabled={Boolean(saved.pending)} onChange={event => persist({ ...saved, seed: Number(event.target.value) })} /></label></details>
     </div>
     <p className="director-muted">生成后可直接下载图片，也可以选作视频的开始画面。每次生成都会保留原图。</p>
-    {(!capability?.available || capability.mode !== saved.mode) && <p role="status">{!capability || capability.mode !== saved.mode ? '正在检查生成环境…' : capability.reason || '关键帧生成环境尚未就绪。'}</p>}
+    {(!capability?.available || capability.mode !== saved.mode) && <p role="status" aria-live="polite">{!capability || capability.mode !== saved.mode ? '正在检查生成环境…' : capability.reason || '关键帧生成环境尚未就绪。'}</p>}
     {capability && !capability.available && <details><summary>查看缺少的资源</summary><p>{[...(capability.missing_nodes || []), ...(capability.missing_models || [])].join("、") || "请检查生成服务连接。"}</p></details>}
-    {message && <p role="status">{message}</p>}
-    {task?.error && <p role="status">{task.error}</p>}
+    {message && <p role="status" aria-live="polite">{message}</p>}
+    {task?.error && <p role="status" aria-live="polite">{task.error}</p>}
     {task?.status === 'succeeded' && <div className="quick-candidate-meta" aria-label="图片候选信息">
       <div className="quick-candidate-meta-heading"><strong>当前图片候选</strong><span>已生成 · 待审阅</span></div>
       <dl><div><dt>输出规格</dt><dd>{resolutionLabel(task.result?.output_size?.resolution ?? task.payload?.request?.output_resolution)}{(task.result?.output_size?.width ?? task.result?.width) && (task.result?.output_size?.height ?? task.result?.height) ? ` · ${task.result?.output_size?.width ?? task.result?.width} × ${task.result?.output_size?.height ?? task.result?.height}` : ''}</dd></div><div><dt>处理方式</dt><dd>{methodLabel(task.result?.output_size?.method ?? task.payload?.output_size?.method)}</dd></div><div><dt>输入快照</dt><dd>完整提示词与参数已保留</dd></div></dl>
