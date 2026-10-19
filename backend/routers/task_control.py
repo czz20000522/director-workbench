@@ -141,7 +141,7 @@ def resolve_missing_execution(project_id: str, task_id: str, request: MissingExe
         with backend.AUDIO_EDIT_LOCK:
             task = backend.project_task_detail(project_id, task_id)
             if task['status'] != 'needs_reconcile':
-                raise HTTPException(409, '仅支持待核对CPU音频编辑任务')
+                raise HTTPException(409, '仅支持待核对CPU音频任务')
             owner_alive = backend.audio_master_owner_alive(task['payload']) if task['payload'].get('kind') == 'audio_master' else backend.audio_edit_owner_alive(task['payload'])
             if owner_alive:
                 raise HTTPException(409, '原CPU执行服务仍存活，不能确认旧执行结束')
