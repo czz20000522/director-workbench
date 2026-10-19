@@ -666,17 +666,37 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   }
 
   async function adoptCurrent() {
-    if (!current.id) return;
+    if (!current.id || !project?.id) return;
     if (!canReviewAsset) { setNotice('请先选择有实际文件的候选，再审核或采用。'); return; }
     if (kind !== 'video') { await persistReview('sample', 'approved', variant); return; }
-    if (isAssemblyAsset) { await persistReview('final', 'approved', variant); return; }
     const adoptingFinishCandidate = kind === 'video' && variant === 'B' && currentCandidateBIsFinish;
-    if (adoptingFinishCandidate) {
-      if (!hasApprovalCheckpoint) { setNotice('请先采用低成本样片，再采用精细化版本。'); return; }
-      await persistReview('finish', 'approved', variant);
-      return;
-    }
-    await persistReview('sample', 'approved', variant);
+    if (adoptingFinishCandidate && !hasApprovalCheckpoint) { setNotice('请先采用低成本样片，再采用精细化版本。'); return; }
+    const stage = (isAssemblyAsset ? 'final' : adoptingFinishCandidate ? 'finish' : 'sample') as 'sample' | 'finish' | 'final';
+    const candidate = (isAssemblyAsset
+      ? null
+      : variant === 'B'
+        ? currentPlanSegment?.video?.rework_candidate?.path ?? currentPlanSegment?.video?.finish_review?.path
+        : currentPlanSegment?.video?.path) ?? current.sources?.[variant] ?? current.sources?.A ?? null;
+    if (!candidate) { setNotice('当前候选没有可采用的媒体文件。'); return; }
+    const record = projectState?.reviews[current.id]?.[stage];
+    setStateSaving(true);
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(project.id || '')}/adoptions`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          asset_id: current.id, stage, candidate_ref: candidate,
+          expected_review_revision: record?.revision ?? 0,
+          expected_plan_revision: planRevision,
+          note: currentNote || '用户确认采用当前候选',
+          confirm_adoption: true,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail?.message || data.detail || '采用失败');
+      await refreshProjectState();
+      setNotice(`${assetLabel(current.id)} 已明确采用，版本 ${data.revision ?? record?.revision ?? ''}。`);
+    } catch (error) { setNotice(error instanceof Error ? error.message : '采用失败。'); }
+    finally { setStateSaving(false); }
   }
 
   async function restoreShotVersion(version: ShotVersion) {

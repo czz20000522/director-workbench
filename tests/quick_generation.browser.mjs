@@ -298,16 +298,13 @@ try {
   await page.getByRole('heading', { name: '分镜2', exact: true }).waitFor();
   assert.equal(await page.getByRole('region', { name: '候选并排比较', exact: true }).count(), 0, 'Never show another shot\'s candidate comparison');
   await page.screenshot({ path: resolve(process.argv[3], 'stacked-cards.png'), fullPage: true });
-  // Adding S02 changes the plan revision, so re-adopt the current S01 candidate.
-  await page.getByRole('button', { name: '查看上一段', exact: true }).click();
+  // Adding S02 changes the plan revision; reload so adoption uses the current revision.
+  await page.reload();
   await page.getByRole('heading', { name: '分镜1', exact: true }).waitFor();
   await page.getByLabel('使用生成结果').getByRole('button', { name: '采用当前候选', exact: true }).click();
   await page.getByLabel('使用生成结果').getByText('已采用', { exact: true }).waitFor();
   await page.getByRole('button', { name: '检查并装配成片', exact: true }).click();
   const delivery = page.getByRole('region', { name: '装配与取得文件', exact: true });
-  console.log('DEBUG delivery', await delivery.innerText());
-  console.log('DEBUG plan', JSON.stringify(await page.evaluate(async pid => (await (await fetch(`/api/projects/${pid}/plan`)).json()), projectId)));
-  console.log('DEBUG state', JSON.stringify(await page.evaluate(async pid => (await (await fetch(`/api/projects/${pid}/state`)).json()), projectId)));
   await delivery.getByRole('heading', { name: '已采用 1 / 2 段', exact: true }).waitFor();
   assert.ok(await delivery.getByRole('button', { name: '装配成片', exact: true }).isDisabled());
   await delivery.getByRole('button', { name: '打开分镜2', exact: true }).click();

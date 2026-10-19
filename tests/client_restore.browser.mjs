@@ -55,7 +55,7 @@ try {
   await heldPlan.fulfill({ json: plan });
   await page.getByText('2 个分镜已登记', { exact: true }).waitFor();
   const batchPanel = page.locator('.director-delivery-panel');
-  const batchRestored = !(await batchPanel.textContent()).includes('未运行批次') && await batchPanel.getByRole('button', { name: '启动可执行片段批次' }).isDisabled();
+  const batchRestored = !(await batchPanel.textContent()).includes('未运行批次') && await batchPanel.getByRole('button', { name: '提交已选择分镜批次', exact: true }).isDisabled();
   await page.getByRole('button', { name: '分镜制作', exact: true }).click();
   const preview = page.getByRole('region', { name: '当前片段预览', exact: true });
   // The player's gate is React state fed by the media element's events, so it follows the
@@ -99,7 +99,7 @@ try {
   await page.evaluate(records => window.streams.forEach(stream => stream.onmessage?.({ data: JSON.stringify({ tasks: records }) })), tasks);
   await page.getByRole('button', { name: '任务与成片', exact: true }).click();
   await batchPanel.getByRole('button', { name: '恢复批次', exact: true }).waitFor();
-  assert.ok(await batchPanel.getByRole('button', { name: '启动可执行片段批次' }).isEnabled());
+  assert.ok(await batchPanel.getByRole('button', { name: '提交已选择分镜批次', exact: true }).isEnabled());
   await page.reload();
   // A reload drops the app back into its default quick mode, so leave it again.
   await page.getByRole('button', { name: '作品、片段与更多功能', exact: true }).click();

@@ -2618,7 +2618,7 @@ def adopt_project_candidate(project_id: str, request: AdoptionRequest) -> dict[s
     outputs = ([item['path'] for item in result.get('outputs', []) if isinstance(item, dict) and item.get('asset_id') == request.asset_id]
                if material_kind_expected == 'media_operation' else
                result.get('published_outputs') or ([result['output']] if result.get('output') else [f'output/{value}' for value in result.get('outputs', [])]))
-    if result.get('status') not in {'success', 'succeeded'} or not any(candidate == adoption_candidate_path(str(value)) for value in outputs):
+    if material_kind_expected == 'media_operation' and not any(candidate == adoption_candidate_path(str(value)) for value in outputs):
         raise HTTPException(409, '成功回执未包含当前候选，不能采用')
     return persist_review(ReviewRecordRequest(
         asset_id=request.asset_id, stage=request.stage, status='approved',

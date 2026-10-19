@@ -112,11 +112,13 @@ try {
       await page.getByLabel('装配准备度').getByText('准备完成，可明确提交装配。').waitFor();
       await page.getByRole('button', { name: '启动装配', exact: true }).click();
       await page.getByText('已收到装配任务回执。').waitFor();
-      await page.getByRole('button', { name: '启动可执行片段批次' }).click();
-      await page.getByText(/已提交 1 个片段/).waitFor();
+      await page.locator('.director-batch-selection input[type=checkbox]').first().check();
+      await page.getByRole('button', { name: '提交已选择分镜批次', exact: true }).click();
+      await page.getByText(/已提交明确选择的 1 个片段/).waitFor();
       assert.deepEqual(deliveryPosts.map(item => item.path), ['/api/projects/browser-test/assembly', '/api/projects/browser-test/batches']);
       assert.ok(deliveryPosts[0].body.idempotency_key);
-      assert.equal(deliveryPosts[1].body.pipeline_stage_id, selected);
+      assert.equal(deliveryPosts[1].body.pipeline_stage_id, undefined);
+      assert.deepEqual(deliveryPosts[1].body.asset_ids, ['S01']);
     }
     assert.deepEqual(errors, []);
     await context.close();
