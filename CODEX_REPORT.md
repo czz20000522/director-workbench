@@ -30,7 +30,7 @@
 - 目标连续性测试：`2 passed, 1 skipped`；本机缺少可用 ffprobe 时，真实短视频用例按设计跳过，不可用降级用例通过。
 - `npm run build`：通过。
 - `run_tests.ps1 -Suite browser`：通过（`browser=passed`）。
-- `run_tests.ps1 -Suite core`：`1059 passed, 5 skipped`；公开源白名单检查因以下新增文件仍被 `.gitignore` 排除而失败，需 Lead 补白名单后重跑：
+- `run_tests.ps1 -Suite core` 初次回归：`1059 passed, 5 skipped, 2 failed`；其中新增独立 route 导致的 OpenAPI snapshot 已移除并由目标契约测试复核通过，公开源白名单检查因以下新增文件仍被 `.gitignore` 排除而失败，需 Lead 补白名单后重跑：
   - `backend/assembly_continuity.py`
   - `docs/assembly-continuity.md`
   - `tests/test_assembly_continuity.py`
