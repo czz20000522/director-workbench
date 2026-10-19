@@ -22,9 +22,15 @@ def test_reusable_template_catalog_is_read_only_and_keeps_project_preset(preset_
     client, project = preset_client
     response = client.get('/api/projects/preset-test/reusable-templates')
     assert response.status_code == 200
-    templates = response.json()['templates']
+    data = response.json()
+    templates = data['available_templates']
     assert [item['id'] for item in templates] == ['image', 'text-video', 'video']
-    assert all(item['recommended'] for item in templates)
+    # The catalog is a factual list: carrying a recommendation would make the
+    # platform choose for the user.
+    assert all('recommended' not in item for item in templates)
+    assert all(set(item) <= {'id', 'kind', 'title', 'description', 'preset', 'installed'} for item in templates)
+    assert data['project_id'] == 'preset-test'
+    assert 'installed_preset' in data
     assert client.get('/api/projects/preset-test').json()['id'] == 'preset-test'
 
 
