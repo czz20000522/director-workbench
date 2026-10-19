@@ -156,8 +156,10 @@
 !/docs/github-collaboration.md
 !/enable_lan_access.ps1
 !/index.html
+!/ISSUE121_REPORT.md
 !/mcp_server/README.md
 !/mcp_server/creation_inputs.py
+!/mcp_server/errors.py
 !/mcp_server/server.py
 !/package-lock.json
 !/package.json
@@ -396,3 +398,4 @@
 !/backend/media_refs.py
 !/backend/routers/media_access.py
 !/tests/test_mcp_media_delivery.py
+!/tests/test_mcp_contract.py

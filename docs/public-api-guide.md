@@ -25,6 +25,8 @@
 | `422` | 检查 schema、输入组合与结构化 blockers |
 | 超时/连接断开 | 写入结果可能已保存，先查询记录或原任务回执 |
 
+MCP 工具把失败统一为 `isError=true` 且同一次调用带结构化 `{ok:false,error:{code,message,kind,retryable,...}}`：`kind=business` 表示 HTTP 业务拒绝（含 `http_status`、`detail`，`code` 优先取后端 `detail.code`），`kind=argument` 表示适配器拒绝的参数或语义，`kind=transport` 表示读取暂时失败可重试，`kind=outcome_unknown` 表示写入结果未知（必须先核对、不可直接重发）。参数缺失、类型不符或超出 schema 范围时，MCP SDK 在工具执行前返回 tool error（文本列出被拒字段），不会调用工作台。分页工具用 `meta.pagination` 声明 `limit`/`offset` 合同并在响应中返回 `next_offset`；`idempotent_hint` 只对可重放原键的写入标 true。
+
 ## 最短创作合同
 
 先读当前服务的对应 OpenAPI schema。下列 JSON 是无真实账号、路径或素材的示例；作品/分镜 ID 和 revision 必须使用实际返回值。创建、上传、添加分镜都改变业务数据，示例不会自动授权生成。
@@ -87,9 +89,9 @@
 
    空列表、缺少字段或未绑定 workflow 的分镜会在创建任务前返回结构化 `422` blocker；服务端不会把所有可执行分镜隐式加入批次。
 
-8. 用 `GET /api/queue` 和 `GET /api/projects/{project_id}/tasks/{task_id}` 查询原任务。候选通过任务返回的授权媒体入口访问；`GET /api/projects/{project_id}/segments/{segment_id}/versions` 读取历史。实际媒体通过同源 `GET /media-file?path=<已登记引用>`（带本人 Bearer）读取/保存；`/media/{asset_name}` 是旧别名。`stop_requested` 是停止请求，仍需等实际结束；`needs_reconcile` 需核对原执行。任务成功不表示审核、采用或交付通过。
+8. 用 `GET /api/queue` 和 `GET /api/projects/{project_id}/tasks/{task_id}` 查询原任务。候选通过任务返回的受控媒体引用访问；`GET /api/projects/{project_id}/segments/{segment_id}/versions` 读取历史。作品内媒体用稳定 `media_ref` 加短期 URL `/api/projects/{project_id}/media/{token}`（带本人 Bearer）读取/交付，MCP 对应 `list_media`、`get_media_url`、`download_media`；不要构造 `media_ref` 之外的服务器路径，`/media-file?path=` 和 `/media/{asset_name}` 只是本机 UI 的登记引用入口。`stop_requested` 是停止请求，仍需等实际结束；`needs_reconcile` 需核对原执行。任务成功不表示审核、采用或交付通过。
 
-创建/上传/新增分镜没有统一幂等回执，未知结果先读取本人作品、计划或素材确认。不要给这些操作套用生成任务的同键保证。
+创建/上传/新增分镜没有统一幂等回执，未知结果先读取本人作品、计划或素材确认。不要给这些操作套用生成任务的同键保证。MCP 的 `idempotent_hint` 按真实能力标注：单段/批次/装配/关键帧/语音/音频编辑/母版/媒体任务、按素材幂等登记的参考导入和核对类工具为 true；创建、上传、分镜/计划/审核/采用和观察记录为 false，annotation 只是提示，服务端仍校验权限与版本。
 
 ## 其他业务入口
 

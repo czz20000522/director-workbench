@@ -76,11 +76,12 @@ stdio 供服务器本机客户端或主动诊断使用，需要项目 Python 环
 
 ## 回执、版本与操作边界
 
-- 业务结果为 `{ok: true, data: ...}` 或 `{ok: false, error: ...}`；MCP 传输成功不代表业务成功。HTTP 失败保留 `http_status` 和 `detail`，参数 schema 错误由 SDK 返回。
+- 统一错误 union：业务错误 `kind=business`（含 `http_status`、`detail`，`code` 优先取后端 `detail.code`）、适配器参数错误 `kind=argument`、传输错误 `kind=transport`、未知回执 `kind=outcome_unknown`（`outcome_unknown=true`、`retryable=false`）。这四类都以 `isError=true` 返回，并在同一次调用中带结构化 `{ok:false,error:{code,message,kind,retryable,...}}`。第五类是 schema/tool error：参数缺失、类型不符或超出 `tools/list` 声明的范围时，SDK 在工具执行前拒绝，返回 `isError=true` 的文本错误（列出被拒字段），不调用工作台、也没有 `{ok:false}` 结构；按 schema 修正参数，不要在参数不明时重试计费写入。
 - 写入使用工具要求的当前版本：计划、剧本、参考分析和审核各有 revision。409 后重读比较，不自动提高版本覆盖。MCP 与工作台随同发布，不探测/静默回退旧软件流程。
+- 幂等 annotation 按真实能力标注：带可重放请求键的提交（单段/批次/装配/关键帧/语音/音频编辑/母版/媒体任务）、按素材幂等登记的参考导入和核对类工具标 `idempotent_hint=true`；没有统一请求键的创建、上传、分镜/计划/审核/采用/观察记录标 `false`。annotation 只是客户端提示，服务端仍校验权限和版本。分页工具（`list_tasks`、`list_shot_versions`、`list_references`、`list_media`）在工具 `meta.pagination` 中声明 `limit`/`offset` 合同并使用 `next_offset`。
 - 提交生成前保存请求键。相同作品、键和参数返回原任务；不同参数冲突。写入超时可能标记 `outcome_unknown`，先查询原回执或保存内容，不盲目重发。创建、上传和新增分镜没有通用幂等保证，先读取核对。
 - `stop_requested` 不等于停止完成；`reconcile_generation` 核对原执行，不自动重试。`resume_generation` 可能返回原成功任务或创建新尝试，使用实际返回 ID 接续。`resolve_missing_execution` 要求先核实旧执行已结束、检查输出并提供说明，不能仅凭超时调用。后两者不在远程工具名单中，远程客户端只能走认证 HTTP，并遵守相同门禁。
-- 候选、版本和成片媒体通过同源受控地址 `GET /media-file?path=<已登记引用>`（带本人 Bearer）读取；`/media/{asset_name}` 是旧别名。远程 MCP 不提供下载工具，任务成功或路径存在不等于已查看/已试听，技术检查也不等于采用或交付。
+- 媒体通过受控 `media_ref` 读取：`list_media` 列出稳定引用和短期 URL，`get_media_url` 重新签发，`download_media` 对小文件内联、对超大文件只返回 URL。URL 形如 `GET /api/projects/{project_id}/media/{token}`，仍要求本人 Bearer 会话，不返回也不接受服务器路径。`/media-file?path=<已登记引用>` 和 `/media/{asset_name}` 只是本机 UI 的登记引用读取入口，远程 Agent 不应构造这类路径。任务成功或文件存在不等于已查看/已试听，技术检查也不等于采用或交付。
 - `create_project` 必须显式传 `creation_mode="advanced"`；`preflight` 必须传实际 `stage_id`；`create_shot`／`update_shot` 可传 `workflow` 或已安装的 `preset_id`。自动方案、`stage_id="auto"` 和 `generation.mode` 已移除；缺省或未安装时 HTTP 返回结构化阻塞和可选项，不写计划。`read_project` 的 `section:"state"` 返回同一准备度（无显式方案时为 `stage_required`/`recipe_unresolved` 并带显式方案事实），`section:"reusable-templates"` 返回 `available_templates` 事实清单，不含 `recommended` 或默认选择。
 - `submit_shot` 必须显式提供 `asset_id`；`submit_batch` 必须提供至少一个 `asset_ids`，不会隐式选择默认或全部分镜。分镜还必须绑定明确 workflow/制作方案，缺失时 HTTP 返回结构化 `workflow_required` blocker。`approve_candidate` 需要真实候选、当前计划/审核版本、非空说明和严格布尔 `confirm_adoption=true`。任务成功或技术检查不自动批准画面、音色、表演、采用或交付；明确采用也不表示用户亲自验收。
 

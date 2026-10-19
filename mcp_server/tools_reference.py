@@ -4,23 +4,25 @@ from __future__ import annotations
 import base64
 import math
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
 from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
+from pydantic import Field
 
 if __package__:
-    from . import media
+    from . import errors, media
 else:
-    import media
+    import errors, media
 
 
 MAX_REFERENCE_BYTES = 16 * 1024 * 1024
 MAX_REFERENCE_BASE64 = 22_369_624
 
 
-def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, write_record: ToolAnnotations) -> None:
+def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, write_record: ToolAnnotations,
+             idempotent_write: ToolAnnotations) -> None:
     request = client.request
     project_path = client.project_path
     path_id = client.path_id
@@ -68,7 +70,7 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
             result['data'] = {**result['data'], 'job': media.public_job(result['data'].get('job'))}
         return result
 
-    @server.tool(annotations=write_record)
+    @server.tool(annotations=idempotent_write)
     async def import_reference_from_material(project_id: str, asset_id: str) -> dict[str, Any]:
         """把本作品已上传的音频/视频素材登记为参考拆解，远程 Agent 无需服务器路径。
         只做媒体探测和参考登记，不抽帧、不切段、不运行 ASR 或语义模型，也不改制作分镜。
@@ -96,19 +98,17 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         if Path(filename).suffix.lower() not in {'.mp4', '.mov', '.mkv', '.webm', '.m4v', '.mp3', '.wav', '.flac', '.m4a', '.aac'}:
             raise ValueError('只支持常见音视频参考素材')
         if len(content_base64) > MAX_REFERENCE_BASE64:
-            return {'ok': False, 'error': {'code': 'reference_too_large',
-                                           'message': 'MCP参考素材最多16MiB，请使用HTTP multipart参考上传',
-                                           'http_fallback': 'POST /api/projects/{project_id}/reverse-analyses 的 multipart file 字段',
-                                           'retryable': False}}
+            return errors.error('reference_too_large', 'MCP参考素材最多16MiB，请使用HTTP multipart参考上传',
+                                kind='argument',
+                                http_fallback='POST /api/projects/{project_id}/reverse-analyses 的 multipart file 字段')
         try:
             content = base64.b64decode(content_base64, validate=True)
         except ValueError as exc:
             raise ValueError('参考素材内容必须是有效base64') from exc
         if not content or len(content) > MAX_REFERENCE_BYTES:
-            return {'ok': False, 'error': {'code': 'reference_too_large',
-                                           'message': 'MCP参考素材须为非空、至多16MiB，请使用HTTP multipart上传较大文件',
-                                           'http_fallback': 'POST /api/projects/{project_id}/reverse-analyses 的 multipart file 字段',
-                                           'retryable': False}}
+            return errors.error('reference_too_large', 'MCP参考素材须为非空、至多16MiB，请使用HTTP multipart上传较大文件',
+                                kind='argument',
+                                http_fallback='POST /api/projects/{project_id}/reverse-analyses 的 multipart file 字段')
         result = await request('POST', project_path(project_id) + '/reverse-analyses',
                                files={'file': (filename, content, 'application/octet-stream')})
         return await shape_analysis_result(result, project_id)
@@ -119,12 +119,14 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         endpoint = project_path(project_id) + '/reverse-analyses'
         path = Path(file_path)
         if not path.is_absolute() or path.suffix.lower() not in {'.mp4', '.mov', '.mkv', '.webm', '.m4v', '.mp3', '.wav', '.flac', '.m4a', '.aac'}:
-            return {'ok': False, 'error': {'code': 'invalid_reference_file', 'message': '请提供 MCP 所在机器上音视频文件的绝对路径', 'retryable': False}}
+            return errors.error('invalid_reference_file', '请提供 MCP 所在机器上音视频文件的绝对路径',
+                                kind='argument')
         try:
             with path.open('rb') as source:
                 return await request('POST', endpoint, files={'file': (path.name, source, 'application/octet-stream')}, timeout=960)
         except OSError:
-            return {'ok': False, 'error': {'code': 'reference_file_unreadable', 'message': '参考文件无法读取；若上传已开始，请先查询参考列表核对', 'retryable': False}}
+            return errors.error('reference_file_unreadable', '参考文件无法读取；若上传已开始，请先查询参考列表核对',
+                                kind='argument')
 
     @server.tool(annotations=write_record)
     async def extract_reference_range(project_id: str, analysis_id: str, start_seconds: float,
@@ -176,11 +178,11 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         result = await request('POST', project_path(project_id) + '/reverse-analyses/' + analysis_id + '/observations/asr', json={})
         return await shape_observation_result(result, project_id, analysis_id)
 
-    @server.tool(annotations=read_only)
-    async def list_references(project_id: str, limit: int = 20, offset: int = 0) -> dict[str, Any]:
+    @server.tool(annotations=read_only, meta=errors.PAGINATION_META)
+    async def list_references(project_id: str,
+                              limit: Annotated[int, Field(strict=True, ge=1, le=100)] = 20,
+                              offset: Annotated[int, Field(strict=True, ge=0)] = 0) -> dict[str, Any]:
         """分页列出作品已有参考拆解摘要；用 read_reference 读取时间线、分析工件或分析任务。不会上传或启动分析。"""
-        if not 1 <= limit <= 100 or offset < 0:
-            return {'ok': False, 'error': {'code': 'invalid_pagination', 'retryable': False}}
         result = await request('GET', project_path(project_id) + '/reverse-analyses')
         if not result['ok']:
             return result
@@ -211,7 +213,7 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         result = await request('POST', project_path(project_id) + '/reverse-analyses/' + analysis_id + '/semantic-jobs')
         return await shape_job_result(result)
 
-    @server.tool(annotations=write_record)
+    @server.tool(annotations=idempotent_write)
     async def reconcile_reference_analysis(project_id: str, analysis_id: str) -> dict[str, Any]:
         """核对参考分析的独立完成回执并恢复原任务，不重新运行分析。仅用于 needs_reconcile；409 表示尚不能确认，保留待核对状态，不能据此重启分析。"""
         valid_analysis_id(analysis_id)
@@ -220,7 +222,9 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
 
 
     @server.tool(annotations=write_record)
-    async def annotate_reference_timeline(project_id: str, analysis_id: str, segment_id: str, expected_revision: int, note: str) -> dict[str, Any]:
+    async def annotate_reference_timeline(project_id: str, analysis_id: str, segment_id: str,
+                                          expected_revision: Annotated[int, Field(strict=True, ge=0)],
+                                          note: Annotated[str, Field(max_length=4000)]) -> dict[str, Any]:
         """保存参考时间段的改编备注，标记待复核。版本来自 read_reference 返回的分析 revision（旧文档为 0）；不会自动确认分析或修改已转换的制作分镜。"""
         for value in (analysis_id, segment_id):
             if not value or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for char in value):
@@ -229,7 +233,9 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
 
     @server.tool(annotations=write_record)
     async def correct_reference_artifact(project_id: str, analysis_id: str, artifact_id: str,
-            summary: str, expected_revision: int, confidence: float | None = None) -> dict[str, Any]:
+            summary: Annotated[str, Field(max_length=8000)],
+            expected_revision: Annotated[int, Field(strict=True, ge=0)],
+            confidence: Annotated[float | None, Field(ge=0, le=1)] = None) -> dict[str, Any]:
         """显式校订单个参考工件，保存此前内容及版本历史；不批准整份分析、不重分析或转换。
         先 read_reference 核实工件 ID 与 revision；409 后重读比较，未知响应先读原工件，不自动重发。
         summary 是完整替换后的校订文本；仅代表调用方明确确认此工件，不代表其他内容已通过。
@@ -237,10 +243,8 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         for value in (analysis_id, artifact_id):
             if not value or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for char in value):
                 raise ValueError('必须提供有效参考拆解与工件 ID')
-        if expected_revision < 0 or not summary.strip() or len(summary) > 8000:
-            raise ValueError('需要非负分析版本及非空、至多8000字符的校订内容')
-        if confidence is not None and not 0 <= confidence <= 1:
-            raise ValueError('置信度必须在0到1之间')
+        if not summary.strip():
+            raise errors.ToolInputError('invalid_summary', '校订内容不能为空')
         body = {'summary': summary, 'user_status': 'reviewed', 'expected_revision': expected_revision}
         if confidence is not None:
             body['confidence'] = confidence
@@ -249,21 +253,21 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
     @server.tool(annotations=write_record)
     async def correct_reference_classification(project_id: str, analysis_id: str,
             content_mode: Literal['narrative', 'music_performance', 'dance', 'showcase', 'mood', 'technical', 'other'],
-            reason: str, expected_revision: int) -> dict[str, Any]:
+            reason: Annotated[str, Field(min_length=1, max_length=2000)],
+            expected_revision: Annotated[int, Field(strict=True, ge=0)]) -> dict[str, Any]:
         """显式校订参考内容类型及理由，仅确认分类，不批准整份分析、不重分析或转换制作。先 read_reference 取得 revision；409 后重读比较，不盲目更新版本重发。分类写入 content_mode/content_mode_reason，标记 content_mode_user_status=reviewed；后续模型重分析保留校订，另存 content_mode_model_candidate。"""
         if not analysis_id or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for char in analysis_id):
             raise ValueError('必须提供有效参考拆解 ID')
-        if expected_revision < 0 or not reason.strip() or len(reason) > 2000:
-            raise ValueError('需要非负分析版本及非空、至多2000字符的校订理由')
+        if not reason.strip():
+            raise errors.ToolInputError('invalid_reason', '校订理由不能为空')
         return await request('PATCH', project_path(project_id) + '/reverse-analyses/' + analysis_id + '/classification',
                              json={'content_mode': content_mode, 'reason': reason, 'expected_revision': expected_revision})
 
     @server.tool(annotations=write_record)
-    async def convert_reference_to_shots(project_id: str, analysis_id: str, expected_revision: int,
-                                         shots: list[dict[str, Any]]) -> dict[str, Any]:
+    async def convert_reference_to_shots(project_id: str, analysis_id: str,
+                                         expected_revision: Annotated[int, Field(strict=True, ge=0)],
+                                         shots: Annotated[list[dict[str, Any]], Field(min_length=1, max_length=256)]) -> dict[str, Any]:
         """只把调用方明确提交的非空分镜列表转为制作草案。每项必须包含 start_seconds、end_seconds 和 fields；参考观察、等距采样和模型候选不会自动填入 performance/prompt。"""
         if not analysis_id or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for char in analysis_id):
             raise ValueError('必须提供有效参考拆解 ID')
-        if expected_revision < 0 or not shots:
-            raise ValueError('需要非负分析版本及至少一个明确制作分镜')
         return await request('POST', project_path(project_id) + '/reverse-analyses/' + analysis_id + '/convert', json={'expected_revision': expected_revision, 'shots': shots})

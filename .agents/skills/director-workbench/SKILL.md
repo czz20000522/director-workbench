@@ -11,8 +11,8 @@ description: 通过用户给出的导演工作台 URL 和本人凭据，使用�
 
 ## 版本与合同快照
 
-- Skill 版本：`1.0.0`（2026-10-19）。
-- 合同快照：远程 MCP 固定开放 **54** 个工具；本机 stdio 全量 **61** 个工具；远程固定名单见[附录 A](#附录-a远程-mcp-工具清单54)，仅本机工具见[附录 B](#附录-b仅本机-stdio-的-7-个工具)。
+- Skill 版本：`1.1.0`（2026-10-19）。
+- 合同快照：远程 MCP 固定开放 **60** 个工具；本机 stdio 全量 **67** 个工具；远程固定名单见[附录 A](#附录-a远程-mcp-工具清单60)，仅本机工具见[附录 B](#附录-b仅本机-stdio-的-7-个工具)。
 - 工具数量、名称或关键合同变化时，必须同步更新本版本号、附录和 `mcp_server/README.md`、`docs/public-api-guide.md`，不能只改实现。
 - 工作台当前只注册 MCP **tools**，没有注册 MCP **resources** 或 **prompts**。因此不能通过 MCP 资源接口拉取本 Skill；这是当前限制，不是“已支持”。本 Skill 由仓库或公开源代码快照分发。
 
@@ -69,9 +69,10 @@ description: 通过用户给出的导演工作台 URL 和本人凭据，使用�
 
 - 对远程 MCP：初始化后调用 `tools/list`，读取实际工具名和 `input_schema`（JSON Schema object）。本版本远程 60 个，名称见附录 A。
 - 对 HTTP：认证后读取 `GET /openapi.json`，以当前部署的路径、参数和枚举为准；服务没有匿名发现入口。
-- MCP 工具上的 `read_only_hint` 等 annotations 只是客户端提示，不是授权；服务端仍会校验账号、作品归属、版本和状态。
-- 业务回执统一为 `{ok: true, data: ...}` 或 `{ok: false, error: ...}`；失败时 `error` 可能含 `code`、`message`、`retryable`、`outcome_unknown`、`http_status`、`detail`。MCP 传输成功不代表业务成功。
-- 参数缺失、类型错误或 schema 不符时，MCP 客户端会得到**工具错误**（不是 `{ok:false}` 业务回执）。读取错误文本修正参数，不要在参数不明时重试计费写入。
+- MCP 工具上的 `read_only_hint`、`idempotent_hint` 等 annotations 只是客户端提示，不是授权；服务端仍会校验账号、作品归属、版本和状态。`idempotent_hint=true` 只表示能用同一 `idempotency_key` 和相同参数重放并找回原记录；无键写入仍要未知回执先核对。
+- 业务结果只有两种形状：成功 `{ok: true, data: ...}`；失败为 `isError=true` 且同一次调用带结构化 `{ok: false, error: ...}`。`error` 必含 `code`、`message`、`kind`、`retryable`；`kind` 为 `business`（HTTP 业务拒绝，含 `http_status`/`detail`）、`argument`（适配器参数/语义错误）、`transport`（读取暂时失败可重试）或 `outcome_unknown`（写入结果未知，先核对）。MCP 传输成功不代表业务成功。
+- 参数缺失、类型错误、超长或超出 schema 范围时，SDK 在工具执行前返回**工具错误**（文本列出被拒字段），不调用工作台、也没有 `{ok:false}` 结构。读取错误文本并对照 `tools/list` 的 `input_schema` 修正参数，不要在参数不明时重试计费写入。
+- 分页工具（`list_tasks` 1–100、`list_shot_versions` 1–100、`list_references` 1–100、`list_media` 1–100；`offset≥0`）的 `meta.pagination` 声明同一合同，响应带 `next_offset`。其他列表工具不要假设分页。
 - 远程入口没有的工具，不要伪造同名调用；可使用认证 HTTP 原业务入口（见附录 B）或本机 stdio 全量工具。
 
 ## 2. 确认愿望与边界（先问再动）
@@ -140,7 +141,7 @@ description: 通过用户给出的导演工作台 URL 和本人凭据，使用�
 ### 3.4 参考与素材的分页和读取
 
 - `list_references(limit, offset)` 返回 `total`、`next_offset`；使用 `next_offset` 继续。
-- 需要查看参考原文/参考片段时，用已登记引用和同一工作台源上的受控媒体地址读取（见第 8 节），不要猜服务器文件路径。
+- 需要查看参考原文/参考片段时，用工具返回的稳定 `media_ref`（或在 `list_media(category='references')` 中读取）和短期受控 URL 读取（见第 8 节），不要猜服务器文件路径。
 
 ## 4. 计划与显式制作方案
 
@@ -229,15 +230,16 @@ description: 通过用户给出的导演工作台 URL 和本人凭据，使用�
 - 终态：`succeeded`、`failed`、`stopped`。执行中常见：`scheduler_waiting`、`batch_waiting`、`preparing`、`submitting`、`submitted`、`queued`、`running`、`finalizing`、`stopping`、`stop_requested`。
 - 轮询使用退避（例如几秒后逐步拉长），拿到终态即停止；不要高频率紧循环。长时间未终态时记录任务 ID、状态和 queue，不重复提交。
 - `stop_requested` 只是停止请求，不是停止完成；继续 `get_task` 核对终态。`needs_reconcile` 先核对原执行。
-- 分页：`list_tasks(limit 1–100, offset)` 使用 `next_offset`；`list_shot_versions(limit 1–100, offset)` 使用 `next_offset`；`list_references` 使用 `next_offset`。其他列表工具不要假设有分页。
+- 分页：`list_tasks(limit 1–100, offset)`、`list_shot_versions(limit 1–100, offset)`、`list_references(limit 1–100, offset)`、`list_media(limit 1–100, offset)` 使用 `next_offset`；工具 `meta.pagination` 声明同一合同。其他列表工具不要假设有分页。
 
 ### 7.2 未知回执
 
-- MCP 包装层在传输失败时可能返回 `workbench_unavailable`：GET 标 `retryable=true`，非 GET 标 `outcome_unknown=true` 且 `retryable=false`。未知响应不能当作失败。
+- MCP 失败结构统一为 `isError=true` 加 `{ok:false,error:{code,message,kind,retryable,...}}`。`kind=transport` 的 GET 可重试；`kind=outcome_unknown`（`outcome_unknown=true`、`retryable=false`）表示写入可能已保存，先查原回执，不重发。
+- 参数缺失/类型或范围不符由 SDK 在工具执行前拒绝（tool error，仅文本）；按 schema 修正后重试，不要当成业务失败去换键重提。
 - 生成类写入先保存原键和完整参数，再调用 `get_submission_receipt(project_id, idempotency_key)` / `GET /api/projects/{project_id}/submission-receipt?key=...` 核对。
 - 回执 `404 submission_not_found` 只表示尚未找到已落库任务，不证明原请求失败；保留原键稍后核对，不能换新键重发计费操作。
 - 用原键查到原任务后，按任务实际状态继续；同一键同参数不会创建第二个任务。
-- 创建作品、上传、新增分镜、审核、采用、装配编辑没有统一的同键幂等保证；响应未知时先读取相应记录/回执核对，再决定是否需要用户授权后的新操作。
+- 创建作品、上传、新增分镜、审核、采用、装配编辑没有统一的同键幂等保证；响应未知时先读取相应记录/回执核对，再决定是否需要用户授权后的新操作。`idempotent_hint=true` 的工具才可以用原键原参数重放。
 
 ### 7.3 `needs_reconcile`
 
@@ -249,15 +251,16 @@ description: 通过用户给出的导演工作台 URL 和本人凭据，使用�
 ## 8. 候选与显式媒体读取
 
 - 任务成功后读取真实候选来源：
-  - `get_task`：`result.published_outputs`（以及适用时的 `result.outputs` / `result.output`）；
-  - `list_shot_versions`：分镜生成历史、当前版本、`inspection`、`comparison_sources`（当前候选 vs 参考 vs 历史）、`change_impact`；
-  - `read_project(section='plan')`：当前分镜 `video.path`、`generation_history`、装配 `assembly.output`；
+  - `get_task`：远程回执的 `media`/`candidate_ref` 受控引用，以及 `result.published_outputs`（本机回执）；
+  - `list_shot_versions`：分镜生成历史、当前版本、`inspection`、`comparison_sources`（当前候选 vs 参考 vs 历史）、`change_impact`，候选带稳定 `candidate_ref`；
+  - `list_media`：按 `category` 分页列出素材、分镜候选、成片、审片、参考观察和任务产物；
+  - `read_project(section='plan')`：当前分镜与装配进度（远程响应中的媒体以 `media_ref` 替代路径）；
   - `read_project(section='manifest')`：已登记素材和作品信息。
-- 候选文件通过工作台同源的受控媒体地址读取：`GET /media-file?path=<URL 编码后的已登记引用>`，带本人 `Authorization: Bearer`。`/media/{asset_name}` 是旧别名。返回的引用是工作台可解析的登记路径/`/media-file?...`，不要把服务器磁盘路径或 `127.0.0.1` 改写成另一台设备的地址。
-- **只有实际取回媒体内容并解码/播放检查后，才能说“看过/听过这份候选”。** 仅看到任务成功、路径存在或文件名，不等于已检查内容。
+- 媒体通过稳定 `media_ref` 加短期受控 URL 读取：`list_media` 返回 `media_ref`/`url`；`get_media_url` 为已有引用重签；`download_media` 对小文件返回 base64、对大文件只返回 URL。URL 形如 `<工作台 URL>/api/projects/{project_id}/media/{token}`，带本人 `Authorization: Bearer`；不返回、不接受服务器路径。`/media-file?path=` 和 `/media/{asset_name}` 只是本机 UI 的登记引用入口，外部 Agent 不要构造；`media_ref` 形如 `asset:<素材ID>:A`、`segment:<分镜ID>:video`、`task:<任务ID>:video:0`、`reference:<拆解ID>:<观察ID>:frame_0`。
+- **只有实际取回媒体内容并解码/播放检查后，才能说“看过/听过这份候选”。** 仅看到任务成功、`media_ref` 或文件名，不等于已检查内容。
 - 技术检查（`inspect_video` 等媒体任务）和 ASR 是证据，不是画面、音色、表演或成片验收；模型候选保持 `provenance`/`user_status`，标记为“模型候选/待校订”。
 - 参考 vs 候选对照使用工作台返回的 `comparison_sources` 和显式媒体读取；差异、时长、画幅、音轨是事实，优劣判断由用户做。
-- 任务成功不表示审核通过、采用或交付；候选生成成功也不表示用户已看/已听。
+- 任务成功不表示审核通过、采用或交付；候选生成成功也不表示用户已看/已听。`download_media` 返回的 base64/URL 只是文件事实，不改变审核或采用状态。
 
 ## 9. 逐段显式采用
 
@@ -295,10 +298,10 @@ description: 通过用户给出的导演工作台 URL 和本人凭据，使用�
   - 作品 ID、计划 revision、分镜 ID/标题；
   - 采用的候选引用、审核 revision、采用依据；
   - 任务/批次 ID、最终状态和回执时间；
-  - 受控媒体地址：`<工作台 URL>/media-file?path=<URL 编码后的登记引用>`（带本人 Bearer 才能访问）；如果客户端已实际下载，再报告本地文件及大小；
+  - 受控媒体：稳定 `media_ref` 和工具返回的短期 URL（`<工作台 URL>` + `url` 路径，带本人 Bearer 才能访问）；用 `download_media` 取得字节时报告返回的内联字节数或 URL；如果客户端已实际下载，再报告本地文件及大小；
   - 参考/候选对照、技术检查、ASR 等证据及各自局限；
   - 剩余限制（模型未就绪、长任务未完成、未采用、未审核接点、音轨未确认等）。
-- 不猜测“下载”是否存在额外 API；当前公开合同中交付媒体通过同源 `/media-file` 读取/保存，没有 MCP 下载工具。
+- 不猜测额外下载 API；远程交付使用 `list_media`、`get_media_url`、`download_media` 和任务/候选回执中的受控引用，不要构造 `/media-file?path=`、`/media/{asset_name}` 或服务器磁盘路径。
 - 不能把任务成功、审核通过、采用或装配成功等同于用户亲自验收；交付说明中区分“平台记录的事实”“Agent 的观察”“用户的决定”。
 
 ## 12. 失败、重试与幂等总表
@@ -311,6 +314,7 @@ description: 通过用户给出的导演工作台 URL 和本人凭据，使用�
 | `409` 版本/键冲突/状态冲突 | 重读实际 revision、任务或候选比较；不自动覆盖、不换键提交 |
 | `413` 上传超限 | 按单文件/单请求上限拆分或压缩；不要原样重试 |
 | `422` schema/blocker | 读取 `blockers`/`detail`，补方案、素材、时长或参数后重新预检 |
+| 工具错误（参数 schema） | 按 `tools/list` 的 `input_schema` 修正字段/范围/枚举；不调用工作台，也不要用业务重试绕开 |
 | `429` 登录/队列上限 | 登录限流等待窗口；队列上限等待或停止自己的未派发任务 |
 | `421`/`403` MCP Host/Origin | 由服务器配置允许 Host/Origin；客户端不能靠请求头修复 |
 | 超时/连接断开 | 写入结果可能已保存：先查回执/记录；GET 可重试，非 GET 不盲目重发 |
@@ -321,9 +325,9 @@ description: 通过用户给出的导演工作台 URL 和本人凭据，使用�
 
 幂等速记：
 
-- **有请求键**：生成、批次、关键帧、声音、音频编辑/母版、媒体任务、装配。相同键 + 相同参数返回原任务；不同参数冲突。
-- **无统一请求键**：创建作品、上传、新增/修改分镜、整理、审核、采用、装配编辑。响应未知先读回补，不能套用生成任务的同键保证。
-- **绝不**在未知回执时换一个新键重复计费操作。
+- **有请求键（`idempotent_hint=true`）**：生成、批次、关键帧、声音、音频编辑/母版、媒体任务、装配；按已上传素材幂等登记的参考导入；核对类工具。相同键 + 相同参数返回原任务/原记录；不同参数冲突。
+- **无统一请求键（`idempotent_hint=false`）**：创建作品、上传、新增/修改分镜、整理、审核、采用、装配编辑、参考观察/校订。响应未知先读回补，不能套用生成任务的同键保证。
+- **绝不**在未知回执时换一个新键重复计费操作；annotation 只是提示，真实门禁以服务端返回为准。
 
 ## 13. 明确禁止
 
@@ -351,7 +355,7 @@ description: 通过用户给出的导演工作台 URL 和本人凭据，使用�
 7. **预检**：`preflight` 用真实 `stage_id`；记录 `valid`、`readiness`、`h3_duration`。若阻塞，补输入/重新选方案，不提交。
 8. **生成**：用户授权后保存唯一 `idempotency_key` 和完整参数，`submit_shot` 提交一次；记录 task ID。若未知，`get_submission_receipt` 用原键核对。
 9. **轮询**：`get_task`/`read_queue` 轮询到终态；记录状态、等待原因和耗时；不重复提交。
-10. **候选**：读取 `result.published_outputs`，用 `GET /media-file?path=...` 带 Bearer 实际取回字节；记录大小/类型。只有实际检查后才写“已查看/已试听”，否则写“仅登记/未查看”。
+10. **候选**：读取回执中的 `media`/`candidate_ref`，用 `media_ref` 调 `get_media_url` 或 `download_media` 带 Bearer 实际取回字节/内容；记录媒体引用、大小/类型。只有实际检查后才写“已查看/已试听”，否则写“仅登记/未查看”。
 11. **采用**：`record_review` 记录意见（如需）；`approve_candidate` 逐段提交真实候选引用、审核/计划 revision、说明和 `confirm_adoption=true`；记录采用 revision。
 12. **装配**（多段）：`read_assembly_edit` 读取接点和音轨；逐对 `review_assembly_join`；`set_assembly_sound` 显式选择；`preflight_assembly_edit`；`submit_assembly` 保存键并提交一次。
 13. **成片**：轮询装配任务；读取 `assembly.output` 并实际取回媒体；用户要求时用 `approve_candidate(stage=final)` 最终采用。

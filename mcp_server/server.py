@@ -11,10 +11,10 @@ from mcp.types import ToolAnnotations
 
 if __package__:
     from .models import ScriptScene, ShotChanges, ShotMaterials
-    from . import media, tools_creative, tools_generation, tools_media, tools_reference
+    from . import errors, media, tools_creative, tools_generation, tools_media, tools_reference
 else:
     from models import ScriptScene, ShotChanges, ShotMaterials
-    import media, tools_creative, tools_generation, tools_media, tools_reference
+    import errors, media, tools_creative, tools_generation, tools_media, tools_reference
 
 
 class _Client:
@@ -40,6 +40,10 @@ def create_server(base_url: str, transport: httpx.AsyncBaseTransport | None = No
     session_headers = {'Authorization': 'Bearer ' + session_token} if session_token else {}
     server = MCPServer('director-workbench')
     read_only = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
+    # Writes whose contract replays on the caller's original idempotency key:
+    # repeating the same key and parameters returns the original record/task.
+    idempotent_write = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
+    # Writes without a replayable key or with a new record/attempt per call.
     write_record = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False)
 
     def current_headers() -> dict[str, str] | None:
@@ -53,55 +57,68 @@ def create_server(base_url: str, transport: httpx.AsyncBaseTransport | None = No
     async def request(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         headers = current_headers()
         if headers is None:
-            return {'ok': False, 'error': {'code': 'authentication_required', 'http_status': 401, 'message': '请重新登录本人工作台账号'}}
+            return errors.error('authentication_required', '请重新登录本人工作台账号',
+                                kind='transport', http_status=401)
         try:
             async with httpx.AsyncClient(base_url=base_url, transport=transport_provider() if transport_provider else transport, timeout=30, trust_env=False, follow_redirects=False, headers=headers) as client:
                 response = await client.request(method, path, **kwargs)
             data = response.json()
         except httpx.RequestError:
-            return {'ok': False, 'error': {'code': 'workbench_unavailable', 'message': '工作台请求未取得回执；写入请求请先读取最新记录核对，不要直接重发', 'retryable': method == 'GET', 'outcome_unknown': method != 'GET'}}
+            if method == 'GET':
+                return errors.error('workbench_unavailable', '工作台请求未取得回执，请稍后重试',
+                                    kind='transport', retryable=True)
+            return errors.error('workbench_unavailable',
+                                '工作台请求未取得回执；写入结果未知，请先读取最新记录核对，不要直接重发',
+                                kind='outcome_unknown', outcome_unknown=True)
         except ValueError:
-            return {'ok': False, 'error': {'code': 'invalid_response', 'message': '工作台未返回 JSON', 'retryable': False}}
+            return errors.error('invalid_response', '工作台未返回 JSON', kind='transport')
         if not response.is_success:
-            error = {'code': 'workbench_http_error', 'http_status': response.status_code, 'detail': data.get('detail', data), 'retryable': False}
-            return {'ok': False, 'error': media.redact_paths(error) if remote else error}
+            payload = errors.http_error(response.status_code, data)
+            if remote:
+                payload['error'] = media.redact_paths(payload['error'])
+            return payload
         return {'ok': True, 'data': media.redact_paths(data) if remote else data}
 
     async def fetch(path: str) -> dict[str, Any]:
         """Fetch an already-authorized media URL as bytes (bounded inline reads)."""
         headers = current_headers()
         if headers is None:
-            return {'ok': False, 'error': {'code': 'authentication_required', 'http_status': 401, 'message': '请重新登录本人工作台账号'}}
+            return errors.error('authentication_required', '请重新登录本人工作台账号',
+                                kind='transport', http_status=401)
         try:
             async with httpx.AsyncClient(base_url=base_url, transport=transport_provider() if transport_provider else transport, timeout=30, trust_env=False, follow_redirects=False, headers=headers) as client:
                 response = await client.get(path)
         except httpx.RequestError:
-            return {'ok': False, 'error': {'code': 'workbench_unavailable', 'message': '媒体请求未取得回执，请稍后重试', 'retryable': True}}
+            return errors.error('workbench_unavailable', '媒体请求未取得回执，请稍后重试',
+                                kind='transport', retryable=True)
         if response.status_code == 401:
-            return {'ok': False, 'error': {'code': 'authentication_required', 'http_status': 401, 'message': '媒体链接需要本人会话', 'retryable': False}}
+            return errors.error('authentication_required', '媒体链接需要本人会话',
+                                kind='transport', http_status=401)
         if response.status_code == 410:
-            return {'ok': False, 'error': {'code': 'media_ref_expired', 'http_status': 410, 'message': '媒体链接已过期，请重新读取媒体列表', 'retryable': False}}
+            return errors.error('media_ref_expired', '媒体链接已过期，请重新读取媒体列表',
+                                kind='business', http_status=410)
         if not response.is_success:
-            return {'ok': False, 'error': {'code': 'media_unavailable', 'http_status': response.status_code,
-                                           'detail': response.text[:2000], 'retryable': False}}
+            return errors.error('media_unavailable', '媒体文件不可读取', kind='business',
+                                http_status=response.status_code, detail=response.text[:2000])
         return {'ok': True, 'data': {'content': response.content,
                                      'content_type': response.headers.get('content-type', '')}}
 
     def project_path(project_id: str) -> str:
         if not project_id or project_id in {'.', '..'} or '/' in project_id or '\\' in project_id:
-            raise ValueError('必须提供有效的作品 ID')
+            raise errors.ToolInputError('invalid_project_id', '必须提供有效的作品 ID')
         return '/api/projects/' + quote(project_id, safe='')
 
     def path_id(value: str, label: str) -> str:
         if not value or value in {'.', '..'} or '/' in value or chr(92) in value or chr(0) in value:
-            raise ValueError(f'必须提供有效{label} ID')
+            raise errors.ToolInputError('invalid_identifier', f'必须提供有效{label} ID')
         return quote(value, safe='')
 
     client = _Client(request, project_path, path_id, fetch, remote)
-    tools_creative.register(server, client, read_only=read_only, write_record=write_record)
-    tools_reference.register(server, client, read_only=read_only, write_record=write_record)
-    tools_generation.register(server, client, read_only=read_only, write_record=write_record)
-    tools_media.register(server, client, read_only=read_only, write_record=write_record)
+    guarded = errors.ToolServer(server)
+    tools_creative.register(guarded, client, read_only=read_only, write_record=write_record, idempotent_write=idempotent_write)
+    tools_reference.register(guarded, client, read_only=read_only, write_record=write_record, idempotent_write=idempotent_write)
+    tools_generation.register(guarded, client, read_only=read_only, write_record=write_record, idempotent_write=idempotent_write)
+    tools_media.register(guarded, client, read_only=read_only, write_record=write_record, idempotent_write=idempotent_write)
     return server
 
 
