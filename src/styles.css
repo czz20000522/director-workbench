@@ -8,7 +8,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 img, video { display: block; max-width: 100%; }
 .skip-link { position: fixed; z-index: 200; top: 8px; left: 8px; transform: translateY(-180%); padding: 9px 12px; border-radius: 4px; color: #fff; background: var(--accent-dark); font-size: 13px; text-decoration: none; }
 .skip-link:focus { transform: translateY(0); outline: 3px solid #fff; outline-offset: 2px; }
-.director-main:focus { outline: none; }
+.director-main:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
 
 .director-workbench { min-height: 100vh; display: grid; grid-template-columns: 232px minmax(0, 1fr); background: var(--paper); }
 .director-sidebar { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; padding: 25px 16px 18px; overflow-y: auto; color: var(--nav-text); background: var(--nav); }

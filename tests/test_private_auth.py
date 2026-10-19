@@ -198,7 +198,9 @@ def test_login_failures_survive_auth_restart_and_isolate_sources(tmp_path, monke
     assert not restarted.login_allowed('user001', '10.0.0.1')
     assert restarted.login_allowed('user001', '10.0.0.2')
     with sqlite3.connect(tmp_path / 'tasks.sqlite3') as connection:
-        assert connection.execute('SELECT COUNT(*) FROM login_failure_events').fetchone()[0] == 2
+        assert connection.execute(
+            'SELECT identity, source, COUNT(*) FROM login_failure_events GROUP BY identity, source'
+        ).fetchall() == [('user001', '10.0.0.1', 2), ('user001', '10.0.0.2', 1)]
 
 
 def test_login_failure_expiry_and_concurrent_recording_are_bounded(tmp_path, monkeypatch):
@@ -216,7 +218,23 @@ def test_login_failure_expiry_and_concurrent_recording_are_bounded(tmp_path, mon
     clock['now'] += 61
     assert auth.login_allowed('user001', '10.0.0.1')
     with sqlite3.connect(tmp_path / 'tasks.sqlite3') as connection:
-        assert connection.execute('SELECT COUNT(*) FROM login_failure_events').fetchone()[0] == 0
+        assert connection.execute('SELECT COUNT(*) FROM login_failure_events').fetchone()[0] == 1
+
+
+def test_login_reservation_is_atomic_across_auth_instances(tmp_path, monkeypatch):
+    monkeypatch.setattr('backend.private_auth.LOGIN_FAILURE_LIMIT', 5)
+    monkeypatch.setattr('backend.private_auth.LOGIN_FAILURE_WINDOW_SECONDS', 60)
+    auths = [_persistent_auth(tmp_path) for _ in range(12)]
+    with ThreadPoolExecutor(max_workers=len(auths)) as pool:
+        allowed = list(pool.map(lambda auth: auth.login_allowed('user001', '10.0.0.1'), auths))
+
+    assert sum(allowed) == 5
+    assert all(not auth.login_allowed('user001', '10.0.0.1') for auth in auths)
+    with sqlite3.connect(tmp_path / 'tasks.sqlite3') as connection:
+        assert connection.execute(
+            'SELECT COUNT(*) FROM login_failure_events WHERE identity=? AND source=?',
+            ('user001', '10.0.0.1'),
+        ).fetchone()[0] == 5
 
 
 def test_login_failure_logs_do_not_include_password(tmp_path, caplog):

@@ -96,7 +96,9 @@ class PrivateAuth:
         self.secure_cookie = secure_cookie
         self.database_path = Path(database_path) if database_path is not None else None
         self.login_logger = logging.getLogger(__name__)
-        # (account, source) -> monotonic timestamps of recent failures, under a lock.
+        # (account, source) -> monotonic timestamps of recent login reservations,
+        # under a lock.  A reservation is made before password verification so
+        # concurrent failures cannot all pass the same remaining quota.
         self.login_failures: dict[tuple[str, str], list[float]] = {}
         self.login_lock = threading.Lock()
 
@@ -111,20 +113,50 @@ class PrivateAuth:
         connection = sqlite3.connect(self.database_path, check_same_thread=False)
         return task_store.configure(connection, self.database_path)
 
-    def _persistent_count(self, identity: str, source: str, now: float) -> int | None:
+    def _persistent_reserve(self, identity: str, source: str, now: float) -> bool | None:
+        """Atomically reserve one login attempt in SQLite.
+
+        ``True`` means a token was reserved, ``False`` means the key is at the
+        limit, and ``None`` means persistence was unavailable.  The transaction
+        holds SQLite's write lock while checking and inserting, so separate
+        worker processes cannot both consume the final token.
+        """
         connection = None
         try:
             connection = self._persistent_connection()
             if connection is None:
                 return None
             cutoff = now - LOGIN_FAILURE_WINDOW_SECONDS
+            keep = max(1, int(LOGIN_FAILURE_LIMIT))
             with connection:
+                connection.execute('BEGIN IMMEDIATE')
                 connection.execute('DELETE FROM login_failure_events WHERE failed_at < ?', (cutoff,))
                 row = connection.execute(
                     'SELECT COUNT(*) FROM login_failure_events WHERE identity=? AND source=? AND failed_at>=?',
                     (identity, source, cutoff),
                 ).fetchone()
-            return int(row[0])
+                if int(row[0]) >= keep:
+                    return False
+                connection.execute(
+                    'INSERT INTO login_failure_events(identity, source, failed_at) VALUES (?, ?, ?)',
+                    (identity, source, now),
+                )
+                connection.execute(
+                    'DELETE FROM login_failure_events WHERE identity=? AND source=? AND id NOT IN '
+                    '(SELECT id FROM login_failure_events WHERE identity=? AND source=? ORDER BY failed_at DESC, id DESC LIMIT ?)',
+                    (identity, source, identity, source, keep),
+                )
+                overflow = connection.execute(
+                    'SELECT identity, source FROM login_failure_events GROUP BY identity, source '
+                    'ORDER BY MAX(failed_at) ASC LIMIT -1 OFFSET ?',
+                    (max(0, int(LOGIN_FAILURE_MAX_KEYS)),),
+                ).fetchall()
+                for old_identity, old_source in overflow:
+                    connection.execute(
+                        'DELETE FROM login_failure_events WHERE identity=? AND source=?',
+                        (old_identity, old_source),
+                    )
+            return True
         except (OSError, sqlite3.Error, ValueError) as exc:
             self.login_logger.warning('持久化登录失败计数不可用，回退内存限流: %s', type(exc).__name__)
             return None
@@ -187,9 +219,15 @@ class PrivateAuth:
                 connection.close()
 
     def login_allowed(self, username: str, source: str) -> bool:
+        """Reserve one attempt if the account/source still has quota.
+
+        The reservation is intentionally made before password verification.  A
+        successful login clears all reservations for the key; a failed login
+        keeps the reservation as its failure token.
+        """
         key = self._key(username, source)
-        now = time.monotonic()
         with self.login_lock:
+            now = time.monotonic()
             self._prune_login_failures(now)
             attempts = [at for at in self.login_failures.get(key, ())
                         if now - at < LOGIN_FAILURE_WINDOW_SECONDS]
@@ -198,9 +236,17 @@ class PrivateAuth:
             else:
                 self.login_failures.pop(key, None)
             memory_count = len(attempts)
-        persistent_count = self._persistent_count(key[0], key[1], time.time())
-        count = memory_count if persistent_count is None else max(memory_count, persistent_count)
-        return count < LOGIN_FAILURE_LIMIT
+            if memory_count >= LOGIN_FAILURE_LIMIT:
+                return False
+            persistent_result = self._persistent_reserve(key[0], key[1], time.time())
+            if persistent_result is False:
+                return False
+            # A missing/unusable database still gets a bounded, process-local
+            # reservation.  This avoids turning a persistence outage into an
+            # unlimited guessing loop while keeping normal logins available.
+            self.login_failures.setdefault(key, []).append(now)
+            self._trim_login_failures()
+            return True
 
     def record_login_failure(self, username: str, source: str) -> None:
         key = self._key(username, source)
@@ -323,7 +369,6 @@ class PrivateAuth:
             try:
                 token = self.sessions.login(values['username'], values['password'])
             except (ValueError, TypeError, UnicodeError, AuthenticationError):
-                self.record_login_failure(username, source)
                 return await respond(401, '用户名或密码错误')
             self.clear_login_failures(username, source)
             old_token = request.cookies.get(COOKIE, '')
