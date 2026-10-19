@@ -35,7 +35,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictInt, field_validator, model_validator
-from . import production_presets, background_jobs, speech, keyframes, audio_edit_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, guide, readiness, task_scheduler, creative_inspection, shot_creation
+from . import production_presets, background_jobs, speech, keyframes, audio_edit_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, assembly_continuity, guide, readiness, task_scheduler, creative_inspection, shot_creation
 from . import output_resolution, enhancement, task_store
 import av
 import paths
@@ -3198,6 +3198,14 @@ def assembly_sound_selection(manifest: dict[str, Any], document: dict[str, Any])
             'modified_ns': path.stat().st_mtime_ns}
 
 
+def assembly_continuity_view(manifest: dict[str, Any], document: dict[str, Any]) -> dict[str, Any]:
+    """Expose CPU-only continuity hints while keeping the plan read-only."""
+    result = assembly_continuity.analyze_document(document, resolve_path=resolve_registered_path)
+    result['project_id'] = manifest['id']
+    result['revision'] = int(document.get('revision', 0) or 0)
+    return result
+
+
 def assembly_edit_view(manifest: dict[str, Any], document: dict[str, Any]) -> dict[str, Any]:
     video_blockers = assembly_video_blockers(document)
     missing_videos = [item['dependency'] for item in video_blockers if item['code'] == 'video_required']
@@ -3211,9 +3219,11 @@ def assembly_edit_view(manifest: dict[str, Any], document: dict[str, Any]) -> di
                  'duration_seconds': None, 'error': str(exc)}
     warnings = ['非 WAV 完整母版的时长尚未验证，成片后须核对尾部声音'] if (
         sound.get('policy') == 'complete_master' and sound.get('duration_seconds') is None and not sound.get('error')) else []
+    continuity = assembly_continuity_view(manifest, document)
     return {'project_id': manifest['id'], 'revision': int(document.get('revision', 0) or 0),
             'joins': join_rows, 'blocking_joins': assembly_edit.blocking_joins(document),
             'join_review': assembly_edit.review_readiness(join_rows),
+            'continuity': continuity,
             'missing_videos': missing_videos, 'blockers': video_blockers,
             'sound': sound, 'warnings': warnings, 'target_duration_seconds': round(sum(float(item.get('duration_seconds') or 0)
                        for item in document.get('segments', []) if isinstance(item, dict)), 3),
@@ -3553,6 +3563,7 @@ app.include_router(_batch_assembly_router)
 # app.py、private_mode.py 与既有测试都以 backend.<名称> 取用它们。
 from .routers.batch_assembly import (
     assembly_video_blockers,
+    get_project_assembly_continuity,
     get_project_assembly_edit,
     preflight_project_assembly,
     resume_batch,

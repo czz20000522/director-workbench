@@ -62,6 +62,8 @@ def register_wav(workspace, seconds):
 def test_join_review_is_version_bound_and_sound_is_project_registered(edit_client):
     client, root, workspace, plan_path = edit_client
     edit = client.get(root + '/assembly/edit').json()
+    assert edit['continuity']['advisory'] is True
+    assert edit['continuity']['joins'][0]['key'] == 'S01>S02'
     assert edit['joins'][0]['status'] == 'pending'
     assert edit['joins'][0]['cut_seconds'] == 5
     assert edit['joins'][0]['left_preview_start'] == 3.5
@@ -111,6 +113,20 @@ def test_join_review_is_version_bound_and_sound_is_project_registered(edit_clien
         'expected_revision': stale['revision'], 'status': 'approved', 'note': '新右段已检查'})
     assert renewed.status_code == 200, renewed.text
     assert client.get(root + '/assembly/preflight').json()['ready'] is True
+
+
+def test_continuity_endpoint_is_read_only_and_degrades_when_ffmpeg_unavailable(edit_client, monkeypatch):
+    client, root, _, _ = edit_client
+    before = client.get(root + '/plan').json()
+    monkeypatch.setattr(backend.media_operations, 'FFMPEG', Path('missing-ffmpeg.exe'))
+    response = client.get(root + '/assembly/continuity')
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data['advisory'] is True
+    assert data['revision'] == before['revision']
+    assert data['joins'][0]['status'] == 'unavailable'
+    assert 'FFmpeg' in data['joins'][0]['reason']
+    assert client.get(root + '/plan').json() == before
 
 
 def test_sound_setting_can_explicitly_disable_legacy_master(edit_client):

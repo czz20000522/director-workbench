@@ -133,6 +133,14 @@ def get_project_assembly_edit(project_id: str) -> dict[str, Any]:
         raise HTTPException(422, str(exc)) from exc
 
 
+@ROUTER.get('/api/projects/{project_id}/assembly/continuity')
+def get_project_assembly_continuity(project_id: str) -> dict[str, Any]:
+    """Return read-only CPU continuity hints without changing review state."""
+    manifest = backend.require_project_manifest(project_id)
+    document, _ = backend.load_project_plan(project_id)
+    return backend.assembly_continuity_view(manifest, document)
+
+
 @ROUTER.put('/api/projects/{project_id}/assembly/joins/{left_id}/{right_id}')
 @backend.plan_transaction
 def save_project_assembly_join(project_id: str, left_id: str, right_id: str,
