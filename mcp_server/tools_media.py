@@ -9,9 +9,9 @@ from mcp.types import ToolAnnotations
 from pydantic import Field, StrictBool
 
 if __package__:
-    from . import media
+    from . import errors, media
 else:
-    import media
+    import errors, media
 
 
 def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, write_record: ToolAnnotations) -> None:
@@ -49,8 +49,8 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         refs = await media.issue_media(client, project_id, [media_ref])
         entry = refs.get(media_ref)
         if entry is None:
-            return {'ok': False, 'error': {'code': 'media_ref_unavailable',
-                                           'message': '媒体引用不存在、无权访问或文件已变化', 'retryable': False}}
+            return errors.error('media_ref_unavailable', '媒体引用不存在、无权访问或文件已变化',
+                                kind='business')
         return {'ok': True, 'data': entry}
 
     @server.tool(annotations=read_only)
@@ -61,11 +61,14 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         url 过期后重新调用 get_media_url。媒体内容本身不代表已审核或已采用。
         """
         if not media_ref.strip() or len(media_ref) > 512:
-            raise ValueError('必须提供有效媒体引用')
+            raise errors.ToolInputError('invalid_media_ref', '必须提供有效媒体引用')
         try:
-            return {'ok': True, 'data': await media.inline_media(client, project_id, media_ref, max_inline_bytes)}
+            value = await media.inline_media(client, project_id, media_ref, max_inline_bytes)
         except ValueError as exc:
-            return {'ok': False, 'error': {'code': 'invalid_inline_budget', 'message': str(exc), 'retryable': False}}
+            return errors.error('invalid_inline_budget', str(exc), kind='argument')
+        if value.get('ok') is False:
+            return value
+        return {'ok': True, 'data': value}
 
     @server.tool(annotations=write_record)
     async def submit_audio_edit(project_id: str, source_asset_id: str, idempotency_key: str,

@@ -12,11 +12,11 @@ from pydantic import Field, StrictBool
 if __package__:
     from .creation_inputs import GenerationSettings
     from .models import ScriptScene, ShotChanges, ShotMaterials
-    from . import media
+    from . import errors, media
 else:
     from creation_inputs import GenerationSettings
     from models import ScriptScene, ShotChanges, ShotMaterials
-    import media
+    import errors, media
 
 def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, write_record: ToolAnnotations) -> None:
     request = client.request
@@ -220,7 +220,7 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         if 'script_scene_id' in patch and 'expected_script_revision' not in patch:
             raise ValueError('关联或解除场次需要 expected_script_revision，请先 read_script')
         if not patch:
-            return {'ok': False, 'error': {'code': 'empty_changes', 'message': '至少提供一个分镜修改字段', 'retryable': False}}
+            return errors.error('empty_changes', '至少提供一个分镜修改字段', kind='argument')
         return await request('PATCH', project_path(project_id) + '/plan/segments/' + quote(asset_id, safe=''), json={**patch, 'expected_revision': expected_revision})
 
     @server.tool(annotations=write_record)
@@ -231,7 +231,7 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         supplied = {key: value for key, value in {'target_id': target_id, 'before_id': before_id, 'split_at_seconds': split_at_seconds}.items() if value is not None}
         required = {'copy': set(), 'move': {'before_id'}, 'split': {'split_at_seconds'}, 'merge': {'target_id'}, 'merge_range': {'target_id'}}[operation]
         if set(supplied) != required:
-            return {'ok': False, 'error': {'code': 'invalid_operation_arguments', 'message': '仅提供当前操作需要的参数：move=before_id，split=split_at_seconds，merge/merge_range=target_id，copy=无', 'retryable': False}}
+            return errors.error('invalid_operation_arguments', '仅提供当前操作需要的参数：move=before_id，split=split_at_seconds，merge/merge_range=target_id，copy=无', kind='argument')
         return await request('POST', project_path(project_id) + '/plan/segments/' + quote(asset_id, safe='') + '/operate', json={'operation': operation, 'expected_revision': expected_revision, **supplied})
 
     @server.tool(annotations=write_record)
@@ -260,5 +260,5 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         """把参考作品素材复制并登记到目标作品。先读取来源作品 reusable-materials 获取当前素材 ID。返回 registered 资产记录数组（图片引用为 image_path，音频/视频引用为 sources.A）与 already_registered 数量；已登记时可读目标 manifest 的 reused_from 找到副本。副本不继承审核结论，源素材变化时需重新读取列表。"""
         project_path(source_project_id)
         if not 1 <= len(material_ids) <= 128:
-            return {'ok': False, 'error': {'code': 'invalid_material_count', 'message': '每次选择 1 至 128 个素材', 'retryable': False}}
+            return errors.error('invalid_material_count', '每次选择 1 至 128 个素材', kind='argument')
         return await request('POST', project_path(project_id) + '/materials/reuse', json={'source_project_id': source_project_id, 'material_ids': material_ids})

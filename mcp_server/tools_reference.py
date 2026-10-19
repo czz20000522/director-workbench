@@ -11,9 +11,9 @@ from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 
 if __package__:
-    from . import media
+    from . import errors, media
 else:
-    import media
+    import errors, media
 
 
 MAX_REFERENCE_BYTES = 16 * 1024 * 1024
@@ -96,19 +96,17 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         if Path(filename).suffix.lower() not in {'.mp4', '.mov', '.mkv', '.webm', '.m4v', '.mp3', '.wav', '.flac', '.m4a', '.aac'}:
             raise ValueError('只支持常见音视频参考素材')
         if len(content_base64) > MAX_REFERENCE_BASE64:
-            return {'ok': False, 'error': {'code': 'reference_too_large',
-                                           'message': 'MCP参考素材最多16MiB，请使用HTTP multipart参考上传',
-                                           'http_fallback': 'POST /api/projects/{project_id}/reverse-analyses 的 multipart file 字段',
-                                           'retryable': False}}
+            return errors.error('reference_too_large', 'MCP参考素材最多16MiB，请使用HTTP multipart参考上传',
+                                kind='argument',
+                                http_fallback='POST /api/projects/{project_id}/reverse-analyses 的 multipart file 字段')
         try:
             content = base64.b64decode(content_base64, validate=True)
         except ValueError as exc:
             raise ValueError('参考素材内容必须是有效base64') from exc
         if not content or len(content) > MAX_REFERENCE_BYTES:
-            return {'ok': False, 'error': {'code': 'reference_too_large',
-                                           'message': 'MCP参考素材须为非空、至多16MiB，请使用HTTP multipart上传较大文件',
-                                           'http_fallback': 'POST /api/projects/{project_id}/reverse-analyses 的 multipart file 字段',
-                                           'retryable': False}}
+            return errors.error('reference_too_large', 'MCP参考素材须为非空、至多16MiB，请使用HTTP multipart上传较大文件',
+                                kind='argument',
+                                http_fallback='POST /api/projects/{project_id}/reverse-analyses 的 multipart file 字段')
         result = await request('POST', project_path(project_id) + '/reverse-analyses',
                                files={'file': (filename, content, 'application/octet-stream')})
         return await shape_analysis_result(result, project_id)
@@ -119,12 +117,14 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         endpoint = project_path(project_id) + '/reverse-analyses'
         path = Path(file_path)
         if not path.is_absolute() or path.suffix.lower() not in {'.mp4', '.mov', '.mkv', '.webm', '.m4v', '.mp3', '.wav', '.flac', '.m4a', '.aac'}:
-            return {'ok': False, 'error': {'code': 'invalid_reference_file', 'message': '请提供 MCP 所在机器上音视频文件的绝对路径', 'retryable': False}}
+            return errors.error('invalid_reference_file', '请提供 MCP 所在机器上音视频文件的绝对路径',
+                                kind='argument')
         try:
             with path.open('rb') as source:
                 return await request('POST', endpoint, files={'file': (path.name, source, 'application/octet-stream')}, timeout=960)
         except OSError:
-            return {'ok': False, 'error': {'code': 'reference_file_unreadable', 'message': '参考文件无法读取；若上传已开始，请先查询参考列表核对', 'retryable': False}}
+            return errors.error('reference_file_unreadable', '参考文件无法读取；若上传已开始，请先查询参考列表核对',
+                                kind='argument')
 
     @server.tool(annotations=write_record)
     async def extract_reference_range(project_id: str, analysis_id: str, start_seconds: float,
@@ -180,7 +180,7 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
     async def list_references(project_id: str, limit: int = 20, offset: int = 0) -> dict[str, Any]:
         """分页列出作品已有参考拆解摘要；用 read_reference 读取时间线、分析工件或分析任务。不会上传或启动分析。"""
         if not 1 <= limit <= 100 or offset < 0:
-            return {'ok': False, 'error': {'code': 'invalid_pagination', 'retryable': False}}
+            return errors.error('invalid_pagination', 'limit 须为 1–100，offset 须为非负整数', kind='argument')
         result = await request('GET', project_path(project_id) + '/reverse-analyses')
         if not result['ok']:
             return result

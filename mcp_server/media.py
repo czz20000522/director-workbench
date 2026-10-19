@@ -13,6 +13,11 @@ import re
 from typing import Any
 from urllib.parse import quote
 
+if __package__:
+    from . import errors
+else:
+    import errors
+
 INLINE_MEDIA_LIMIT = 1024 * 1024
 MAX_INLINE_MEDIA_LIMIT = 4 * 1024 * 1024
 MEDIA_REF_CHUNK = 100
@@ -297,8 +302,8 @@ async def inline_media(client: Any, project_id: str, media_ref: str,
     issued = await issue_media(client, project_id, [media_ref])
     entry = issued.get(media_ref)
     if entry is None:
-        return {'ok': False, 'error': {'code': 'media_ref_unavailable',
-                                       'message': '媒体引用不存在、无权访问或文件已变化', 'retryable': False}}
+        return errors.error('media_ref_unavailable', '媒体引用不存在、无权访问或文件已变化',
+                            kind='business')
     size = entry.get('size_bytes')
     response: dict[str, Any] = {'media_ref': entry['media_ref'], 'url': entry['url'],
                                 'expires_at': entry['expires_at'], 'kind': entry.get('kind'),
