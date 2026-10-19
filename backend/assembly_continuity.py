@@ -352,7 +352,8 @@ def analyze_join(left: dict[str, Any], right: dict[str, Any], *, resolve_path: C
         base['status'] = 'partial' if base.get('video') else 'unavailable'
         base['reason'] = str(exc)
         return base
-    except (OSError, RuntimeError, ValueError, json.JSONDecodeError, subprocess.SubprocessError) as exc:
+    except (AttributeError, KeyError, OSError, OverflowError, RuntimeError, TypeError, ValueError,
+            json.JSONDecodeError, subprocess.SubprocessError) as exc:
         base['status'] = 'partial' if base.get('video') else 'unavailable'
         base['reason'] = str(exc)[:500] or '媒体测量失败'
         return base
