@@ -45,7 +45,8 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
                                   ducking: dict[str, float] | None = None, pad_silence: bool = False) -> dict[str, Any]:
         """对当前作品已登记的完整母版做最长30分钟CPU后期，产生待试听候选。
         使用确定性的响度/峰值归一化；背景必须是当前作品登记音频且格式相同。
-        不创建自由多轨、不自动重采样，也不会自动选择为装配完整母版。未知响应先核对原请求键。
+         支持 WAV、MP3、M4A、FLAC；WAV 保留原采样率和声道，其他格式由 FFmpeg 归一化为 48kHz 双声道 PCM16。
+         不创建自由多轨，也不会自动选择为装配完整母版。未知响应先核对原请求键。
         """
         if not source_asset_id.strip() or not idempotency_key.strip():
             raise ValueError('必须提供完整母版素材 ID 与请求标识')
