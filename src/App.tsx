@@ -407,7 +407,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
         ? stage.id.includes('frame') || stage.outputs.some(output => output.includes('图') || output.includes('帧'))
         : !stage.id.includes('assembly') && !stage.id.includes('audio-master')), [isAssemblyAsset, kind, pipeline]);
   const currentGenerationStage = kind === 'video' && !isAssemblyAsset && !isProjectVideoMaterial
-    ? currentPipeline.find(stage => stage.id === currentReadiness?.stage_id) ?? selectVideoGenerationStage(currentPipeline, currentPlanSegment?.workflow || currentTaskTemplate?.workflow || undefined, project?.production_preset?.workflow) : undefined;
+    ? currentPipeline.find(stage => stage.id === currentReadiness?.stage_id) ?? selectVideoGenerationStage(currentPipeline, currentPlanSegment?.workflow || currentTaskTemplate?.workflow || undefined) : undefined;
   const activePipelineStage = currentPipeline.find(stage => stage.id === pipelineStageId) ?? currentGenerationStage ?? currentPipeline[0];
   const durationInput = currentGenerationStage?.inputSpecs?.find(input => input.id === 'duration');
   const isH3Stage = Boolean(currentGenerationStage?.recipe.startsWith('H3 '));
@@ -1393,9 +1393,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
     const assetIds = selectedBatchAssetIds.filter(assetId => planSegments.some(segment => segment.id === assetId));
     if (!assetIds.length) { setNotice('请先明确选择要加入批次的分镜。'); return; }
     try {
-      const generationStage = selectVideoGenerationStage(pipeline, project.production_preset?.workflow);
-      if (!generationStage) { setNotice('当前项目没有可批量执行的视频制作步骤。'); return; }
-      const response = await fetch(`/api/projects/${encodeURIComponent(project.id)}/batches`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ asset_ids: assetIds, pipeline_stage_id: generationStage.id, pipeline_values_by_asset: {} }) });
+      const response = await fetch(`/api/projects/${encodeURIComponent(project.id)}/batches`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ asset_ids: assetIds, pipeline_values_by_asset: {} }) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || '批次提交失败');
       setBatchId(data.batch_id ?? '');
@@ -1484,7 +1482,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
     if (!response.ok) throw new Error('生成方式已保存，但作品刷新失败，请刷新页面。');
     const data = await response.json() as ProjectManifest;
     if (data.id !== activeProjectId.current) return;
-    setProject(data); setPipelineStageId(selectVideoGenerationStage(data.pipeline ?? [], data.production_preset?.workflow)?.id ?? ''); setPipelineOpen(false);
+    setProject(data); setPipelineStageId(''); setPipelineOpen(false);
     await refreshProjectState();
     setNotice('已选择生成方式，可以继续准备分镜和素材。');
   }

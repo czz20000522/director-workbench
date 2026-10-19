@@ -351,7 +351,9 @@ def project_readiness(project_id: str, state: dict[str, Any]) -> dict[str, Any]:
     for task in task_values:
         task['queue'] = queue_values.get(task['id'], {})
     def select_stage(segment, available):
-        workflow = segment.get('workflow') or (manifest.get('production_preset') or {}).get('workflow')
+        workflow = segment.get('workflow')
+        if not workflow:
+            return (available[0].get('id') if len(available) == 1 else None)
         _, selected = backend.select_preset_execution(manifest, workflow, None)
         if selected:
             return selected
@@ -359,7 +361,7 @@ def project_readiness(project_id: str, state: dict[str, Any]) -> dict[str, Any]:
         executable = [stage for stage in contracts if (stage.get('execution') or {}).get('mode') == 'comfyui' and
                       any(item.get('kind') == '视频' for item in stage.get('output_specs', []))]
         matched = next((stage for stage in executable if workflow in (stage.get('execution') or {}).get('references', [])), None)
-        return (matched or (executable[0] if executable else {})).get('id')
+        return (matched or {}).get('id')
     result = readiness.build_project_readiness(project_id=project_id, plan=document, stages=stages, project_state=state,
         tasks=task_values, stage_selector=select_stage, assembly_asset_id=str(manifest.get('assembly_asset_id') or 'MASTER'),
         validate=lambda stage, asset, values: backend.validate_project_pipeline(stage, PipelineValidateRequest(asset_id=asset, values=values), manifest),

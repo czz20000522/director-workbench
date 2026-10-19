@@ -40,7 +40,7 @@
    `POST /api/projects/{project_id}/plan/segments`
 
    ```json
-   {"prompt":"用户的分镜描述","duration_seconds":5,"generation":{"mode":"auto","aspect_ratio":"16:9","seed":42},"expected_revision":0}
+   {"prompt":"用户的分镜描述","duration_seconds":5,"workflow":"workflows/已登记方案.json","generation":{"mode":"auto","aspect_ratio":"16:9","seed":42},"expected_revision":0}
    ```
 
    这里的 `0` 只表示尚未修改的初始计划示例。H3 单段支持 4–15 秒，画幅 `16:9`、`1:1`、`9:16`；实际输出规格以预检为准。已有分镜用 `PATCH /api/projects/{project_id}/plan/segments/{segment_id}` 修改，传最新 `expected_revision`，保留用户输入。不要求普通用户安装 preset 或猜测技术 stage ID。
@@ -65,7 +65,17 @@
 
    `expected_revision` 使用刚才预检的实际版本。相同作品、请求键和参数返回原任务，键相同但参数不同会冲突。未知响应使用 `GET /api/projects/{project_id}/submission-receipt?key=原键` 核对；等待时不换键重发。
 
-6. 用 `GET /api/queue` 和 `GET /api/projects/{project_id}/tasks/{task_id}` 查询原任务。候选通过任务返回的授权媒体入口访问；`GET /api/projects/{project_id}/segments/{segment_id}/versions` 读取历史。`stop_requested` 是停止请求，仍需等实际结束；`needs_reconcile` 需核对原执行。任务成功不表示审核、采用或交付通过。
+   `asset_id` 是必填的单段对象标识；服务端不会从项目默认分镜补值。分镜必须在计划中绑定明确的 `workflow` 或提交明确的 `pipeline_stage_id`，缺失时返回 `422` 的 `workflow_required` blocker，不会使用项目默认 workflow。
+
+6. 批次提交必须显式列出非空 `asset_ids`，例如：
+
+   ```json
+   {"asset_ids":["S01","S03"],"idempotency_key":"客户端为本次批次保存的唯一键"}
+   ```
+
+   空列表、缺少字段或未绑定 workflow 的分镜会在创建任务前返回结构化 `422` blocker；服务端不会把所有可执行分镜隐式加入批次。
+
+7. 用 `GET /api/queue` 和 `GET /api/projects/{project_id}/tasks/{task_id}` 查询原任务。候选通过任务返回的授权媒体入口访问；`GET /api/projects/{project_id}/segments/{segment_id}/versions` 读取历史。`stop_requested` 是停止请求，仍需等实际结束；`needs_reconcile` 需核对原执行。任务成功不表示审核、采用或交付通过。
 
 创建/上传/新增分镜没有统一幂等回执，未知结果先读取本人作品、计划或素材确认。不要给这些操作套用生成任务的同键保证。
 

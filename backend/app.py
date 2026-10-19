@@ -515,7 +515,7 @@ def blank_project_manifest(project_id: str, series: str, title: str, workspace: 
         "schema_version": 1, "id": project_id, "series": series.strip() or "未命名系列", "title": title.strip() or "未命名作品",
         "tag": "新建项目", "eyebrow": "导演工作台 / 新作品", "subtitle": "从资源登记和制作步骤开始规划。",
         "workspace_root": root_relative_path(workspace), "plan_path": root_relative_path(plan_path), "pipeline_contract": "contracts/pipeline-inputs.json",
-        "assembly_asset_id": "MASTER", "default_task_asset_id": "", "media": {}, "assets": [], "pipeline": [], "task_templates": {},
+        "assembly_asset_id": "MASTER", "media": {}, "assets": [], "pipeline": [], "task_templates": {},
         "assembly": {"filename_prefix": f"导演工作台工作目录/{project_id}/assembly"},
     }
 
@@ -3196,10 +3196,6 @@ def configure_production_preset(manifest: dict[str, Any], preset_id: str, *, aut
     return {"project": public_project(manifest), "already_installed": False}
 
 
-def project_default_workflow() -> str | None:
-    return (CURRENT_PROJECT.get("production_preset") or {}).get("workflow")
-
-
 def resolve_automatic_shot(manifest, segment):
     settings = segment.get('generation') or {}
     if settings.get('mode') != 'auto':
@@ -3461,7 +3457,7 @@ async def upload_project_files(project_id: str, files: list[UploadFile] = File(.
         raise HTTPException(422, str(exc)) from exc
     refreshed["series"] = manifest.get("series", refreshed.get("series", "未命名系列"))
     refreshed["title"] = manifest.get("title", refreshed.get("title", project_id))
-    for key in ("tag", "eyebrow", "subtitle", "pipeline_contract", "assembly_asset_id", "default_task_asset_id", "pipeline", "task_templates", "assembly"):
+    for key in ("tag", "eyebrow", "subtitle", "pipeline_contract", "assembly_asset_id", "pipeline", "task_templates", "assembly"):
         if key in manifest:
             refreshed[key] = manifest[key]
     write_json_atomic(workspace / "director.project.json", refreshed)
