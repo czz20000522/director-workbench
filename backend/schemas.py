@@ -6,6 +6,7 @@ app.py 只重新导出这些名字。pydantic/OpenAPI 的组件名取自类的 _
 """
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any, Literal
 
@@ -198,23 +199,30 @@ class ReverseShotDraft(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     segment_id: str | None = Field(default=None, min_length=1, max_length=120)
-    start_seconds: float = Field(ge=0)
-    end_seconds: float = Field(gt=0)
+    start_seconds: float = Field(ge=0, allow_inf_nan=False)
+    end_seconds: float = Field(gt=0, allow_inf_nan=False)
     fields: dict[str, Any] = Field(min_length=1, max_length=32)
 
     @model_validator(mode='after')
     def validate_range(self) -> 'ReverseShotDraft':
         if self.end_seconds <= self.start_seconds:
             raise ValueError('参考时间段结束时间必须大于开始时间')
+        allowed = {
+            'location', 'shot_size', 'camera', 'wardrobe', 'performance', 'prompt', 'workflow',
+            'first_frame', 'last_frame', 'audio_guide', 'delivery_master', 'script_scene_id',
+            'source_observation', 'source_user_note',
+        }
+        if not any(key in allowed and value not in (None, '') for key, value in self.fields.items()):
+            raise ValueError('制作分镜至少需要一个明确的非空字段')
         return self
 
 
 class ReferenceRangeExtractRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
-    start_seconds: float = Field(ge=0)
-    end_seconds: float = Field(gt=0)
-    frame_seconds: float | None = Field(default=None, ge=0)
+    start_seconds: float = Field(ge=0, allow_inf_nan=False)
+    end_seconds: float = Field(gt=0, allow_inf_nan=False)
+    frame_seconds: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
     @model_validator(mode='after')
     def validate_range(self) -> 'ReferenceRangeExtractRequest':
@@ -229,6 +237,26 @@ class ReferenceSampleRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     times_seconds: list[float] = Field(min_length=1, max_length=64)
+
+    @field_validator('times_seconds')
+    @classmethod
+    def validate_times(cls, values: list[float]) -> list[float]:
+        if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)) or value < 0 for value in values):
+            raise ValueError('采样时间必须是有限的非负数字')
+        return values
+
+
+class ReferenceAudioExtractRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    start_seconds: float = Field(ge=0, allow_inf_nan=False)
+    end_seconds: float = Field(gt=0, allow_inf_nan=False)
+
+    @model_validator(mode='after')
+    def validate_range(self) -> 'ReferenceAudioExtractRequest':
+        if self.end_seconds <= self.start_seconds:
+            raise ValueError('参考音频范围结束时间必须大于开始时间')
+        return self
 
 
 class ReferenceAsrRequest(BaseModel):

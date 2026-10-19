@@ -16,6 +16,7 @@ import uuid
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from .. import background_jobs
 from ..schemas import (
+    ReferenceAudioExtractRequest,
     ReferenceAsrRequest,
     ReferenceRangeExtractRequest,
     ReferenceSampleRequest,
@@ -204,6 +205,19 @@ def _append_observation(document: dict[str, Any], observation: dict[str, Any]) -
     timeline.append(observation)
 
 
+def _has_explicit_frame_observation(document: dict[str, Any]) -> bool:
+    """Return whether the caller has supplied at least one usable frame."""
+    timeline = document.get('timeline') if isinstance(document.get('timeline'), list) else []
+    for item in timeline:
+        if not isinstance(item, dict):
+            continue
+        if item.get('frame') or item.get('frame_path'):
+            return True
+        if any(isinstance(frame, dict) and frame.get('path') for frame in item.get('frames') or []):
+            return True
+    return False
+
+
 @ROUTER.post('/api/projects/{project_id}/reverse-analyses/{analysis_id}/observations/range', status_code=201)
 def extract_reference_range(project_id: str, analysis_id: str, request: ReferenceRangeExtractRequest) -> dict[str, Any]:
     with backend.REVERSE_DOCUMENT_LOCK:
@@ -251,6 +265,35 @@ def sample_reference_frames(project_id: str, analysis_id: str, request: Referenc
             'provenance': 'observable_fact', 'status': 'pending_review', 'user_status': 'unreviewed',
             'is_shot_cut': False, 'review_label': '等距采样/待确认范围',
             'conversion_source': 'caller_must_submit_shot_list',
+        }
+        _append_observation(document, observation)
+        backend.write_reverse_analysis(document, path)
+        return {'observation': observation, 'analysis': document}
+
+
+@ROUTER.post('/api/projects/{project_id}/reverse-analyses/{analysis_id}/observations/audio', status_code=201)
+def extract_reference_audio(project_id: str, analysis_id: str, request: ReferenceAudioExtractRequest) -> dict[str, Any]:
+    """提取调用方明确指定范围的音频观察，不运行 ASR 或模型。"""
+    with backend.REVERSE_DOCUMENT_LOCK:
+        document, path = backend.read_reverse_analysis(project_id, analysis_id)
+        source = _reference_source(document)
+        facts = document.get('source') if isinstance(document.get('source'), dict) else {}
+        if not facts.get('has_audio'):
+            raise HTTPException(422, '参考素材没有可提取的音轨')
+        observation_id = f"audio-{uuid.uuid4().hex[:10]}"
+        try:
+            audio_path = reference_decompose.extract_explicit_audio(
+                source, path.parent / 'observations', facts, request.start_seconds, request.end_seconds,
+                artifact_id=observation_id,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise HTTPException(422, f'显式音频范围提取失败: {exc}') from exc
+        observation = {
+            'id': observation_id, 'type': 'explicit_audio',
+            'start_seconds': round(request.start_seconds, 3), 'end_seconds': round(request.end_seconds, 3),
+            'audio_path': backend.root_relative_path(audio_path), 'provenance': 'observable_fact',
+            'status': 'pending_review', 'user_status': 'unreviewed',
+            'review_label': '明确范围音频/待确认', 'conversion_source': 'caller_must_submit_shot_list',
         }
         _append_observation(document, observation)
         backend.write_reverse_analysis(document, path)
@@ -452,6 +495,12 @@ def current_semantic_job(project_id: str, analysis_id: str) -> dict[str, Any]:
 @ROUTER.post("/api/projects/{project_id}/reverse-analyses/{analysis_id}/semantic-jobs", status_code=202)
 def start_semantic_job(project_id: str, analysis_id: str) -> dict[str, Any]:
     document, path = backend.read_reverse_analysis(project_id, analysis_id)
+    if not _has_explicit_frame_observation(document):
+        raise HTTPException(422, {
+            'code': 'explicit_observation_required',
+            'message': '请先通过显式范围或采样工具提取至少一帧，再运行模型观察',
+            'action': 'extract_reference_range_or_sample',
+        })
     root = backend.analysis_job_root()
     with backend.GPU_ADMISSION_LOCK, background_jobs.LOCK:
         previous = next((job for job in background_jobs.records(root) if job["project_id"] == project_id and job["analysis_id"] == analysis_id and job["status"] in background_jobs.ACTIVE), None)
@@ -461,8 +510,6 @@ def start_semantic_job(project_id: str, analysis_id: str) -> dict[str, Any]:
                 previous = None
         if previous:
             return backend.current_semantic_job(project_id, analysis_id)
-        if document.get('import_task_id') and (backend.get_task(document['import_task_id']) or {}).get('status') != 'succeeded':
-            raise HTTPException(422, {'code': 'reference_import_not_ready', 'message': '请先等待参考素材拆分完成，再开始内容分析', 'action': 'inspect_task'})
         if not backend.PRIMARY_MODEL.is_file() or not backend.PRIMARY_MMPROJ.is_file():
             raise HTTPException(409, {'code': 'model_unavailable', 'message': '参考语义分析模型尚未就绪'})
         backend.require_submission_capacity()
@@ -478,7 +525,7 @@ def start_semantic_job(project_id: str, analysis_id: str) -> dict[str, Any]:
             job = background_jobs.update(root, job, result_path=str(result_path), receipt_path=str(result_path.with_suffix('.receipt.json')),
                                          task_id=job['id'], analysis_path=str(frozen_input), source_revision=document.get('revision', 0))
             payload = {**job, 'kind': 'reference_semantic', 'analysis_path': str(frozen_input), 'asset_id': f'reference-{analysis_id}',
-                       'scheduler_dependencies': [document['import_task_id']] if document.get('import_task_id') else []}
+                       'scheduler_dependencies': []}
             connection.execute('INSERT INTO tasks(id,asset_id,status,created_at,updated_at,payload,project_id) VALUES (?,?,?,?,?,?,?)',
                                (job['id'], payload['asset_id'], 'scheduler_waiting', now, now, json.dumps(payload, ensure_ascii=False), project_id))
             connection.commit()
@@ -561,10 +608,15 @@ def _convert_reverse_analysis(project_id: str, analysis_id: str, shots: list[Any
     created: list[dict[str, Any]] = []
     allowed_fields = {'location', 'shot_size', 'camera', 'wardrobe', 'performance', 'prompt', 'workflow',
                       'first_frame', 'last_frame', 'audio_guide', 'delivery_master', 'script_scene_id'}
+    source_facts = document.get('source') if isinstance(document.get('source'), dict) else {}
     for index, draft in enumerate(shots, start=1):
         values = draft.model_dump() if hasattr(draft, 'model_dump') else dict(draft)
         start_seconds = float(values['start_seconds'])
         end_seconds = float(values['end_seconds'])
+        try:
+            reference_decompose.validate_explicit_range(source_facts, start_seconds, end_seconds)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
         fields = values.get('fields') if isinstance(values.get('fields'), dict) else {}
         source_shot_id = str(values.get('segment_id') or f"{start_seconds:.3f}-{end_seconds:.3f}-{index}")
         if source_shot_id in linked:

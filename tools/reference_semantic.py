@@ -159,6 +159,20 @@ def run_visual_batch(frames: list[tuple[str, Path]]) -> list[dict[str, str]]:
 
 
 def transcript_candidate(document: dict[str, Any]) -> dict[str, Any] | None:
+    observations = document.get('observations') if isinstance(document.get('observations'), list) else []
+    for item in reversed(observations):
+        if not isinstance(item, dict) or item.get('type') != 'asr':
+            continue
+        transcript = item.get('transcript')
+        if isinstance(transcript, dict):
+            return transcript
+        transcript_path = item.get('transcript_path')
+        if transcript_path:
+            try:
+                value = json.loads(resolve_root_path(str(transcript_path)).read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                continue
+            return value if isinstance(value, dict) else None
     source = document.get("source") if isinstance(document.get("source"), dict) else {}
     source_path = source.get("path")
     if not source_path:
@@ -296,9 +310,12 @@ def apply_result(document: dict[str, Any], result: dict[str, Any]) -> None:
         if isinstance(item, dict)
     }
     for segment in document.get("timeline", []):
-        if isinstance(segment, dict) and observations.get(str(segment.get("id"))):
+        if not isinstance(segment, dict):
+            continue
+        candidate = observations.get(str(segment.get("id")))
+        if candidate:
             segment["model_candidate"] = {
-                "observation": observations[str(segment["id"])],
+                "observation": candidate,
                 "provenance": "model_inference",
                 "user_status": "unreviewed",
                 "status": "candidate_needs_review",
@@ -306,6 +323,20 @@ def apply_result(document: dict[str, Any], result: dict[str, Any]) -> None:
             }
             if segment.get("status") != "reviewed":
                 segment["status"] = "candidate_needs_review"
+        for frame in segment.get('frames') or []:
+            if not isinstance(frame, dict):
+                continue
+            frame_candidate = observations.get(f"{segment.get('id')}@{frame.get('time_seconds')}")
+            if frame_candidate:
+                frame['model_candidate'] = {
+                    'observation': frame_candidate,
+                    'provenance': 'model_inference',
+                    'user_status': 'unreviewed',
+                    'status': 'candidate_needs_review',
+                    'model': 'Qwen3.8-27B-Uncensored-Q4_K_M',
+                }
+                if segment.get('status') != 'reviewed':
+                    segment['status'] = 'candidate_needs_review'
     artifacts = document.get("artifacts") if isinstance(document.get("artifacts"), dict) else {}
     model_artifacts = result.get("artifacts") if isinstance(result.get("artifacts"), dict) else {}
     for artifact_id in ARTIFACT_IDS:

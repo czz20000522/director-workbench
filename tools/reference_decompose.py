@@ -127,6 +127,33 @@ def extract_explicit_frames(source: Path, output: Path, facts: dict[str, Any], t
     return result
 
 
+def extract_explicit_audio(
+    source: Path,
+    output: Path,
+    facts: dict[str, Any],
+    start_seconds: float,
+    end_seconds: float,
+    *,
+    artifact_id: str | None = None,
+) -> Path:
+    """Extract only the caller supplied audio range as a read-only observation."""
+    validate_explicit_range(facts, start_seconds, end_seconds)
+    if not facts.get('has_audio'):
+        raise ValueError('参考素材没有可提取的音轨')
+    artifact_id = artifact_id or f"audio-{uuid.uuid4().hex[:10]}"
+    audio_dir = output / 'audio'
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = audio_dir / f'{artifact_id}.wav'
+    run_ffmpeg(
+        DEFAULT_FFMPEG,
+        [
+            '-ss', f'{start_seconds:.6f}', '-i', str(source), '-t', f'{end_seconds - start_seconds:.6f}',
+            '-vn', '-ac', '2', '-ar', '48000', '-c:a', 'pcm_s16le', str(audio_path),
+        ],
+    )
+    return audio_path
+
+
 def extract_audio_for_asr(source: Path, output: Path) -> Path:
     """Create an ASR working copy only when the explicit ASR operation is called."""
     output.mkdir(parents=True, exist_ok=True)

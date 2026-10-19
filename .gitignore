@@ -269,6 +269,7 @@
 !/tests/test_qwen_reference_conditioning.py
 !/tests/test_readiness.py
 !/tests/test_reference_decompose.py
+!/tests/test_reference_explicit.py
 !/tests/test_reference_queue_safety.py
 !/tests/test_reference_revision.py
 !/tests/test_reference_semantic.py

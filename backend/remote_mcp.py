@@ -25,7 +25,9 @@ REMOTE_TOOLS = (
     'approve_candidate', 'update_shot', 'arrange_shot', 'create_shot',
     'reuse_materials',
     # Reference analysis and its bounded, project-owned corrections.
-    'list_references', 'read_reference', 'start_reference_analysis',
+    'extract_reference_range', 'extract_reference_audio', 'sample_reference_frames',
+    'transcribe_reference', 'list_references', 'read_reference',
+    'start_reference_analysis',
     'reconcile_reference_analysis', 'annotate_reference_timeline',
     'correct_reference_artifact', 'correct_reference_classification',
     'convert_reference_to_shots',

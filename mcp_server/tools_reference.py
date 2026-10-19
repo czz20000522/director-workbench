@@ -1,6 +1,7 @@
 """Reference import, analysis, and correction tools."""
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
@@ -14,9 +15,20 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
     project_path = client.project_path
     path_id = client.path_id
 
+    def finite_number(value: Any, label: str) -> float:
+        if isinstance(value, bool):
+            raise ValueError(f'{label}必须是有限数字')
+        try:
+            result = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f'{label}必须是有限数字') from exc
+        if not math.isfinite(result):
+            raise ValueError(f'{label}必须是有限数字')
+        return result
+
     @server.tool(annotations=write_record)
     async def import_reference(project_id: str, file_path: str) -> dict[str, Any]:
-        """导入 MCP 服务所在机器上的音视频文件并提取参考时间线。提供用户指定素材的绝对路径，不接受 URL；文件通过现有上传接口复制到目标作品。提取可能持续数分钟，不运行语义模型或生成视频。不是幂等操作：丢失回执后先 list_references 核对，不能自动重新导入。"""
+        """登记 MCP 服务所在机器上的音视频文件并保存原始媒体事实。提供绝对路径，不接受 URL；上传只做媒体探测和素材登记，不抽帧、不切段、不运行 ASR 或语义模型。不是幂等操作：丢失回执后先 list_references 核对，不能自动重新导入。"""
         endpoint = project_path(project_id) + '/reverse-analyses'
         path = Path(file_path)
         if not path.is_absolute() or path.suffix.lower() not in {'.mp4', '.mov', '.mkv', '.webm', '.m4v', '.mp3', '.wav', '.flac', '.m4a', '.aac'}:
@@ -26,6 +38,56 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
                 return await request('POST', endpoint, files={'file': (path.name, source, 'application/octet-stream')}, timeout=960)
         except OSError:
             return {'ok': False, 'error': {'code': 'reference_file_unreadable', 'message': '参考文件无法读取；若上传已开始，请先查询参考列表核对', 'retryable': False}}
+
+    @server.tool(annotations=write_record)
+    async def extract_reference_range(project_id: str, analysis_id: str, start_seconds: float,
+                                      end_seconds: float, frame_seconds: float | None = None) -> dict[str, Any]:
+        """按调用方给定的起止时间提取参考片段，可选地在同一显式范围内提取一帧。结果是只读观察，不能自动成为制作分镜来源。"""
+        if not analysis_id or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for char in analysis_id):
+            raise ValueError('必须提供有效参考拆解 ID')
+        start = finite_number(start_seconds, '开始时间')
+        end = finite_number(end_seconds, '结束时间')
+        if start < 0 or end <= start:
+            raise ValueError('必须提供满足 0 <= start < end 的显式时间段')
+        body = {'start_seconds': start, 'end_seconds': end}
+        if frame_seconds is not None:
+            frame = finite_number(frame_seconds, '帧时间')
+            if not start <= frame <= end:
+                raise ValueError('帧时间必须位于显式参考时间段内')
+            body['frame_seconds'] = frame
+        return await request('POST', project_path(project_id) + '/reverse-analyses/' + analysis_id + '/observations/range', json=body)
+
+    @server.tool(annotations=write_record)
+    async def extract_reference_audio(project_id: str, analysis_id: str,
+                                      start_seconds: float, end_seconds: float) -> dict[str, Any]:
+        """按调用方给定的起止时间提取音频观察，不运行 ASR，也不自动进入制作分镜。"""
+        if not analysis_id or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for char in analysis_id):
+            raise ValueError('必须提供有效参考拆解 ID')
+        start = finite_number(start_seconds, '开始时间')
+        end = finite_number(end_seconds, '结束时间')
+        if start < 0 or end <= start:
+            raise ValueError('必须提供满足 0 <= start < end 的显式音频范围')
+        return await request('POST', project_path(project_id) + '/reverse-analyses/' + analysis_id + '/observations/audio',
+                             json={'start_seconds': start, 'end_seconds': end})
+
+    @server.tool(annotations=write_record)
+    async def sample_reference_frames(project_id: str, analysis_id: str, times_seconds: list[float]) -> dict[str, Any]:
+        """按调用方明确给出的时间点采样参考帧。采样结果标记为“等距采样/待确认范围”或待校订观察，绝不当作镜头切点。"""
+        if not analysis_id or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for char in analysis_id):
+            raise ValueError('必须提供有效参考拆解 ID')
+        if not times_seconds or len(times_seconds) > 64:
+            raise ValueError('需要1到64个非负采样时间点')
+        times = [finite_number(value, '采样时间') for value in times_seconds]
+        if any(value < 0 for value in times):
+            raise ValueError('需要1到64个非负采样时间点')
+        return await request('POST', project_path(project_id) + '/reverse-analyses/' + analysis_id + '/observations/sample', json={'times_seconds': times})
+
+    @server.tool(annotations=write_record)
+    async def transcribe_reference(project_id: str, analysis_id: str) -> dict[str, Any]:
+        """显式运行参考音轨 ASR。返回模型候选/待校订观察，不能当作原词或普通事实。"""
+        if not analysis_id or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for char in analysis_id):
+            raise ValueError('必须提供有效参考拆解 ID')
+        return await request('POST', project_path(project_id) + '/reverse-analyses/' + analysis_id + '/observations/asr', json={})
 
     @server.tool(annotations=read_only)
     async def list_references(project_id: str, limit: int = 20, offset: int = 0) -> dict[str, Any]:
@@ -101,8 +163,11 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
                              json={'content_mode': content_mode, 'reason': reason, 'expected_revision': expected_revision})
 
     @server.tool(annotations=write_record)
-    async def convert_reference_to_shots(project_id: str, analysis_id: str, expected_revision: int) -> dict[str, Any]:
-        """把当前已保存参考时间线转为制作草案，保留校订备注与来源。先 read_reference 核对内容；已关联的分镜不重复添加或覆盖。不会复制参考图为本作关键帧，不生成媒体，不批准制作。"""
+    async def convert_reference_to_shots(project_id: str, analysis_id: str, expected_revision: int,
+                                         shots: list[dict[str, Any]]) -> dict[str, Any]:
+        """只把调用方明确提交的非空分镜列表转为制作草案。每项必须包含 start_seconds、end_seconds 和 fields；参考观察、等距采样和模型候选不会自动填入 performance/prompt。"""
         if not analysis_id or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for char in analysis_id):
             raise ValueError('必须提供有效参考拆解 ID')
-        return await request('POST', project_path(project_id) + '/reverse-analyses/' + analysis_id + '/convert', json={'expected_revision': expected_revision})
+        if expected_revision < 0 or not shots:
+            raise ValueError('需要非负分析版本及至少一个明确制作分镜')
+        return await request('POST', project_path(project_id) + '/reverse-analyses/' + analysis_id + '/convert', json={'expected_revision': expected_revision, 'shots': shots})

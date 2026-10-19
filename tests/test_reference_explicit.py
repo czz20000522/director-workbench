@@ -69,6 +69,26 @@ def test_explicit_range_and_sampling_create_observations_only(reverse_client, mo
     assert all(item['is_shot_cut'] is False for item in latest['timeline'][1:])
 
 
+def test_explicit_audio_range_creates_observation_without_asr(reverse_client, monkeypatch):
+    client, _, analysis_path = reverse_client
+    monkeypatch.setattr(backend, 'resolve_registered_path', lambda value: Path(value))
+    source_path = analysis_path.parent / 'source' / 'reference.wav'
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b'audio')
+    document = json.loads(analysis_path.read_text(encoding='utf-8'))
+    document['source'] = {'path': str(source_path), **_facts()}
+    analysis_path.write_text(json.dumps(document), encoding='utf-8')
+    calls = _fake_ffmpeg(monkeypatch)
+    response = client.post('/api/projects/project-a/reverse-analyses/ref-test/observations/audio',
+                           json={'start_seconds': 2, 'end_seconds': 5})
+    assert response.status_code == 201, response.text
+    observation = response.json()['observation']
+    assert observation['type'] == 'explicit_audio'
+    assert observation['review_label'] == '明确范围音频/待确认'
+    assert observation['status'] == 'pending_review'
+    assert len(calls) == 1 and '-vn' in calls[0]
+
+
 def test_empty_explicit_conversion_does_not_write_plan(reverse_client):
     client, manifest, _ = reverse_client
     plan_path = Path(manifest['plan_path'])
