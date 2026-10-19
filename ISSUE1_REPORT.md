@@ -42,7 +42,7 @@
 | `63725a1` | `feat: add read-only cross-shot continuity check and explicit sound gate` |
 | `7ae4bb4` | `feat: expose cross-shot continuity check through MCP, HTTP docs and contracts` |
 | `9a9d2ab` | `feat: show cross-shot continuity check and explicit sound choice in assembly panel` |
-| 第 4 个提交 | 回归测试与本报（`tests/test_assembly_continuity_check.py`、受影响断言、`ISSUE1_REPORT.md`） |
+| `bb0d94d` | `test: cover cross-shot continuity blockers, explicit sound gate and pass path` |
 
 ## 实际改动文件
 
@@ -56,7 +56,8 @@
 | --- | --- | --- |
 | Ruff | `.venv\Scripts\python.exe -m ruff check backend\assembly_continuity_check.py backend\app.py backend\routers\batch_assembly.py backend\remote_mcp.py mcp_server\tools_generation.py tests\test_assembly_continuity_check.py tests\test_assembly_edit.py tests\test_guide_joins.py tests\test_queue_readiness_integration.py tests\test_reliability_audit.py tests\test_mcp_adapter.py tests\test_remote_mcp.py tests\test_director_workbench_contracts.py` | PASS |
 | 前端类型+构建 | `npm run build` | PASS（`tsc --noEmit` + vite build） |
-| 聚合回归 | `.venv\Scripts\python.exe -m pytest tests/test_assembly_edit.py tests/test_assembly_continuity_check.py tests/test_assembly_adoption_gate.py tests/test_assembly_builder.py tests/test_mcp_assembly.py tests/test_mcp_adapter.py tests/test_director_workbench_contracts.py tests/test_remote_mcp.py tests/test_guide_joins.py tests/test_reliability_audit.py tests/test_scoped_assembly.py tests/test_plan_assembly_stale.py tests/test_readiness.py tests/test_segment_versions.py tests/test_candidate_review_invalidation.py tests/test_creative_inspection.py tests/test_backend_module_split.py "tests/test_queue_readiness_integration.py::test_missing_assembly_builder_blocks_public_preflight_state_and_submission" -q --basetemp=runtime\pytest-issue1-main2` | PASS：182 passed |
+| 聚合回归 | `.venv\Scripts\python.exe -m pytest tests/test_assembly_edit.py tests/test_assembly_continuity_check.py tests/test_assembly_adoption_gate.py tests/test_assembly_builder.py tests/test_mcp_assembly.py tests/test_mcp_adapter.py tests/test_director_workbench_contracts.py tests/test_remote_mcp.py tests/test_guide_joins.py tests/test_reliability_audit.py tests/test_scoped_assembly.py tests/test_plan_assembly_stale.py tests/test_readiness.py tests/test_segment_versions.py tests/test_candidate_review_invalidation.py tests/test_creative_inspection.py tests/test_backend_module_split.py tests/test_public_source.py "tests/test_queue_readiness_integration.py::test_missing_assembly_builder_blocks_public_preflight_state_and_submission" -q --basetemp=runtime\pytest-issue1-final` | PASS：190 passed（提交后最终运行） |
+| 公开源检查 | `.venv\Scripts\python.exe tools\check_public_docs.py`；`pytest tests/test_public_source.py` | PASS：319 files / 48 links；8 passed |
 | 新增检查回归 | 含在上条：缺采用、接点未审/过期、音轨未选/无效、顺序/时长变化、缺视频、参考差异/不可测、read-only 无写入、MCP/HTTP 报告一致、显式选择后的通过路径与提交成功 | PASS：13 passed |
 | 离线浏览器 | `node tests/assembly_edit.browser.mjs`（全部 HTTP Mock，无真实服务/GPU） | PASS：`Assembly edit browser: join review, registered master selection and no-GPU preflight passed` |
 | OpenAPI/MCP digest | 重新计算并更新 `tests/test_director_workbench_contracts.py`、`tests/test_mcp_adapter.py` 期望值；对应测试在上条聚合中通过 | PASS |
