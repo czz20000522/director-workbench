@@ -21,7 +21,7 @@ from typing import Callable
 
 import paths
 
-PERMITTED_ROOT = paths.WORKSPACE_ROOT
+PERMITTED_ROOT = paths.DATA_ROOT
 DEFAULT_ROOT = Path('E:/DirectorWorkspaces')
 
 

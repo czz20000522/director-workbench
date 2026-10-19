@@ -20,21 +20,19 @@ import urllib.request
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import paths
 
-ROOT = paths.DESKTOP_ROOT
 PORT = 8188
 DEFAULT_HEALTH_TIMEOUT = 240
 
 
-def launch_plan(root):
-    root = Path(root).resolve()
-    spec = importlib.util.spec_from_file_location('engine_storage', root / 'ComfyUI-Workspace/production/storage_layout.py')
+def launch_plan():
+    spec = importlib.util.spec_from_file_location('engine_storage', paths.STORAGE_LAYOUT)
     storage = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(storage)
-    if not (root / 'ComfyUI-Workspace/config/storage.json').is_file():
+    if not paths.storage_config().is_file():
         raise ValueError('Configure server asset roots before restoring the engine')
-    roots = storage.storage_roots(root)
-    install = root / 'ComfyUI-Installs/第一个comfyui配置/ComfyUI'
-    shared = storage.checked_root(root / 'ComfyUI-Shared')
+    roots = storage.storage_roots(paths.DATA_ROOT, shared_root=paths.SHARED_ROOT)
+    install = paths.INSTALL_ROOT
+    shared = storage.checked_root(paths.SHARED_ROOT)
     python = storage.checked_root(install / '.venv/Scripts/python.exe')
     temp = storage.checked_root(shared / 'temp')
     user = storage.checked_root(install / 'user')
@@ -51,7 +49,7 @@ def launch_plan(root):
         raise ValueError('Desktop shared-model configuration is missing')
     storage.checked_root(model_config)
     argv += ['--extra-model-paths-config', str(model_config)]
-    runtime = storage.checked_root(root / 'ComfyUI-Workspace/runtime/comfy-recovery')
+    runtime = storage.checked_root(paths.RUNTIME_ROOT / 'comfy-recovery')
     return dict(argv=argv, cwd=install, runtime=runtime)
 
 
@@ -157,12 +155,11 @@ def restore(plan, timeout=DEFAULT_HEALTH_TIMEOUT):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--root', type=Path, default=ROOT)
     parser.add_argument('--launch', action='store_true', help='Start one engine only if the port is free')
     parser.add_argument('--health-timeout', type=int, default=DEFAULT_HEALTH_TIMEOUT,
                         help=f'Wait this many seconds for /system_stats after launch (default: {DEFAULT_HEALTH_TIMEOUT})')
     options = parser.parse_args(argv)
-    plan = launch_plan(options.root)
+    plan = launch_plan()
     result = restore(plan, timeout=options.health_timeout) if options.launch else {**plan, 'port_occupied': port_occupied(), 'submitted_gpu': False}
     print(json.dumps(result, ensure_ascii=False, default=str))
 

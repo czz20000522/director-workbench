@@ -6,9 +6,9 @@ from tools import run_project_tests as runner
 
 
 def host_roots(tmp_path):
-    """Keep the run inside tmp_path: the host and runtime roots are machine roots, so
-    they are injected here rather than picked up from the real Comfy-Desktop install."""
-    return {'desktop': tmp_path, 'runtime': tmp_path / 'ComfyUI-Workspace/runtime'}
+    """Keep the run inside tmp_path: the ComfyUI root and runtime root are machine
+    roots, so they are injected here rather than picked up from the real install."""
+    return {'desktop': tmp_path, 'runtime': tmp_path / 'runtime'}
 
 
 def setup_project(tmp_path):
@@ -90,7 +90,7 @@ def test_failure_keeps_running_other_suite_with_explicit_paths(tmp_path, monkeyp
     assert runner.os.environ['PYTHONHOME'] == 'external-home'
     assert runner.os.environ['PYTHONPATH'] == 'external-packages'
     assert runner.os.environ['PYTHONNOUSERSITE'] == '0'
-    assert Path(receipt['run_root']).parent == project.parents[1] / 'runtime'
+    assert Path(receipt['run_root']).parent == project.parents[1].parent / 'runtime'
 
 
 def test_check_probes_metadata_only_and_missing_module_fails(tmp_path, monkeypatch):

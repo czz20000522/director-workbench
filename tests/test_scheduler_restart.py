@@ -40,7 +40,7 @@ def workbench_process(root, engine_url):
     if not catalog_path.exists():
         catalog_path.write_text('{"projects": []}', encoding='utf-8')
     for name, value in {
-        'ROOT': root, 'PROJECT': project, 'PROJECTS_ROOT': catalog,
+        'ROOT': root / 'data-root', 'PROJECT': project, 'PROJECTS_ROOT': catalog,
         'PROJECT_CATALOG_PATH': catalog_path, 'DIRECTOR_WORKSPACES_ROOT': project / 'workspaces',
         'DB_PATH': root / 'tasks.sqlite3', 'RUNTIME': root / 'r',
         'INPUT_ROOT': root / 'input', 'OUTPUT_ROOT': root / 'output', 'COMFY_URL': engine_url,

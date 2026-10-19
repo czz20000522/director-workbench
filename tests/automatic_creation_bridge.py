@@ -19,7 +19,7 @@ from test_automatic_creation import seed_test_models, complete_frozen_task
 root = Path(tempfile.mkdtemp(dir=scratch_root('automatic-creation')))
 patch = pytest.MonkeyPatch()
 a, b, ownership, _ = private_workbench.__wrapped__(root, patch)
-seed_test_models(root)
+seed_test_models(backend.SHARED_ROOT)
 patch.setattr(backend, 'queue_task', lambda *args: None)
 patch.setattr(backend, 'require_submission_capacity', lambda: {})
 def fake_comfy(path, payload=None, **kwargs):

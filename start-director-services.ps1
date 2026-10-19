@@ -289,7 +289,7 @@ if (Test-TcpPort '127.0.0.1' $ComfyPort) {
 } else {
     Write-Host '正在启动 ComfyUI，并等待健康检查……' -ForegroundColor Yellow
     & $projectPython $restoreEngine --launch --health-timeout 240
-    if ($LASTEXITCODE -ne 0) { throw "ComfyUI 启动失败，退出码 $LASTEXITCODE。请检查 ComfyUI-Workspace/runtime/comfy-recovery/ 中的回执和日志。" }
+    if ($LASTEXITCODE -ne 0) { throw "ComfyUI 启动失败，退出码 $LASTEXITCODE。请检查工作台数据根 runtime/comfy-recovery/ 中的回执和日志。" }
     Write-Host "ComfyUI 已就绪：127.0.0.1:$ComfyPort" -ForegroundColor Green
 }
 
