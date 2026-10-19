@@ -10,6 +10,8 @@
 
 失败登录按“账号 + 客户端来源”记录：默认 5 次失败在 5 分钟窗口内会返回 `429`，窗口过期或成功登录后清除计数。客户端应停止继续猜测密码，等待窗口结束或核对账号配置；该限制不改变成功会话的 Cookie/Bearer 使用方式。
 
+需要 Bearer 的非浏览器客户端可调用 `POST /api/auth/agent-token`（JSON 同样只含 `username`/`password`）：成功响应包含 `token`、`username`、`administrator`、`expires_at`，**不设置 Cookie**。把返回的 `token` 作为 `Authorization: Bearer <token>` 使用；Token 等同本人会话凭据，只放本地客户端配置/环境变量，不写仓库、日志或聊天。注销、过期或换账号后重新获取，该入口与登录共用账号、会话和限流。
+
 登录后用 `GET /api/auth/me` 核对当前身份，再 `GET /api/projects` 获取本人实际作品 ID。Cookie 写入请求须携带允许的同源 `Origin` 和当前身份 `X-Workspace-User`；Bearer 写入不需要浏览器身份头，但发送的 Origin 仍须符合允许列表。伪造用户名、localhost 来源或 MCP 标签不能获得管理员权限。会话只在当前服务进程内保存，服务重启、过期或密码变化后重新登录；账号切换时更新连接身份。
 
 | 响应 | 接续方式 |
@@ -86,7 +88,7 @@
 
 ## MCP 和验证边界
 
-远程 MCP 使用同一私人 URL 的 `/mcp/`，要求可配置 Bearer 的 Streamable HTTP 客户端。远程端固定开放一组经过业务路由授权的安全工具（当前 49 个），按能力覆盖：
+远程 MCP 使用同一私人 URL 的 `/mcp/`，要求可配置 Bearer 的 Streamable HTTP 客户端。公网入口由 HTTPS 反向代理转发到本机 `/mcp/`，未认证请求返回 401；远程端固定开放一组经过业务路由授权的安全工具（当前 50 个），按能力覆盖：
 
 | 类别 | 远程能力 |
 | --- | --- |
@@ -98,7 +100,7 @@
 
 这些工具仍通过现有 Bearer 认证和 HTTP 业务路由执行；远程端不提供账户或管理操作、删除/清理、任意服务器路径导入或导出、脚本执行、全局设置修改、历史版本恢复、任务恢复/强制收尾等能力。完整适配工具可通过本机 stdio 使用，其他业务使用认证 HTTP。没有 OAuth 登录发现；只能 OAuth 且不能配置现有 Bearer 的宿主尚未支持。
 
-MCP 默认保留官方 SDK 的 loopback Host/Origin 限制和 DNS rebinding 防护。经本机 SSH 隧道可使用原 loopback 入口；私人网络直接访问须由服务器维护者在进程启动前配置允许列表，不能由客户端请求或 `Forwarded`/`X-Forwarded-Host` 决定：
+MCP 默认保留官方 SDK 的 loopback Host/Origin 限制和 DNS rebinding 防护。公网入口必须在工作台或反向代理启动前配置精确允许列表，不能由客户端请求或 `Forwarded`/`X-Forwarded-Host` 决定：
 
 | 服务器环境变量 | 格式与作用 |
 | --- | --- |
@@ -116,4 +118,13 @@ HTTP `/openapi.json` 为阶段和状态的参数来源：审核阶段为 `sample
 
 `video_qc` 抽帧与联系表是任务诊断结果，保留在任务回执供查看；不登记为创作关键帧，不进入首尾帧或其他作品的可复用图片。旧诊断登记也过滤，旧分镜中的已保存诊断引用需明确改选创作素材，工作台不会擅自改写原计划。
 
-当前远程 MCP 还保留 SDK 的 loopback Host/Origin 防护。建议客户端经已配置的 SSH 隧道使用 localhost 地址；HTTP 页面能直连 tailnet 不代表 `/mcp/` 接受该 Host。直连 tailnet 域名或反向代理需另行配置并验收允许的 Host/Origin；不能通过关闭这项防护解决 421/403，也不能把 HTTP 的 Origins 参数当作 MCP Host 配置。
+当前远程 MCP 仍保留 SDK 的 loopback Host/Origin 防护。公网使用 HTTPS 反向代理时，必须把实际 Host/Origin 通过服务器环境变量加入允许列表，并在代理层保留 `Authorization` 和 `Host`；不能用关闭防护解决 421/403。
+
+标准 MCP 客户端配置：
+
+```text
+Endpoint: https://<workbench-host>/mcp/
+Header:   Authorization: Bearer <agent-token>
+```
+
+先按上文 `POST /api/auth/agent-token` 获取 token，不要依赖浏览器 Cookie 作为长期凭据。
