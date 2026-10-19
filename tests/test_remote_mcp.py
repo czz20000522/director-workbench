@@ -23,6 +23,25 @@ from test_private_workbench import private_workbench
 from support import seed_test_models
 
 
+EXPECTED_REMOTE_TOOLS = (
+    'list_projects', 'upload_material', 'read_guide_settings', 'read_queue',
+    'list_production_presets', 'configure_production_preset', 'create_project',
+    'read_project', 'read_script', 'save_script', 'list_tasks', 'get_task',
+    'list_shot_versions', 'preflight', 'save_creative_draft', 'record_review',
+    'approve_candidate', 'update_shot', 'arrange_shot', 'create_shot',
+    'reuse_materials', 'list_references', 'read_reference',
+    'start_reference_analysis', 'reconcile_reference_analysis',
+    'annotate_reference_timeline', 'correct_reference_artifact',
+    'correct_reference_classification', 'convert_reference_to_shots',
+    'submit_shot', 'submit_batch', 'get_keyframe_capability', 'submit_assembly',
+    'read_assembly_edit', 'review_assembly_join', 'set_assembly_sound',
+    'preflight_assembly_edit', 'submit_keyframe', 'get_speech_capability',
+    'submit_speech', 'get_submission_receipt', 'reconcile_generation',
+    'stop_generation', 'submit_audio_edit', 'get_media_capability',
+    'create_silence', 'inspect_video', 'transcribe_audio', 'export_silent_video',
+)
+
+
 @pytest.fixture
 def access(tmp_path_factory, monkeypatch, request):
     for name in ('DIRECTOR_MCP_ALLOWED_HOSTS', 'DIRECTOR_MCP_ALLOWED_ORIGINS'):
@@ -114,8 +133,29 @@ def test_remote_tool_set_is_the_fixed_allow_list(access):
     async def verify():
         async with backend.app.router.lifespan_context(backend.app):
             async with remote(a.headers['Authorization']) as client:
-                names={tool.name for tool in (await client.list_tools()).tools}
-                assert names==set(remote_mcp.REMOTE_TOOLS)
+                tools=(await client.list_tools()).tools
+                assert remote_mcp.REMOTE_TOOLS == EXPECTED_REMOTE_TOOLS
+                assert [tool.name for tool in tools] == list(EXPECTED_REMOTE_TOOLS)
+                assert all(isinstance(tool.input_schema, dict) and tool.input_schema.get('type') == 'object'
+                           for tool in tools)
+    asyncio.run(verify())
+
+
+def test_remote_read_only_expansion_uses_real_fixture_routes(access):
+    a, _, _ = access
+    project = a.post('/api/projects/create', json={
+        'series': 'Testing', 'title': 'Read-only MCP expansion',
+        'select': False, 'creation_mode': 'auto',
+    }).json()['project']['id']
+
+    async def verify():
+        async with backend.app.router.lifespan_context(backend.app):
+            async with remote(a.headers['Authorization']) as client:
+                script = unpack(await client.call_tool('read_script', {'project_id': project}))
+                assembly = unpack(await client.call_tool('read_assembly_edit', {'project_id': project}))
+                media = unpack(await client.call_tool('get_media_capability', {}))
+                assert script['ok'] and assembly['ok'] and media['ok']
+
     asyncio.run(verify())
 
 
