@@ -18,6 +18,7 @@ const masterInitial: MasterDraft = { source_asset_id: '', target_lufs: -16, true
 const initial: Draft = { source_asset_id: '', start_seconds: 0, duration_seconds: null, pad_silence: false, gain: 1, fade_in_seconds: 0,
   fade_out_seconds: 0, background_gain: .25, background_offset_seconds: 0 };
 const terminal = ['succeeded', 'failed', 'stopped'];
+const pollTerminal = [...terminal, 'needs_reconcile'];
 const labels: Record<string, string> = { scheduler_waiting: '已接受 · 等待资源', batch_waiting: '已接受 · 等待依赖', submitting: '正在处理', queued: '等待处理', running: '正在处理', succeeded: '已完成 · 待试听',
   failed: '处理失败', stopped: '已停止', needs_reconcile: '需要核对结果', stop_requested: '等待处理结束', stopping: '等待处理结束' };
 function valid(d: Draft): boolean {
@@ -128,7 +129,7 @@ function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse }:
       } finally { polling = false; }
     }
     void poll();
-    const timer = window.setInterval(() => { if (!task || !terminal.includes(task.status)) void poll(); }, 3000);
+    const timer = window.setInterval(() => { if (!task || !pollTerminal.includes(task.status)) void poll(); }, 3000);
     return () => { active = false; window.clearInterval(timer); };
   }, [pendingKey, task?.id, task?.status, base]);
   useEffect(() => {
@@ -150,11 +151,11 @@ function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse }:
       } finally { polling = false; }
     }
     void pollMaster();
-    const timer = window.setInterval(() => { if (!masterTask || !terminal.includes(masterTask.status)) void pollMaster(); }, 3000);
+    const timer = window.setInterval(() => { if (!masterTask || !pollTerminal.includes(masterTask.status)) void pollMaster(); }, 3000);
     return () => { active = false; window.clearInterval(timer); };
   }, [masterPendingKey, masterTask?.id, masterTask?.status, base]);
   useEffect(() => {
-    if (!masterTask || ['succeeded', 'failed', 'stopped'].includes(masterTask.status)) return;
+    if (!masterTask || pollTerminal.includes(masterTask.status)) return;
     let active = true;
     const poll = async () => {
       try { const next = await request(`${base}/tasks/${encodeURIComponent(masterTask.id)}`); if (active) setMasterTask(next); }
@@ -163,7 +164,7 @@ function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse }:
     void poll(); const timer = window.setInterval(() => void poll(), 3000);
     return () => { active = false; window.clearInterval(timer); };
   }, [masterTask?.id, masterTask?.status, base]);
-  async function act(action: 'submit' | 'check' | 'reconcile' | 'stop' | 'resume') {
+  async function act(action: 'submit' | 'check' | 'reconcile' | 'resolve-missing' | 'stop' | 'resume') {
     if (working.current) return;
     working.current = true; setBusy(true);
     let key = current.current.pending?.idempotency_key;
@@ -177,6 +178,13 @@ function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse }:
         next = await request(`${base}/audio-edit-tasks`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(submission) });
       } else if (action === 'check') {
         next = await request(`${base}/submission-receipt?key=${encodeURIComponent(key!)}`);
+      } else if (action === 'resolve-missing') {
+        const note = window.prompt('请填写已确认原执行结束并检查输出的说明：')?.trim();
+        if (!note) return;
+        next = await request(`${base}/tasks/${encodeURIComponent(task!.id)}/resolve-missing`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ confirm_execution_ended: true, note }),
+        });
       } else {
         next = await request(`${base}/tasks/${encodeURIComponent(task!.id)}/${action}`, { method: 'POST' });
       }
@@ -211,6 +219,30 @@ function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse }:
     }
     finally { setMasterBusy(false); }
   }
+  async function masterAct(action: 'reconcile' | 'resolve-missing') {
+    if (masterBusy || !masterTask?.id || masterTask.status !== 'needs_reconcile') return;
+    let note: string | undefined;
+    if (action === 'resolve-missing') {
+      note = window.prompt('请填写已确认原执行结束并检查输出的说明：')?.trim();
+      if (!note) return;
+    }
+    setMasterBusy(true); setMasterMessage('');
+    try {
+      const init: RequestInit = { method: 'POST' };
+      if (note) {
+        init.headers = { 'Content-Type': 'application/json' };
+        init.body = JSON.stringify({ confirm_execution_ended: true, note });
+      }
+      const next = await request(`${base}/tasks/${encodeURIComponent(masterTask.id)}/${action}`, init);
+      setMasterTask(next);
+      if (terminal.includes(next.status)) {
+        persistMaster({ ...masterCurrent.current, pending: undefined });
+        if (next.status === 'succeeded') completion.current();
+      }
+    } catch (error) {
+      setMasterMessage(error instanceof Error ? error.message : '暂时无法核对全片母版后期');
+    } finally { setMasterBusy(false); }
+  }
   async function chooseMaster() {
     if (!masterResult?.candidate_asset_id || masterBusy) return;
     setMasterBusy(true); setMasterMessage('');
@@ -228,7 +260,7 @@ function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse }:
   return <details className="director-operation-panel" aria-label="编辑音频">
     <summary>编辑音频 {task && `· ${labels[task.status] || '处理中'}`}</summary>
     <section aria-label="全片母版后期"><h3>全片母版后期（最长30分钟）</h3>
-      <p>对当前作品已登记的完整母版做 CPU 响度归一化、真峰值限制、淡入淡出和可选背景混音。输出为新候选，不会自动替换音轨。</p>
+      <p>对当前作品已登记的完整母版做 CPU 响度归一化、真峰值限制、淡入淡出和可选背景混音。支持 WAV、MP3、M4A、FLAC；WAV 保留原采样率和声道，其他格式由 FFmpeg 归一化为 48kHz 双声道 PCM16。输出为新候选，不会自动替换音轨。</p>
       <div className="director-creation-grid">
         <div><label htmlFor={`${prefix}-master-source`}>完整母版</label><select id={`${prefix}-master-source`} value={masterDraft.source_asset_id} disabled={Boolean(masterTask) || Boolean(masterPendingKey)} onChange={event => changeMaster('source_asset_id', event.target.value)}>
           <option value="">选择音频</option>{audioAssets.map(asset => <option key={asset.id} value={asset.id}>{asset.title}</option>)}</select></div>
@@ -251,6 +283,7 @@ function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse }:
       {masterResult?.output && <div><audio controls preload="metadata" aria-label="全片母版后期候选试听" src={mediaUrl(masterResult.output)} /><small>实测 {masterResult.duration_seconds} 秒 · {masterResult.report?.loudness_lufs_i} LUFS-I · {masterResult.report?.output_true_peak_dbtp} dBTP · LRA {masterResult.report?.loudness_lra} · 削波样本 {masterResult.report?.clipped_samples}</small></div>}
       <div className="director-form-actions"><button className="button primary compact" type="button" disabled={masterBusy || Boolean(masterTask) || Boolean(masterPendingKey) || !validMaster(masterDraft)} onClick={() => void submitMaster()}>提交全片后期</button>
         {masterResult?.candidate_asset_id && <button className="button secondary compact" type="button" disabled={masterBusy} onClick={() => void chooseMaster()}>选择为完整母版</button>}
+        {masterTask?.status === 'needs_reconcile' && <><button className="button secondary compact" type="button" disabled={masterBusy} onClick={() => void masterAct('reconcile')}>核对母版结果</button><button className="button secondary compact" type="button" disabled={masterBusy} onClick={() => void masterAct('resolve-missing')}>确认执行已结束</button></>}
         {masterTask && terminal.includes(masterTask.status) && <button className="button secondary compact" type="button" disabled={masterBusy} onClick={() => { if (persistMaster({ ...masterCurrent.current, pending: undefined })) setMasterTask(null); }}>继续编辑</button>}
         {masterTask && <span role="status" aria-live="polite">{labels[masterTask.status] || '处理中'}</span>}</div>
     </section>
@@ -276,7 +309,7 @@ function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse }:
       <button className="button secondary compact" onClick={onBrowse}>添加素材</button>
       {!locked && <button className="button primary compact" disabled={busy || !valid(draft) || !audioAssets.some(a => a.id === draft.source_asset_id)} onClick={() => void act('submit')}>保存编辑候选</button>}
       {locked && !task && <><button className="button secondary compact" disabled={busy} onClick={() => void act('check')}>核对原提交</button><button className="button secondary compact" disabled={busy} onClick={() => void act('submit')}>使用原凭据重试</button></>}
-      {task?.status === 'needs_reconcile' && <button className="button secondary compact" disabled={busy} onClick={() => void act('reconcile')}>核对编辑结果</button>}
+      {task?.status === 'needs_reconcile' && <><button className="button secondary compact" disabled={busy} onClick={() => void act('reconcile')}>核对编辑结果</button><button className="button secondary compact" disabled={busy} onClick={() => void act('resolve-missing')}>确认执行已结束</button></>}
       {task && !terminal.includes(task.status) && task.status !== 'needs_reconcile' && <button className="button secondary compact" disabled={busy} onClick={() => void act('stop')}>停止音频编辑</button>}
       {task && ['stopped', 'failed'].includes(task.status) && <button className="button secondary compact" disabled={busy} onClick={() => void act('resume')}>恢复原编辑任务</button>}
       {task && terminal.includes(task.status) && <button className="button secondary compact" disabled={busy} onClick={() => { if (persist({ ...current.current, pending: undefined })) { setTask(null); setMessage(''); } }}>继续编辑</button>}
