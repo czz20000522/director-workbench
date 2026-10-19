@@ -2618,7 +2618,8 @@ def adopt_project_candidate(project_id: str, request: AdoptionRequest) -> dict[s
     outputs = ([item['path'] for item in result.get('outputs', []) if isinstance(item, dict) and item.get('asset_id') == request.asset_id]
                if material_kind_expected == 'media_operation' else
                result.get('published_outputs') or ([result['output']] if result.get('output') else [f'output/{value}' for value in result.get('outputs', [])]))
-    if material_kind_expected == 'media_operation' and not any(candidate == adoption_candidate_path(str(value)) for value in outputs):
+    # 回执必须点名当前登记候选；旧回执可能没有 status 字段，但已有 status 时不能把失败执行当成功。
+    if result.get('status') not in {None, 'success', 'succeeded'} or not any(candidate == adoption_candidate_path(str(value)) for value in outputs):
         raise HTTPException(409, '成功回执未包含当前候选，不能采用')
     return persist_review(ReviewRecordRequest(
         asset_id=request.asset_id, stage=request.stage, status='approved',
@@ -3587,12 +3588,17 @@ app.include_router(_reverse_analysis_router)
 # app.py 与既有测试都以 backend.<名称> 取用它们，身份必须保持同一个对象。
 from .routers.reverse_analysis import (
     ReferenceStopped,
+    _append_observation,
     _convert_reverse_analysis,
+    _has_explicit_frame_observation,
+    _reference_source,
     convert_reverse_analysis,
     correct_reverse_classification,
     create_reverse_analysis,
     current_semantic_job,
     execute_reverse_semantic,
+    extract_reference_audio,
+    extract_reference_range,
     get_reverse_analysis,
     list_reverse_analyses,
     merge_semantic_result,
@@ -3603,7 +3609,9 @@ from .routers.reverse_analysis import (
     reverse_analysis_root,
     reverse_model_status,
     run_reverse_semantic_analysis,
+    sample_reference_frames,
     start_semantic_job,
+    transcribe_reference,
     update_reverse_artifact,
     update_reverse_timeline,
     write_reverse_analysis,
