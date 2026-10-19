@@ -18,6 +18,12 @@ respect-gitignore = false
 select = ["E9", "F63", "F7", "F82"]
 
 [tool.pytest.ini_options]
+# A hang is a failure, not an unbounded wait.  pytest-timeout runs the whole test in a
+# timer thread (the signal method is unavailable on Windows) and dumps every thread's
+# stack before exiting, so the default applies to every suite entry point.  A genuinely
+# longer test opts in locally with @pytest.mark.timeout(<seconds>).
+timeout = 90
+timeout_method = "thread"
 # Markers for the fast CI layer.  A local `pytest tests` still runs every test; CI selects
 # `-m "not host_tool and not slow and not windows"` so a runner without this machine's
 # FFmpeg/ASR/ComfyUI installation and PowerShell can still exercise the core behaviour.

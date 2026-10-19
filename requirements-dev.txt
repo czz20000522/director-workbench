@@ -3,3 +3,6 @@
 # stay in requirements.txt so a production host is not asked to install lint tooling.
 ruff==0.14.4
 pytest-cov==6.1.1
+# Per-test hard timeout; pyproject.toml sets the 90s default. A hanging test must fail
+# instead of blocking the whole suite. Installed beside pytest in the dev environment.
+pytest-timeout==2.4.0

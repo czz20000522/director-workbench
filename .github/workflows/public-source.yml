@@ -16,6 +16,11 @@ jobs:
         run: python3 tools/export_public_source.py --check
       - name: Check public syntax and document links
         run: python3 tools/check_public_docs.py
+      # A renamed or deleted test must move its impact mapping in the same PR; this
+      # check fails on a stale target instead of letting `-Suite affected` silently
+      # stop covering it.
+      - name: Check the test impact map targets still exist
+        run: python3 tools/select_tests.py --check-config
   python-lint:
     runs-on: ubuntu-latest
     steps:
