@@ -222,7 +222,9 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
 
 
     @server.tool(annotations=write_record)
-    async def annotate_reference_timeline(project_id: str, analysis_id: str, segment_id: str, expected_revision: int, note: str) -> dict[str, Any]:
+    async def annotate_reference_timeline(project_id: str, analysis_id: str, segment_id: str,
+                                          expected_revision: Annotated[int, Field(strict=True, ge=0)],
+                                          note: Annotated[str, Field(max_length=4000)]) -> dict[str, Any]:
         """保存参考时间段的改编备注，标记待复核。版本来自 read_reference 返回的分析 revision（旧文档为 0）；不会自动确认分析或修改已转换的制作分镜。"""
         for value in (analysis_id, segment_id):
             if not value or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for char in value):
@@ -231,7 +233,9 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
 
     @server.tool(annotations=write_record)
     async def correct_reference_artifact(project_id: str, analysis_id: str, artifact_id: str,
-            summary: str, expected_revision: int, confidence: float | None = None) -> dict[str, Any]:
+            summary: Annotated[str, Field(max_length=8000)],
+            expected_revision: Annotated[int, Field(strict=True, ge=0)],
+            confidence: Annotated[float | None, Field(ge=0, le=1)] = None) -> dict[str, Any]:
         """显式校订单个参考工件，保存此前内容及版本历史；不批准整份分析、不重分析或转换。
         先 read_reference 核实工件 ID 与 revision；409 后重读比较，未知响应先读原工件，不自动重发。
         summary 是完整替换后的校订文本；仅代表调用方明确确认此工件，不代表其他内容已通过。
@@ -239,10 +243,8 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         for value in (analysis_id, artifact_id):
             if not value or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for char in value):
                 raise ValueError('必须提供有效参考拆解与工件 ID')
-        if expected_revision < 0 or not summary.strip() or len(summary) > 8000:
-            raise ValueError('需要非负分析版本及非空、至多8000字符的校订内容')
-        if confidence is not None and not 0 <= confidence <= 1:
-            raise ValueError('置信度必须在0到1之间')
+        if not summary.strip():
+            raise errors.ToolInputError('invalid_summary', '校订内容不能为空')
         body = {'summary': summary, 'user_status': 'reviewed', 'expected_revision': expected_revision}
         if confidence is not None:
             body['confidence'] = confidence
@@ -251,21 +253,21 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
     @server.tool(annotations=write_record)
     async def correct_reference_classification(project_id: str, analysis_id: str,
             content_mode: Literal['narrative', 'music_performance', 'dance', 'showcase', 'mood', 'technical', 'other'],
-            reason: str, expected_revision: int) -> dict[str, Any]:
+            reason: Annotated[str, Field(min_length=1, max_length=2000)],
+            expected_revision: Annotated[int, Field(strict=True, ge=0)]) -> dict[str, Any]:
         """显式校订参考内容类型及理由，仅确认分类，不批准整份分析、不重分析或转换制作。先 read_reference 取得 revision；409 后重读比较，不盲目更新版本重发。分类写入 content_mode/content_mode_reason，标记 content_mode_user_status=reviewed；后续模型重分析保留校订，另存 content_mode_model_candidate。"""
         if not analysis_id or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for char in analysis_id):
             raise ValueError('必须提供有效参考拆解 ID')
-        if expected_revision < 0 or not reason.strip() or len(reason) > 2000:
-            raise ValueError('需要非负分析版本及非空、至多2000字符的校订理由')
+        if not reason.strip():
+            raise errors.ToolInputError('invalid_reason', '校订理由不能为空')
         return await request('PATCH', project_path(project_id) + '/reverse-analyses/' + analysis_id + '/classification',
                              json={'content_mode': content_mode, 'reason': reason, 'expected_revision': expected_revision})
 
     @server.tool(annotations=write_record)
-    async def convert_reference_to_shots(project_id: str, analysis_id: str, expected_revision: int,
-                                         shots: list[dict[str, Any]]) -> dict[str, Any]:
+    async def convert_reference_to_shots(project_id: str, analysis_id: str,
+                                         expected_revision: Annotated[int, Field(strict=True, ge=0)],
+                                         shots: Annotated[list[dict[str, Any]], Field(min_length=1, max_length=256)]) -> dict[str, Any]:
         """只把调用方明确提交的非空分镜列表转为制作草案。每项必须包含 start_seconds、end_seconds 和 fields；参考观察、等距采样和模型候选不会自动填入 performance/prompt。"""
         if not analysis_id or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for char in analysis_id):
             raise ValueError('必须提供有效参考拆解 ID')
-        if expected_revision < 0 or not shots:
-            raise ValueError('需要非负分析版本及至少一个明确制作分镜')
         return await request('POST', project_path(project_id) + '/reverse-analyses/' + analysis_id + '/convert', json={'expected_revision': expected_revision, 'shots': shots})

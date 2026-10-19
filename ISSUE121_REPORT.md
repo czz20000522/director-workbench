@@ -14,10 +14,10 @@
 ## 5 行摘要
 
 1. 新增 `mcp_server/errors.py`：统一错误 union、`isError=true` + 结构化 `{ok:false,error}`、`ToolServer` 守卫，所有工具（含直接返回字典的错误）走同一出口；HTTP business 错误从后端 `detail.code` 取稳定 `code`。
-2. 参数/schema 收口：分页范围、幂等键非空/长度/非空白、文本上限、数值范围、`submit_speech.mode` 等枚举在 MCP schema 拒绝，不再依赖后端 422；缺参返回明确 tool error。
+2. 参数/schema 收口：分页范围、幂等键非空/长度/非空白、文本上限、数值范围、revision 非负、`submit_speech.mode` 等枚举在 MCP schema 拒绝，不再依赖后端 422；缺参返回明确 tool error。
 3. annotation 按真实能力拆分：14 个可重放/幂等写入置 `idempotent_hint=true`，其余写入保持 false；只读工具 true；分页工具发布 `_meta.pagination`。
 4. 文档修正：MCP README、HTTP API 指南、Skill 统一错误/分页/幂等说明，媒体交付改为 `media_ref` + `/api/projects/{project_id}/media/{token}`（`/media-file?path=`、`/media/{asset_name}` 仅本机 UI），工具数 60 远程 / 67 全量，附录补齐 #120 的 6 个工具与 7 个仅本机工具。
-5. 新增 `tests/test_mcp_contract.py` 24 个契约测试（错误结构/传输/未知回执、schema 拒绝、分页边界与 meta、幂等 annotation、媒体错误不嵌套、文档工具名/数量/媒体 URL），并更新 schema 快照 hash。
+5. 新增 `tests/test_mcp_contract.py` 26 个契约测试（错误结构/传输/未知回执、schema 拒绝、分页边界与 meta、幂等 annotation、媒体错误不嵌套、文档工具名/数量/媒体 URL），并更新 schema 快照 hash。
 
 ## 主要改动文件
 
@@ -27,7 +27,7 @@
 - `mcp_server/tools_creative.py`：`list_tasks` 分页范围与 meta；`preflight`/`create_shot`/`update_shot`/`arrange_shot`/`record_review`/`create_project`/`update_guide_settings` 约束；直接错误改走 `errors.error`。
 - `mcp_server/tools_generation.py`：提交/批次/装配/关键帧/语音的键、文本、枚举、数值范围；14 个幂等/核对写入标注；去除被 schema 覆盖的重复 body 校验。
 - `mcp_server/tools_media.py`：媒体任务键与数值范围、媒体引用长度/非空白；下载错误正确上抛；`list_media` 分页 meta；媒体任务 `idempotent_hint=true`。
-- `mcp_server/tools_reference.py`：参考导入/观察/校订 annotation；`list_references` 分页 Schema 与 meta；超限/文件错误统一结构；`import_reference_from_material`、`reconcile_reference_analysis` 标注幂等。
+- `mcp_server/tools_reference.py`：参考导入/观察/校订 annotation 与 revision/文本上限；`list_references` 分页 Schema 与 meta；超限/文件错误统一结构；`import_reference_from_material`、`reconcile_reference_analysis` 标注幂等。
 - `tests/test_mcp_adapter.py`：schema 快照 hash（`d14d3db2…`）。
 - `tests/test_mcp_contract.py`（新增）：错误/分页/幂等/文档契约测试。
 - `mcp_server/README.md`、`docs/public-api-guide.md`、`.agents/skills/director-workbench/SKILL.md`：合同文档同步（Skill `1.1.0`）。
@@ -58,8 +58,8 @@
 - 基线（改动前，短 basetemp）：`pytest tests/test_mcp_adapter.py tests/test_remote_mcp.py tests/test_mcp_media_delivery.py`：PASS 27。
 - Phase 1（错误合同）：同一批 + 采用/参考/提交/语音/关键帧/媒体工具/任务控制/脚本/装配/创建/模板/access/assembly-adoption：PASS 177。
 - Phase 2（schema/annotation）：同上 166 个（不含 adapter 快照）+ adapter 复跑：PASS 11。
-- Phase 4 新增契约测试：PASS 24。
-- 最终目标批次（MCP + remote + media delivery + reference/采用 + assembly adoption gate，26 个文件）：**PASS 276，73.36s**（命令见下）。
+- Phase 4 新增契约测试：PASS 26。
+- 最终目标批次（MCP + remote + media delivery + reference/采用 + assembly adoption gate，26 个文件）：**PASS 278，71.67s**（命令见下）。
 - 未运行：全量 core/GPU/浏览器/host-tool 套件（按任务要求省去耗时与外部依赖）；未启动/停止工作台或 ComfyUI，未 push/合并。
 
 最终目标批次命令（短 basetemp 规避 Windows 240 字符路径限制；产物在 `D:\t121g`，跑完已清理）：

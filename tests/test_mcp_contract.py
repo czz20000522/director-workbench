@@ -140,6 +140,11 @@ def test_in_body_argument_failures_share_the_same_structured_failure():
                        'idempotency_key': 'k'}, 'text'),
     ('get_submission_receipt', {'project_id': 'work', 'idempotency_key': ' '}, 'idempotency_key'),
     ('download_media', {'project_id': 'work', 'media_ref': '   '}, 'media_ref'),
+    ('convert_reference_to_shots', {'project_id': 'work', 'analysis_id': 'ref-1', 'expected_revision': -1,
+                                    'shots': [{'start_seconds': 0, 'end_seconds': 1, 'fields': {'prompt': 'x'}}]},
+     'expected_revision'),
+    ('correct_reference_artifact', {'project_id': 'work', 'analysis_id': 'ref-1', 'artifact_id': 'story',
+                                    'summary': 'checked', 'expected_revision': -1}, 'expected_revision'),
 ])
 def test_schema_violations_are_tool_errors_before_any_http(tool, arguments, field):
     requests = []
