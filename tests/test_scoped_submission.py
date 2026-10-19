@@ -11,7 +11,7 @@ def prepare(client, project):
     image = project / 'workspaces/preset-test/assets/S01.png'
     original['assets'] = [{'id': 'hero', 'image_path': str(image)}]
     backend.save_project_manifest(original)
-    assert client.post('/api/projects/create', json={'series': '测试', 'title': 'other', 'project_id': 'other'}).status_code == 200
+    assert client.post('/api/projects/create', json={'creation_mode': 'advanced', 'series': '测试', 'title': 'other', 'project_id': 'other'}).status_code == 200
     other = backend.load_project_manifest('other')
     other_image = project / 'workspaces/other/assets/other.png'
     other_image.write_bytes(b'wrong project')

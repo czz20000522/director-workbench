@@ -10,10 +10,17 @@ import pytest
 
 from backend import app as backend
 from backend.user_context import UserContext
-from support import add_shot, create
+from support import add_shot, create, install
 
 
 BASE = '/api/projects/preset-test'
+
+
+@pytest.fixture(autouse=True)
+def explicit_default_preset(request):
+    if 'preset_client' in request.fixturenames:
+        client, _ = request.getfixturevalue('preset_client')
+        install(client)
 
 
 def complete_candidate(client, project, task_id, *, path=None, when=100):
@@ -45,7 +52,8 @@ def approve(client, video, stage='sample', **changes):
         'candidate_ref': '/media-file?path=' + quote(str(video), safe=''),
         'expected_revision': existing.get('revision', 0),
         'expected_plan_revision': document['revision'],
-        'note': 'Explicit isolated selection; no human viewing claim.', **changes,
+        'note': 'Explicit isolated selection; no human viewing claim.',
+        'source': 'explicit-adoption', **changes,
     })
 
 
@@ -217,7 +225,11 @@ def test_receipt_invalidation_uses_frozen_private_owner_not_another_account(priv
     fixtures = []
     for client, project, username in ((owner, first, 'user001'), (other, second, 'user002')):
         root = '/api/projects/' + project['id']
-        assert client.post(root + '/plan/segments', json={'segment_id': 'S01', 'duration_seconds': 5}).status_code == 200
+        installed = client.post(root + '/production-presets/h3-guided')
+        assert installed.status_code == 200, installed.text
+        workflow = installed.json()['project']['production_preset']['workflow']
+        assert client.post(root + '/plan/segments', json={
+            'segment_id': 'S01', 'duration_seconds': 5, 'workflow': workflow}).status_code == 200
         workspace = UserContext(username, ownership.layout).project(project['id'])
         plan_path = workspace / 'plans/plan.json'
         document = json.loads(plan_path.read_text(encoding='utf-8'))

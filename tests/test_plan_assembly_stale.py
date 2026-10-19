@@ -11,7 +11,7 @@ BASE = '/api/projects/preset-test'
 def test_plan_edits_stale_assembly_preserving_candidate_and_review_history(preset_client, operation):
     client, _ = preset_client
     for shot in ('S01', 'S02'):
-        assert client.post(BASE + '/plan/segments', json={'segment_id': shot, 'duration_seconds': 5}).status_code == 200
+        assert client.post(BASE + '/plan/segments', json={'segment_id': shot, 'duration_seconds': 5, 'workflow': 'workflows/stale.json'}).status_code == 200
     document, path = backend.load_project_plan('preset-test')
     previous = {'status': 'candidate_generated', 'output': 'output/old.mp4', 'prompt_id': 'old-task',
                 'workflow': 'old.json', 'duration_seconds': 4.999,
@@ -22,7 +22,7 @@ def test_plan_edits_stale_assembly_preserving_candidate_and_review_history(prese
     backend.append_project_record('review:final', original_review, asset_id='MASTER', project_id='preset-test', source='test')
     revision = document['revision']
     if operation == 'create':
-        response = client.post(BASE + '/plan/segments', json={'segment_id': 'S03', 'duration_seconds': 5, 'expected_revision': revision})
+        response = client.post(BASE + '/plan/segments', json={'segment_id': 'S03', 'duration_seconds': 5, 'expected_revision': revision, 'workflow': 'workflows/stale.json'})
     elif operation == 'update':
         response = client.patch(BASE + '/plan/segments/S01', json={'duration_seconds': 4, 'expected_revision': revision})
     elif operation == 'convert':
@@ -50,7 +50,7 @@ def test_plan_edits_stale_assembly_preserving_candidate_and_review_history(prese
 
 def test_empty_project_edit_does_not_invent_assembly_or_final_review(preset_client):
     client, _ = preset_client
-    result = client.post(BASE + '/plan/segments', json={'duration_seconds': 5})
+    result = client.post(BASE + '/plan/segments', json={'duration_seconds': 5, 'workflow': 'workflows/stale.json'})
     assert result.status_code == 200
     assert result.json()['plan']['assembly'] is None
     assert 'MASTER' not in backend.build_project_state('preset-test')['reviews']
@@ -59,7 +59,7 @@ def test_empty_project_edit_does_not_invent_assembly_or_final_review(preset_clie
 def test_stale_assembly_cannot_be_approved_but_accepts_feedback(preset_client, monkeypatch, scoped):
     client, _ = preset_client
     monkeypatch.setattr(backend, 'CURRENT_PROJECT_ID', 'preset-test')
-    client.post(BASE + '/plan/segments', json={'duration_seconds': 5})
+    client.post(BASE + '/plan/segments', json={'duration_seconds': 5, 'workflow': 'workflows/stale.json'})
     document, path = backend.load_project_plan('preset-test')
     document['assembly'] = {'status': 'stale', 'output': 'output/old.mp4'}
     path.write_text(json.dumps(document), encoding='utf-8')

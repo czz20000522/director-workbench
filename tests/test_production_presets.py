@@ -121,7 +121,8 @@ def test_custom_stage_is_not_overwritten(preset_client):
 
 def test_single_submission_uses_preset_without_manual_workflow(preset_client):
     client, project = preset_client
-    install(client)
+    manifest = install(client)
+    installed_workflow = manifest['production_preset']['workflow']
     add_shot(client, project, 'S01')
     response = client.post('/api/tasks', json={'asset_id': 'S01', 'prompt': 'new director prompt'})
     assert response.status_code == 200, response.text
@@ -129,7 +130,7 @@ def test_single_submission_uses_preset_without_manual_workflow(preset_client):
     graph = json.loads(Path(task['payload']['workflow']).read_text(encoding='utf-8'))
     assert graph['105:104']['inputs']['prompt'] == 'new director prompt'
     assert len(task['payload']['execution_snapshot']['applied_bindings']) == 7
-    assert client.get('/api/plan').json()['segments'][0]['workflow'] is None
+    assert client.get('/api/plan').json()['segments'][0]['workflow'] == installed_workflow
 
 
 def test_catalog_reports_missing_models_instead_of_claiming_ready(tmp_path):
@@ -204,10 +205,18 @@ def test_validated_fast_profiles_are_explicit_and_keep_standard_recipe(preset_cl
     assert image_graph['115']['inputs']['megapixels'] == 0.4
     assert image_graph['105:9']['inputs']['steps'] == 8
     assert '114' in image_graph and 'aigc:add-audio-guide' not in image_graph
-    assert shot_creation.resolve({'aspect_ratio': '16:9', 'sound_mode': 'performance_reference', 'speed_profile': 'fast'})['preset_id'] == text_id
-    assert shot_creation.resolve({'aspect_ratio': '16:9', 'sound_mode': 'performance_reference', 'speed_profile': 'fast'}, first='frame.png')['preset_id'] == image_id
-    with pytest.raises(ValueError, match='仅支持 16:9'):
-        shot_creation.resolve({'aspect_ratio': '1:1', 'sound_mode': 'performance_reference', 'speed_profile': 'fast'})
+    fast_text = shot_creation.normalize_generation(
+        text_id, {'aspect_ratio': '16:9', 'speed_profile': 'fast'},
+        explicit_fields={'aspect_ratio', 'speed_profile'})
+    assert fast_text['speed_profile'] == 'fast' and fast_text['aspect_ratio'] == '16:9'
+    fast_image = shot_creation.normalize_generation(
+        image_id, {'aspect_ratio': '16:9', 'speed_profile': 'fast'},
+        explicit_fields={'aspect_ratio', 'speed_profile'}, first='frame.png')
+    assert fast_image['speed_profile'] == 'fast' and fast_image['aspect_ratio'] == '16:9'
+    with pytest.raises(shot_creation.UnsupportedCombination, match='固定为 16:9'):
+        shot_creation.normalize_generation(
+            text_id, {'aspect_ratio': '1:1', 'speed_profile': 'fast'},
+            explicit_fields={'aspect_ratio', 'speed_profile'})
     fast = client.post(f'/api/projects/preset-test/production-presets/{text_id}')
     assert fast.status_code == 200, fast.text
     manifest = fast.json()['project']
@@ -379,7 +388,7 @@ def test_h3_plan_rejects_unusable_duration_before_saving(preset_client, preset_i
 def test_generic_plan_keeps_non_h3_duration_range(preset_client):
     client, _ = preset_client
     path = '/api/projects/preset-test/plan/segments'
-    created = client.post(path, json={'segment_id': 'S01', 'duration_seconds': 3.9})
+    created = client.post(path, json={'segment_id': 'S01', 'duration_seconds': 3.9, 'workflow': 'workflows/generic.json'})
     assert created.status_code == 200, created.text
     updated = client.patch(path + '/S01', json={'duration_seconds': 15.1})
     assert updated.status_code == 200, updated.text

@@ -26,8 +26,11 @@ def edit_client(tmp_path, monkeypatch):
     created = client.post('/api/projects/create', json={'series': '测试', 'title': '接点', 'project_id': 'edit-test', 'creation_mode': 'advanced'})
     assert created.status_code == 200, created.text
     root = '/api/projects/edit-test'
+    installed = client.post(root + '/production-presets/h3-guided')
+    assert installed.status_code == 200, installed.text
+    workflow = installed.json()['project']['production_preset']['workflow']
     for shot_id in ('S01', 'S02'):
-        response = client.post(root + '/plan/segments', json={'segment_id': shot_id, 'duration_seconds': 5})
+        response = client.post(root + '/plan/segments', json={'segment_id': shot_id, 'duration_seconds': 5, 'workflow': workflow})
         assert response.status_code == 200, response.text
     manifest = backend.load_project_manifest('edit-test')
     manifest['assembly']['builder'] = str(Path(__file__).resolve().parents[1] / 'tools' / 'build_assembly_workflow.py')
@@ -41,6 +44,16 @@ def edit_client(tmp_path, monkeypatch):
         shot['video'] = {'path': str(workspace / f"{shot['id']}.mp4")}
         shot['current_version_task_id'] = f"task-{shot['id']}"
     backend.write_plan_version(plan_path, plan)
+    plan = json.loads(plan_path.read_text(encoding='utf-8'))
+    for shot in plan['segments']:
+        response = client.post(root + '/reviews', json={
+            'asset_id': shot['id'], 'stage': 'sample', 'status': 'approved',
+            'candidate_ref': shot['video']['path'], 'expected_revision': 0,
+            'expected_plan_revision': plan['revision'],
+            'note': 'Explicit isolated adoption for assembly readiness; no human viewing claim.',
+            'source': 'explicit-adoption',
+        })
+        assert response.status_code == 200, response.text
     return client, root, workspace, plan_path
 
 
@@ -219,6 +232,10 @@ def test_mcp_assembly_edit_matches_http_contract(edit_client):
 
     client, _, workspace, _ = edit_client
     master_id = register_wav(workspace, 11)
+    # This contract case intentionally exercises the missing-adoption blocker.
+    with backend.db() as connection:
+        connection.execute("DELETE FROM project_records WHERE project_id='edit-test' AND record_type IN ('review:sample','review:finish')")
+        connection.commit()
 
     async def verify():
         async with Client(create_server('http://localhost:4100', httpx.ASGITransport(app=backend.app))) as agent:

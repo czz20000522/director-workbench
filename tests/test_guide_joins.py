@@ -1,6 +1,7 @@
 """Join-guide completion against actual services; fixtures never use a GPU."""
 import asyncio
 import json
+from pathlib import Path
 
 import httpx
 import pytest
@@ -9,6 +10,25 @@ from mcp import Client
 from backend import app as backend
 from mcp_server.server import create_server
 from support import create
+
+
+def refresh_adoptions(client, root, plan_path):
+    """Re-adopt the current plan revision after a test rewrites the plan."""
+    document = json.loads(plan_path.read_text(encoding='utf-8'))
+    state = client.get(root + '/state').json()
+    for segment in document['segments']:
+        video = (segment.get('video') or {}).get('path')
+        if not video or not Path(video).is_file():
+            continue
+        existing = (state.get('reviews') or {}).get(segment['id'], {}).get('sample', {})
+        response = client.post(root + '/reviews', json={
+            'asset_id': segment['id'], 'stage': 'sample', 'status': 'approved',
+            'candidate_ref': video, 'expected_plan_revision': document['revision'],
+            'expected_revision': existing.get('revision', 0),
+            'note': 'Explicit isolated adoption after the plan rewrite; no human viewing claim.',
+            'source': 'explicit-adoption',
+        })
+        assert response.status_code == 200, response.text
 
 
 @pytest.mark.parametrize(('case', 'expected_state', 'completed'), [
@@ -49,6 +69,7 @@ def test_join_guide_uses_version_bound_review_service_http_mcp(
             document, _ = backend.load_project_plan('edit-test')
             document['segments'][1]['current_version_task_id'] = 'new-fixture-version'
             backend.write_plan_version(plan_path, document)
+    refresh_adoptions(client, root, plan_path)
     before_plan = client.get(root + '/plan').json()
     before_bytes = plan_path.read_bytes()
     before_state = client.get(root + '/state').json()
@@ -118,8 +139,11 @@ def test_private_missing_join_candidates_are_unfinished_and_account_scoped(priva
     a, b, _, _ = private_workbench
     project = create(a)
     root = '/api/projects/' + project['id']
+    installed = a.post(root + '/production-presets/h3-guided')
+    assert installed.status_code == 200, installed.text
+    workflow = installed.json()['project']['production_preset']['workflow']
     for shot_id, duration in [('S01', 7.3), ('S02', 4)]:
-        result = a.post(root + '/plan/segments', json={'segment_id': shot_id, 'duration_seconds': duration})
+        result = a.post(root + '/plan/segments', json={'segment_id': shot_id, 'duration_seconds': duration, 'workflow': workflow})
         assert result.status_code == 200, result.text
     before = a.get(root + '/state').json()
     edit = a.get(root + '/assembly/edit').json()

@@ -12,7 +12,7 @@ def test_duplicate_created_ids_remain_addressable(preset_client, requested):
     client, _ = preset_client
     ids = []
     for _ in range(3):
-        response = client.post(PATH + '/segments', json={'segment_id': requested, 'duration_seconds': 5})
+        response = client.post(PATH + '/segments', json={'segment_id': requested, 'duration_seconds': 5, 'workflow': 'workflows/revision.json'})
         assert response.status_code == 200, response.text
         segment_id = response.json()['segment']['id']
         assert len(segment_id) <= 80
@@ -26,7 +26,7 @@ def test_duplicate_created_ids_remain_addressable(preset_client, requested):
 
 
 def create(client):
-    result = client.post(PATH + '/segments', json={'segment_id': 'S01', 'duration_seconds': 5, 'prompt': 'original'})
+    result = client.post(PATH + '/segments', json={'segment_id': 'S01', 'duration_seconds': 5, 'prompt': 'original', 'workflow': 'workflows/revision.json'})
     assert result.status_code == 200
     return result.json()['plan']['revision']
 
@@ -66,7 +66,7 @@ def test_old_structural_edit_preserves_plan_and_review_records(preset_client):
 def test_merge_invalidates_both_reviews_and_updates_survivor_only(preset_client, initiator, target):
     client, _ = preset_client
     for asset in ('S01', 'S02', 'S01-unrelated'):
-        result = client.post(PATH + '/segments', json={'segment_id': asset, 'duration_seconds': 5})
+        result = client.post(PATH + '/segments', json={'segment_id': asset, 'duration_seconds': 5, 'workflow': 'workflows/revision.json'})
         assert result.status_code == 200
         backend.append_project_record('review:sample', {'stage': 'sample', 'status': 'approved', 'candidate_ref': f'{asset}.mp4'}, asset_id=asset, project_id='preset-test', source='test')
     before = backend.build_project_state('preset-test')

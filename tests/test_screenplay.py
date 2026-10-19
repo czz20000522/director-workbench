@@ -15,7 +15,8 @@ def screenplay(revision=0, **extra):
 
 def shot(client, scene='SC01', revision=1, shot_id='S01'):
     return client.post(BASE + '/plan/segments', json={'duration_seconds': 5, 'segment_id': shot_id,
-                       'script_scene_id': scene, 'expected_script_revision': revision})
+                       'script_scene_id': scene, 'expected_script_revision': revision,
+                       'workflow': 'workflows/screenplay.json'})
 
 
 def test_legacy_script_editor_preserves_metadata_and_history(preset_client):

@@ -149,6 +149,7 @@ try {
   assert.ok(handedOver, 'The start frame preview must report its real size');
   await page.waitForFunction(aspect => document.querySelector('.quick-video-form select[aria-label="视频画幅"]')?.value === aspect, handedOver);
   assert.equal(await videoCanvas(), handedOver);
+  await videoForm.getByLabel('制作方案', { exact: true }).selectOption({ label: '首帧 + H3 原生声音竖屏样片（待小样验证）' });
   await videoForm.getByLabel('提示词', { exact: true }).fill('Slow camera push in; clouds drift over the lighthouse.');
   // The fixture picture is 32x48, so a freshly uploaded portrait start frame must land on 9:16.
   await videoForm.getByLabel('上传图片', { exact: true }).setInputFiles(ready.picture);
@@ -169,8 +170,9 @@ try {
   await page.waitForFunction(() => document.querySelector('.director-edit-heading')?.textContent.includes('等待'));
   let videoTasks = (await tasks()).filter(task => task.asset_id === 'S01');
   assert.equal(videoTasks.length, 1);
-  assert.equal(videoTasks[0].payload.execution_snapshot.resolved_generation.generation_mode, 'image_to_video');
-  assert.equal(videoTasks[0].payload.execution_snapshot.resolved_generation.aspect_ratio, '9:16', 'The submitted canvas matches the start frame');
+  assert.equal(videoTasks[0].payload.execution_snapshot.h3_duration.generation_mode, 'image_to_video');
+  assert.equal(videoTasks[0].payload.execution_snapshot.h3_duration.aspect_ratio, '9:16', 'The submitted canvas matches the start frame');
+  assert.equal(videoTasks[0].payload.execution_snapshot.pipeline_stage_id, 'motion-first-native-portrait-generation');
   assert.equal(videoTasks[0].payload.execution_snapshot.prompt, 'Slow camera push in; clouds drift over the lighthouse.');
   assert.equal(writes.filter(row => row.path.endsWith('/plan/segments')).length, 1);
   assert.equal(writes.filter(row => row.path.endsWith('/tasks')).length, 1);
@@ -270,12 +272,9 @@ try {
   await page.getByRole('button', { name: '文生视频 描述画面与动作，直接生成视频' }).click();
   const textForm = page.getByRole('group', { name: '用文字生成视频', exact: true });
   assert.equal(await textForm.getByLabel('开始画面', { exact: true }).count(), 0);
+  await textForm.getByLabel('制作方案', { exact: true }).selectOption({ label: '纯文本 + H3 原生声音竖屏样片（待小样验证）' });
   await textForm.getByLabel('提示词', { exact: true }).fill('A quiet river at dawn, mist rises above the water.');
-  await textForm.getByLabel('视频生成方案', { exact: true }).selectOption('fast');
-  assert.equal(await textForm.getByLabel('视频生成方案', { exact: true }).inputValue(), 'fast');
   await textForm.locator('.resolution-picker summary').click();
-  await textForm.getByLabel('视频画幅').selectOption('9:16');
-  assert.equal(await textForm.getByLabel('视频生成方案', { exact: true }).inputValue(), 'standard', 'Non-16:9 switches back to the standard recipe');
   await textForm.getByLabel('视频输出分辨率').selectOption('4k');
   assert.ok((await textForm.getByLabel('视频输出分辨率').innerText()).includes('2160 × 3840'));
   await textForm.getByRole('button', { name: '生成视频', exact: true }).click();
@@ -287,9 +286,10 @@ try {
     if (!textTask) await new Promise(resolve => setTimeout(resolve, 100));
   }
   assert.ok(textTask, 'Text video submission must return a persisted task');
-  assert.equal(textTask.payload.execution_snapshot.resolved_generation.generation_mode, 'text_to_video');
+  assert.equal(textTask.payload.execution_snapshot.h3_duration.generation_mode, 'text_to_video');
   assert.deepEqual(textTask.payload.execution_snapshot.materials, {});
-  assert.equal(textTask.payload.execution_snapshot.resolved_generation.aspect_ratio, '9:16');
+  assert.equal(textTask.payload.execution_snapshot.h3_duration.aspect_ratio, '9:16');
+  assert.equal(textTask.payload.execution_snapshot.pipeline_stage_id, 'motion-text-native-portrait-generation');
   assert.deepEqual(textTask.payload.output_size, { resolution: '4k', aspect_ratio: '9:16' });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.getByRole('button', { name: '查看上一段', exact: true }).click();
@@ -298,6 +298,11 @@ try {
   await page.getByRole('heading', { name: '分镜2', exact: true }).waitFor();
   assert.equal(await page.getByRole('region', { name: '候选并排比较', exact: true }).count(), 0, 'Never show another shot\'s candidate comparison');
   await page.screenshot({ path: resolve(process.argv[3], 'stacked-cards.png'), fullPage: true });
+  // Adding S02 changes the plan revision, so re-adopt the current S01 candidate.
+  await page.getByRole('button', { name: '查看上一段', exact: true }).click();
+  await page.getByRole('heading', { name: '分镜1', exact: true }).waitFor();
+  await page.getByLabel('使用生成结果').getByRole('button', { name: '采用当前候选', exact: true }).click();
+  await page.getByLabel('使用生成结果').getByText('已采用', { exact: true }).waitFor();
   await page.getByRole('button', { name: '检查并装配成片', exact: true }).click();
   const delivery = page.getByRole('region', { name: '装配与取得文件', exact: true });
   await delivery.getByRole('heading', { name: '已采用 1 / 2 段', exact: true }).waitFor();

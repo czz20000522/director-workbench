@@ -8,7 +8,7 @@ import pytest
 from runtime_scratch import scratch_root
 from backend import app as backend
 from test_private_workbench import private_workbench
-from test_automatic_creation import seed_test_models, complete_frozen_task
+from test_explicit_creation import seed_test_models, complete_frozen_task
 
 # The fixture root is a machine location, not a repository one, and a bridge is spawned by
 # a driver rather than by pytest, so it asks for scratch the same way the test modules do:
@@ -28,7 +28,7 @@ def fake_comfy(path, payload=None, **kwargs):
     if path.startswith('/history'): return {}
     raise ValueError('Isolated engine unavailable; no real Comfy request: ' + path)
 patch.setattr(backend, 'request_json', fake_comfy)
-project = a.post('/api/projects/create', json={'series':'Isolated','title':'Automatic browser'}).json()['project']
+project = a.post('/api/projects/create', json={'creation_mode': 'advanced', 'series':'Isolated','title':'Automatic browser'}).json()['project']
 print(json.dumps({'project_id':project['id'], 'root':str(root)}), flush=True)
 for line in sys.stdin:
     request=json.loads(line)

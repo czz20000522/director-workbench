@@ -50,7 +50,7 @@ def test_unknown_preset_is_rejected(function):
         function('unknown')
 
 
-@pytest.mark.parametrize('requested_stage,first_only', [(None, True), ('motion-first-generation', True), ('motion-generation', False)])
+@pytest.mark.parametrize('requested_stage,first_only', [('motion-first-generation', True), ('motion-generation', False)])
 def test_api_presets_coexist_and_select_independent_frozen_graphs(preset_client, requested_stage, first_only):
     client, project = preset_client
     old = install(client)
@@ -82,3 +82,18 @@ def test_api_presets_coexist_and_select_independent_frozen_graphs(preset_client,
 def test_catalog_api_lists_both_presets(preset_client):
     client, _ = preset_client
     assert {item['id'] for item in client.get('/api/production-presets').json()['presets']} == set(presets.PRESET_IDS)
+
+
+def test_task_uses_explicit_segment_workflow_over_new_project_preset(preset_client):
+    client, project = preset_client
+    install(client)
+    add_shot(client, project, 'S01')
+    installed = client.post('/api/projects/preset-test/production-presets/h3-first-guided')
+    assert installed.status_code == 200, installed.text
+    before = client.get('/api/plan').json()
+    response = client.post('/api/projects/preset-test/tasks', json={'asset_id': 'S01'})
+    assert response.status_code == 200, response.text
+    graph = json.loads(Path(response.json()['payload']['workflow']).read_text(encoding='utf-8'))
+    assert graph['92']['_meta']['director_preset'] == presets.PRESET_ID
+    assert 'ip-video:last-frame:2' in graph
+    assert client.get('/api/plan').json() == before

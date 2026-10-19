@@ -10,7 +10,7 @@ URL = '/api/projects/preset-test/creative'
 
 def test_agent_saves_unselected_project_and_requires_revision(preset_client):
     client, _ = preset_client
-    assert client.post('/api/projects/create', json={'series': '测试', 'title': 'second', 'project_id': 'second'}).status_code == 200
+    assert client.post('/api/projects/create', json={'creation_mode': 'advanced', 'series': '测试', 'title': 'second', 'project_id': 'second'}).status_code == 200
     assert client.post(URL, json={'values': {'intent': 'missing revision'}}).status_code == 422
     response = client.post(URL, json={'expected_revision': 0, 'values': {'intent': 'Agent创作设定'}, 'source': 'test-agent'})
     assert response.status_code == 200, response.text

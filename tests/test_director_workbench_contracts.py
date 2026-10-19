@@ -68,7 +68,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(backend, "require_submission_capacity", lambda: {"online": True})
     monkeypatch.setattr(backend.threading, "Thread", _NoopThread)
     client = TestClient(backend.app)
-    created = client.post('/api/projects/create', json={'series': '测试系列', 'title': '隔离作品', 'project_id': 'project-a'})
+    created = client.post('/api/projects/create', json={'creation_mode': 'advanced', 'series': '测试系列', 'title': '隔离作品', 'project_id': 'project-a'})
     assert created.status_code == 200, created.text
     assert created.json()['project']['id'] == 'project-a'
     return client
@@ -125,7 +125,7 @@ def test_project_mutations_are_blocked_while_any_task_can_still_use_comfyui(
     _insert_task("project-a", "S01", "queued")
 
     assert client.post("/api/projects/select", json={"project_id": "project-b"}).status_code == 409
-    assert client.post("/api/projects/create", json={"series": "新系列", "title": "新作品"}).status_code == 409
+    assert client.post("/api/projects/create", json={"creation_mode": "advanced", "series": "新系列", "title": "新作品"}).status_code == 409
     assert client.post("/api/projects/import", json={"path": str(tmp_path / "missing")}).status_code == 409
 
     with backend.db() as connection:
@@ -150,7 +150,7 @@ def test_project_mutations_are_blocked_while_any_task_can_still_use_comfyui(
     monkeypatch.setattr(backend, "scan_import_directory", lambda directory, project_id: ({"id": project_id, "title": "导入作品"}, {"counts": {}}))
     monkeypatch.setattr(backend, "persist_project_manifest", lambda manifest, make_default=True: None)
     assert client.post("/api/projects/import", json={"path": str(source)}).status_code == 200
-    assert client.post("/api/projects/create", json={"series": "新系列", "title": "新作品"}).status_code == 200
+    assert client.post("/api/projects/create", json={"creation_mode": "advanced", "series": "新系列", "title": "新作品"}).status_code == 200
 
 
 def test_review_records_survive_without_browser_storage(client: TestClient) -> None:
@@ -350,8 +350,8 @@ def test_segment_update_persists_audio_materials_and_recalculates_timeline(
             {
                 "revision": 1,
                 "segments": [
-                    {"id": "S01", "duration_seconds": 5.0, "keyframes": {}, "audio": {}},
-                    {"id": "S02", "duration_seconds": 5.0, "keyframes": {}, "audio": {}},
+                    {"id": "S01", "duration_seconds": 5.0, "keyframes": {}, "audio": {}, "workflow": "workflows/test.json"},
+                    {"id": "S02", "duration_seconds": 5.0, "keyframes": {}, "audio": {}, "workflow": "workflows/test.json"},
                 ],
             }
         ),

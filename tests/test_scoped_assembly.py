@@ -16,14 +16,23 @@ def test_assembly_uses_target_plan_current_video_without_review(preset_client, m
     assert manifest['assembly']['filename_prefix'] == '导演工作台工作目录/preset-test/assembly'
     manifest['assembly'] = {'builder': 'tools/target_builder.py', 'filename_prefix': 'target/assembly', 'audio': str(project / 'workspaces/preset-test/assets/S01.wav')}
     backend.save_project_manifest(manifest)
-    client.post('/api/projects/create', json={'series': '测试', 'title': 'second', 'project_id': 'second'})
+    client.post('/api/projects/create', json={'creation_mode': 'advanced', 'series': '测试', 'title': 'second', 'project_id': 'second'})
     url = '/api/projects/preset-test/assembly'
     assert client.post(url).status_code == 409
     plan, plan_path = backend.load_project_plan('preset-test')
     video = project / 'workspaces/preset-test/assets/S01.mp4'
     video.write_bytes(b'current video fixture')
     plan['segments'][0]['video'] = {'path': str(video)}
+    plan['segments'][0]['current_version_task_id'] = 'current-task'
     plan_path.write_text(json.dumps(plan), encoding='utf-8')
+    adopted = client.post('/api/projects/preset-test/reviews', json={
+        'asset_id': 'S01', 'stage': 'sample', 'status': 'approved',
+        'candidate_ref': str(video), 'expected_revision': 0,
+        'expected_plan_revision': plan.get('revision', 0),
+        'note': 'Explicit isolated adoption for the assembly fixture.',
+        'source': 'explicit-adoption',
+    })
+    assert adopted.status_code == 200, adopted.text
     revision = client.get('/api/projects/preset-test/plan').json()['revision']
     args = {'idempotency_key': 'assembly-proof', 'expected_revision': revision}
     assert client.post(url, json={**args, 'expected_revision': revision - 1}).status_code == 409
@@ -57,7 +66,7 @@ def test_empty_and_unknown_project_cannot_assemble(preset_client):
 def test_shot_id_cannot_collide_with_assembly_asset(preset_client):
     client, _ = preset_client
     created = client.post('/api/projects/preset-test/plan/segments', json={
-        'segment_id': 'MASTER', 'duration_seconds': 5, 'expected_revision': 0})
+        'segment_id': 'MASTER', 'duration_seconds': 5, 'expected_revision': 0, 'workflow': 'workflows/assembly.json'})
     assert created.status_code == 200, created.text
     assert created.json()['segment']['id'] == 'MASTER-2'
 

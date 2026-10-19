@@ -181,14 +181,27 @@ def test_missing_assembly_builder_blocks_public_preflight_state_and_submission(p
     client, project = preset_client
     _, _, executions = isolated_scheduler
     root = '/api/projects/preset-test'
-    assert client.post(root + '/plan/segments', json={'segment_id': 'S01', 'duration_seconds': 5}).status_code == 200
+    installed = client.post(root + '/production-presets/h3-guided')
+    assert installed.status_code == 200, installed.text
+    workflow = installed.json()['project']['production_preset']['workflow']
+    assert client.post(root + '/plan/segments', json={
+        'segment_id': 'S01', 'duration_seconds': 5, 'workflow': workflow}).status_code == 200
     # A synthetic completed candidate isolates builder availability from video/join readiness.
     candidate = project / 'workspaces/preset-test/candidate.mp4'
     candidate.write_bytes(b'isolated completed candidate')
     document, plan_path = backend.load_project_plan('preset-test')
     document['segments'][0]['video'] = {'path': str(candidate)}
     document['segments'][0]['status'] = 'video_generated'
+    document['segments'][0]['current_version_task_id'] = 'synthetic-candidate'
     backend.write_plan_version(plan_path, document)
+    adopted = client.post(root + '/reviews', json={
+        'asset_id': 'S01', 'stage': 'sample', 'status': 'approved',
+        'candidate_ref': str(candidate), 'expected_revision': 0,
+        'expected_plan_revision': document['revision'],
+        'note': 'Explicit isolated adoption for builder readiness; no human viewing claim.',
+        'source': 'explicit-adoption',
+    })
+    assert adopted.status_code == 200, adopted.text
     manifest = backend.load_project_manifest('preset-test')
     manifest['assembly']['builder'] = 'tools/missing-assembly-builder.py'
     backend.save_project_manifest(manifest)
@@ -387,10 +400,13 @@ def test_guide_assembly_completion_requires_current_review_http_and_mcp(
         document['assembly'] = {'output': str(candidate), 'status': 'assembled'}
     backend.write_plan_version(plan_path, document)
     if review_status is not None:
-        review = a.post(root + '/reviews', json={
+        review_body = {
             'asset_id': 'MASTER', 'stage': 'final', 'status': review_status,
             'note': 'Explicit fixture review', 'expected_revision': 0,
-        })
+        }
+        if review_status == 'approved' and has_candidate:
+            review_body.update(source='explicit-adoption', candidate_ref=str(candidate))
+        review = a.post(root + '/reviews', json=review_body)
         assert review.status_code == 200, review.text
     # Learning progress must never approve an existing candidate.
     settings = a.patch('/api/settings/guide', json={
@@ -450,6 +466,7 @@ def test_guide_new_assembly_version_uses_existing_review_invalidation(
     approved = a.post(root + '/reviews', json={
         'asset_id': 'MASTER', 'stage': 'final', 'status': 'approved',
         'candidate_ref': str(old), 'expected_revision': 0,
+        'source': 'explicit-adoption',
     })
     assert approved.status_code == 200, approved.text
     before = a.get('/api/settings/guide', params={'project_id': first['id']}).json()

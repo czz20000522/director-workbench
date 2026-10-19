@@ -6,7 +6,7 @@ def test_create_without_selection_preserves_active_and_default_project(preset_cl
     before = client.get('/api/project').json()
     default = backend.load_project_catalog()['default_project_id']
     response = client.post('/api/projects/create', json={
-        'series': 'Agent 系列', 'title': '新作品', 'project_id': 'agent-new', 'select': False,
+        'creation_mode': 'advanced', 'series': 'Agent 系列', 'title': '新作品', 'project_id': 'agent-new', 'select': False,
     })
     assert response.status_code == 200, response.text
     manifest = response.json()['project']
@@ -20,7 +20,7 @@ def test_create_without_selection_preserves_active_and_default_project(preset_cl
 def test_legacy_create_still_selects_new_project(preset_client):
     client, _ = preset_client
     response = client.post('/api/projects/create', json={
-        'series': '界面系列', 'title': '下一集', 'project_id': 'ui-new',
+        'creation_mode': 'advanced', 'series': '界面系列', 'title': '下一集', 'project_id': 'ui-new',
     })
     assert response.status_code == 200
     assert client.get('/api/project').json()['id'] == 'ui-new'

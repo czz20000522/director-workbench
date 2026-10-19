@@ -214,10 +214,10 @@ def test_agent_http_series_upload_project_and_shot_without_browser_headers(priva
     assert owner.post('/api/private/series', json={'name': 'Agent流程'}).status_code == 409
     assert other.get('/api/private/series').json()['series'] == []
 
-    created = owner.post('/api/projects/create', json={'series': 'Agent流程', 'title': '样例', 'select': False})
+    created = owner.post('/api/projects/create', json={'creation_mode': 'advanced', 'series': 'Agent流程', 'title': '样例', 'select': False})
     assert created.status_code == 200, created.text
     project_id = created.json()['project']['id']
-    duplicate = owner.post('/api/projects/create', json={'series': 'Agent流程', 'title': '样例', 'select': False})
+    duplicate = owner.post('/api/projects/create', json={'creation_mode': 'advanced', 'series': 'Agent流程', 'title': '样例', 'select': False})
     assert duplicate.status_code == 200
     assert duplicate.json()['project']['id'] != project_id
 
@@ -231,8 +231,12 @@ def test_agent_http_series_upload_project_and_shot_without_browser_headers(priva
     assert len(repeated.json()['project']['assets']) == 2
     assert owner.post(base + '/upload', files=[('files', ('bad.exe', b'bad', 'application/octet-stream'))]).status_code == 422
 
+    installed = owner.post(base + '/production-presets/h3-guided')
+    assert installed.status_code == 200, installed.text
+    workflow = installed.json()['project']['production_preset']['workflow']
     saved = owner.post(base + '/plan/segments', json={
         'segment_id': 'S01', 'duration_seconds': 5, 'prompt': '产品特写', 'expected_revision': 0,
+        'workflow': workflow,
     })
     assert saved.status_code == 200, saved.text
     assert saved.json()['segment']['id'] == 'S01'
