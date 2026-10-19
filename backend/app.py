@@ -3652,6 +3652,7 @@ from .routers.workbench_status import (
     plan,
     project_pipeline,
     project_readiness,
+    readiness_selection_options,
     public_validate_pipeline,
     scoped_validate_pipeline,
     segment_dependency_blockers,

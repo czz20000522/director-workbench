@@ -370,7 +370,7 @@ def project_readiness(project_id: str, state: dict[str, Any]) -> dict[str, Any]:
         matched = next((stage for stage in executable if workflow in (stage.get('execution') or {}).get('references', [])), None)
         return (matched or {}).get('id')
     result = readiness.build_project_readiness(project_id=project_id, plan=document, stages=stages, project_state=state,
-        tasks=task_values, stage_selector=select_stage, selection_options=readiness_selection_options(manifest, stages),
+        tasks=task_values, stage_selector=select_stage, selection_options=backend.readiness_selection_options(manifest, stages),
         assembly_asset_id=str(manifest.get('assembly_asset_id') or 'MASTER'),
         validate=lambda stage, asset, values: backend.validate_project_pipeline(stage, PipelineValidateRequest(asset_id=asset, values=values), manifest),
         assembly_preflight=lambda: backend.preflight_project_assembly(project_id))
