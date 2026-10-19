@@ -13,6 +13,7 @@ import asyncio
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from .. import app as backend
+from ..secure_files import VerifiedFileResponse, checked_file
 
 
 ROUTER = APIRouter()
@@ -42,9 +43,13 @@ async def events() -> StreamingResponse:
 @ROUTER.get("/media/{asset_name}")
 def media(asset_name: str) -> FileResponse:
     path = backend.MEDIA.get(asset_name)
-    if path is None or not path.is_file():
+    if path is None:
         raise HTTPException(404, "素材不存在")
-    return FileResponse(path)
+    try:
+        candidate, identity = checked_file(path)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        raise HTTPException(404, "素材不存在") from exc
+    return VerifiedFileResponse(candidate, identity=identity, stat_result=candidate.stat())
 
 
 @ROUTER.get("/media-file")
@@ -54,9 +59,11 @@ def media_file(path: str) -> FileResponse:
         candidate = backend.resolve_registered_path(path)
     except ValueError as exc:
         raise HTTPException(403, str(exc)) from exc
-    if not candidate.is_file():
+    try:
+        candidate, identity = checked_file(candidate)
+    except (FileNotFoundError, ValueError, OSError) as exc:
         raise HTTPException(404, "素材不存在")
-    return FileResponse(candidate)
+    return VerifiedFileResponse(candidate, identity=identity, stat_result=candidate.stat())
 
 
 @ROUTER.get("/workflow-file")
@@ -73,9 +80,11 @@ def workflow_file(path: str) -> FileResponse:
         candidate = backend.PRIVATE_WORKSPACES.file(candidate)
         if candidate.suffix.lower() != '.json':
             raise HTTPException(415, '这里只允许下载 JSON 工作流')
-        if not candidate.is_file():
+        try:
+            candidate, identity = checked_file(candidate)
+        except (FileNotFoundError, ValueError, OSError) as exc:
             raise HTTPException(404, '工作流不存在')
-        return FileResponse(candidate, media_type='application/json', filename=candidate.name)
+        return VerifiedFileResponse(candidate, identity=identity, media_type='application/json', filename=candidate.name, stat_result=candidate.stat())
     try:
         candidate = candidate.resolve()
         workflow_roots = [backend.PROJECT.resolve(), backend.DIRECTOR_WORKSPACES_ROOT.resolve()]
@@ -86,6 +95,8 @@ def workflow_file(path: str) -> FileResponse:
         raise HTTPException(403, "工作流路径不在导演台项目目录内") from exc
     if candidate.suffix.lower() != ".json":
         raise HTTPException(415, "这里只允许下载 JSON 工作流")
-    if not candidate.is_file():
+    try:
+        candidate, identity = checked_file(candidate)
+    except (FileNotFoundError, ValueError, OSError) as exc:
         raise HTTPException(404, "工作流不存在")
-    return FileResponse(candidate, media_type="application/json", filename=candidate.name)
+    return VerifiedFileResponse(candidate, identity=identity, media_type="application/json", filename=candidate.name, stat_result=candidate.stat())

@@ -7,7 +7,7 @@ import threading
 from pathlib import Path
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 _MIGRATION_LOCK = threading.RLock()
 
 
@@ -78,6 +78,18 @@ def _migrate(connection: sqlite3.Connection) -> None:
     connection.execute("CREATE INDEX IF NOT EXISTS idx_tasks_project_updated ON tasks(project_id, updated_at DESC, id)")
     connection.execute("CREATE INDEX IF NOT EXISTS idx_records_project_type ON project_records(project_id, record_type, asset_id, revision DESC)")
     connection.execute("CREATE TABLE IF NOT EXISTS user_settings (owner TEXT PRIMARY KEY, revision INTEGER NOT NULL, guide TEXT NOT NULL)")
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS login_failure_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            identity TEXT NOT NULL,
+            source TEXT NOT NULL,
+            failed_at REAL NOT NULL
+        )"""
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_login_failure_events_key_time "
+        "ON login_failure_events(identity, source, failed_at)"
+    )
 
     # The mapping table is deliberately separate from the frozen payload.  Legacy
     # databases may contain duplicate payload keys; the oldest row remains the

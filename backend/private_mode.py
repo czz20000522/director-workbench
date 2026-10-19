@@ -101,5 +101,6 @@ def install(backend, *, accounts: AccountStore, layout: Layout, origins: tuple[s
         return 403, '请使用当前作品入口'
 
     backend.app.add_middleware(PrivateAuth, sessions=sessions, origins=origins,
-                               authorize=authorize, administrators=tuple(administrators), secure_cookie=secure_cookie)
+                               authorize=authorize, administrators=tuple(administrators), secure_cookie=secure_cookie,
+                               database_path=backend.DB_PATH)
     return sessions, workspaces

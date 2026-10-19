@@ -24,6 +24,7 @@
 /.agents/skills/aigc-video-production/scripts/*
 !/backend/
 /backend/*
+!/backend/secure_files.py
 !/backend/routers/
 /backend/routers/*
 !/backend/routers/__init__.py
@@ -67,6 +68,7 @@
 !/tests/
 /tests/*
 !/tests/test_assembly_continuity.py
+!/tests/test_secure_files.py
 !/tests/conftest.py
 !/tests/support.py
 !/tools/
