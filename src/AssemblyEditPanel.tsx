@@ -13,7 +13,7 @@ type Join = {
 };
 type Continuity = {
   key: string; left_id?: string; right_id?: string; advisory: boolean;
-  available: boolean; status: 'ok' | 'unavailable'; warnings: string[]; reason?: string;
+  available: boolean; status: 'ok' | 'partial' | 'unavailable'; warnings: string[]; reason?: string;
   video?: { differences?: Record<string, { different: boolean; delta?: number }> };
   frames?: { mean_absolute_rgb_difference?: number; brightness_delta?: number; note?: string };
   audio?: { differences?: Record<string, { different: boolean }>; boundary?: {
@@ -26,7 +26,7 @@ type Edit = {
   join_review?: { state: string; completed: boolean; remaining_joins: string[] };
   sound: { policy: string; audio_asset_id?: string | null; path?: string | null; duration_seconds?: number | null; error?: string };
   audio_assets: Array<{ id: string; title: string }>; warnings?: string[];
-  continuity?: { advisory: boolean; available: boolean; note: string; joins: Continuity[] };
+  continuity?: { advisory: boolean; available: boolean; status?: 'ok' | 'partial' | 'unavailable'; note: string; reason?: string; joins: Continuity[] } | null;
   target_duration_seconds: number;
   timing_summary?: { playback_seconds: number; frame_count: number; precision: string; segments: { segment_id: string; start_seconds: number; duration_seconds: number; frame_count: number; playback_seconds: number }[] } | null;
 };
@@ -110,6 +110,8 @@ export default function AssemblyEditPanel({ projectId, planRevision, assemblyPat
     width: '宽度', height: '高度', fps: '帧率', rotation: '旋转', aspect_ratio: '宽高比', duration_seconds: '时长',
     sample_rate: '采样率', channels: '声道数',
   };
+  const continuityStatus = (row: { available: boolean; status?: Continuity['status'] }) => row.status ?? (row.available ? 'ok' : 'unavailable');
+  const continuityStatusLabel = (row: { available: boolean; status?: Continuity['status'] }) => ({ ok: '已测量', partial: '部分结果', unavailable: '不可用' }[continuityStatus(row)]);
   if (!supported) return null;
   return <details className="assembly-edit-panel">
     <summary><strong>接点与全片声音</strong><span>{edit ? `${edit.joins.length} 个接点 · ${(edit.join_review?.remaining_joins ?? edit.blocking_joins).length} 个待处理` : '读取中'}</span></summary>
@@ -127,20 +129,21 @@ export default function AssemblyEditPanel({ projectId, planRevision, assemblyPat
         {edit.sound.path && <audio controls preload="metadata" src={mediaUrl(edit.sound.path)} aria-label="当前全片音轨试听" />}
         <AudioEditPanel projectId={projectId} audioAssets={edit.audio_assets} onBrowse={onBrowse} onComplete={() => { void load().catch(cause => setError(cause.message)); onPlanChanged(); }} />
       </section>
-      <section className="assembly-continuity" aria-label="自动检查（仅供参考）"><h3>自动检查（仅供参考）</h3><p>{edit.continuity?.note ?? 'CPU 媒体指标仅供人工审核参考，不会自动通过或阻止装配。'}</p>
+      <section className="assembly-continuity" aria-label="自动检查（仅供参考）"><h3>自动检查（仅供参考）</h3><p>{edit.continuity?.note ?? 'CPU 媒体指标仅供人工审核参考，不会自动通过或阻止装配。'}</p>{edit.continuity && continuityStatus(edit.continuity) !== 'ok' && <p role="status" className="assembly-continuity-unavailable">{continuityStatusLabel(edit.continuity)}：{edit.continuity.reason ?? '部分媒体指标未完成，不能视为检查通过。'}</p>}
         {edit.continuity?.joins?.length ? <div className="assembly-continuity-list">{edit.continuity.joins.map(row => {
           const differences = [
             ...Object.entries(row.video?.differences ?? {}).filter(([, value]) => value.different).map(([key]) => continuityDifferenceLabels[key] ?? key),
             ...Object.entries(row.audio?.differences ?? {}).filter(([, value]) => value.different).map(([key]) => continuityDifferenceLabels[key] ?? key),
           ];
-          return <div className="assembly-continuity-row" key={row.key}><strong>连续性 · {row.left_id} → {row.right_id}</strong><span className={row.available ? 'assembly-continuity-ok' : 'assembly-continuity-unavailable'}>{row.available ? '已测量' : '不可用'}</span><small>{differences.length ? `规格差异：${differences.join('、')}` : '未发现规格差异'}{row.warnings.length ? ` · ${row.warnings.join('；')}` : ''}{row.reason ? ` · ${row.reason}` : ''}</small></div>;
+          const status = continuityStatus(row);
+          return <div className="assembly-continuity-row" key={row.key}><strong>连续性 · {row.left_id} → {row.right_id}</strong><span className={status === 'ok' ? 'assembly-continuity-ok' : 'assembly-continuity-unavailable'}>{continuityStatusLabel(row)}</span><small>{differences.length ? `规格差异：${differences.join('、')}` : '未发现规格差异'}{row.warnings.length ? ` · ${row.warnings.join('；')}` : ''}{row.reason ? ` · ${row.reason}` : ''}</small></div>;
         })}</div> : <p>至少两个分镜才会形成自动检查接点。</p>}
       </section>
       <section><h3>相邻接点</h3><p>逐个查看前段末尾与后段开头，记录动作、构图和声音连续性。任一当前视频版本变化后，原结论会过期。</p>
         {edit.joins.length === 0 && <p>至少两个分镜才会形成接点。</p>}
         <div className="assembly-edit-joins">{edit.joins.map(join => <button type="button" key={join.key} className={openKey === join.key ? 'active' : ''} onClick={() => setOpenKey(openKey === join.key ? '' : join.key)}><span>{join.left_id} → {join.right_id}</span><small>{Number(join.cut_seconds ?? 0).toFixed(1)} 秒 · {statusLabel[join.status]}</small></button>)}</div>
         {selected && <div className="assembly-edit-review"><div className="assembly-edit-previews"><div><span>{selected.left_id} 末尾</span>{selected.signature.left_video ? <video ref={leftRef} controls preload="metadata" src={mediaUrl(selected.signature.left_video)} onLoadedMetadata={event => { event.currentTarget.currentTime = selected.left_preview_start; }} /> : <p>尚无当前视频</p>}</div><div><span>{selected.right_id} 开头</span>{selected.signature.right_video ? <video ref={rightRef} controls preload="metadata" src={mediaUrl(selected.signature.right_video)} onLoadedMetadata={event => { event.currentTarget.currentTime = 0; }} /> : <p>尚无当前视频</p>}</div></div>
-          {selectedContinuity && <div className="assembly-continuity-detail"><strong>自动检查结果（仅供参考）</strong>{selectedContinuity.available ? <><span>{selectedContinuity.frames?.mean_absolute_rgb_difference !== undefined ? `边界画面 RGB 差异 ${selectedContinuity.frames.mean_absolute_rgb_difference}` : '边界画面未测量'}{selectedContinuity.frames?.brightness_delta !== undefined ? ` · 亮度差 ${selectedContinuity.frames.brightness_delta}` : ''}</span>{selectedContinuity.audio?.boundary && <span>边界音频 RMS：前段 {selectedContinuity.audio.boundary.left?.rms ?? '—'}，后段 {selectedContinuity.audio.boundary.right?.rms ?? '—'}</span>}</> : <span>{selectedContinuity.reason ?? '媒体指标不可用'}</span>}{selectedContinuity.warnings.length > 0 && <small>提示：{selectedContinuity.warnings.join('；')}</small>}<small>{selectedContinuity.frames?.note ?? '启发式、非艺术判断；请以人工审核为准。'}</small></div>}
+          {selectedContinuity && <div className="assembly-continuity-detail"><strong>自动检查结果（仅供参考）</strong>{continuityStatus(selectedContinuity) === 'ok' ? <><span>{selectedContinuity.frames?.mean_absolute_rgb_difference !== undefined ? `边界画面 RGB 差异 ${selectedContinuity.frames.mean_absolute_rgb_difference}` : '边界画面未测量'}{selectedContinuity.frames?.brightness_delta !== undefined ? ` · 亮度差 ${selectedContinuity.frames.brightness_delta}` : ''}</span>{selectedContinuity.audio?.boundary && <span>边界音频 RMS：前段 {selectedContinuity.audio.boundary.left?.rms ?? '—'}，后段 {selectedContinuity.audio.boundary.right?.rms ?? '—'}</span>}</> : <span>{continuityStatusLabel(selectedContinuity)}：{selectedContinuity.reason ?? '媒体指标未完成，不能视为检查通过。'}</span>}{selectedContinuity.warnings.length > 0 && <small>提示：{selectedContinuity.warnings.join('；')}</small>}<small>{selectedContinuity.frames?.note ?? '启发式、非艺术判断；请以人工审核为准。'}</small></div>}
           <button className="button secondary compact" type="button" onClick={() => { if (leftRef.current) leftRef.current.currentTime = selected.left_preview_start; if (rightRef.current) rightRef.current.currentTime = 0; if (fullRef.current) fullRef.current.currentTime = Math.max(0, Number(selected.cut_seconds) - 1); }}>定位接点</button>
           {assemblyPath && <div className="assembly-edit-full"><span>已装配候选的同一接点</span><video ref={fullRef} controls preload="metadata" src={mediaUrl(assemblyPath)} /></div>}
           <label>连续性约束<input value={drafts[selected.key]?.constraint ?? ''} maxLength={2000} onChange={event => setDrafts(value => ({ ...value, [selected.key]: { ...value[selected.key], constraint: event.target.value } }))} placeholder="例如：人物仍面向画面右侧，雨声持续" /></label>
