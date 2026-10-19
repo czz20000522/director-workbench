@@ -38,7 +38,7 @@ EXPECTED_REMOTE_TOOLS = (
     'read_assembly_edit', 'review_assembly_join', 'set_assembly_sound',
     'preflight_assembly_edit', 'submit_keyframe', 'get_speech_capability',
     'submit_speech', 'get_submission_receipt', 'reconcile_generation',
-    'stop_generation', 'submit_audio_edit', 'get_media_capability',
+    'stop_generation', 'submit_audio_edit', 'submit_audio_master', 'get_media_capability',
     'create_silence', 'inspect_video', 'transcribe_audio', 'export_silent_video',
 )
 FORBIDDEN_REMOTE_TOOLS = {

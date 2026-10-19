@@ -6,17 +6,17 @@ import { chromium } from 'playwright';
 
 const fixtureRoot = process.argv[2];
 assert.ok(fixtureRoot, 'Pass the completed isolated test run directory');
-// The guard keeps rglob inside the machine runtime root, so it has to ask paths.py for that
-// root instead of repeating the literal: an override (DIRECTOR_DESKTOP_ROOT, or the runner's
-// --runtime/--desktop) is exactly how a fixture run is pointed at a substitute host, and a
-// literal silently rejects every one of those.
+// The guard keeps rglob inside the fixture runtime the runner selected. The runner may use
+// the product data root or a short --runtime override, so accept its DIRECTOR_TEST_RUNTIME
+// instead of assuming paths.RUNTIME_ROOT.
 const cases = JSON.parse(execFileSync('./.venv/Scripts/python.exe', ['-c', `
-import json,sys
+import json,os,sys
 from pathlib import Path
 sys.path.insert(0, str(Path.cwd()))
 import paths
 root = Path(sys.argv[1]).resolve()
-allowed = paths.RUNTIME_ROOT.resolve()
+override = os.environ.get('DIRECTOR_TEST_RUNTIME')
+allowed = Path(override).resolve() if override else paths.RUNTIME_ROOT.resolve()
 assert root.is_relative_to(allowed), f'Fixture root must be under {allowed}, got {root}'
 found = [json.loads(p.read_text(encoding='utf-8')) for p in root.rglob('guide-joins-browser.json')]
 assert found, 'Run tests/test_guide_joins.py first: no guide-joins-browser.json below the given root'

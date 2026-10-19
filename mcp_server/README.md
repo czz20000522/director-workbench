@@ -49,7 +49,7 @@ stdio 供服务器本机客户端或主动诊断使用，需要项目 Python 环
 | 单段/批次生成与原回执 | `submit_shot`、`submit_batch`、`get_submission_receipt`、`get_task` |
 | 停止、核对与恢复 | `stop_generation`、`reconcile_generation`、`resume_generation` |
 | 候选历史和显式采用 | `list_shot_versions`、`restore_shot_version`、`record_review`、`approve_candidate` |
-| 图片、声音与音频编辑 | `get_keyframe_capability`、`submit_keyframe`、`get_speech_capability`、`submit_speech`、`submit_audio_edit` |
+| 图片、声音与音频编辑 | `get_keyframe_capability`、`submit_keyframe`、`get_speech_capability`、`submit_speech`、`submit_audio_edit`、`submit_audio_master` |
 | 参考分析与人工校订 | `import_reference`、`read_reference`、`start_reference_analysis`、`correct_reference_artifact` |
 | 装配接点、声音和成片 | `read_assembly_edit`、`review_assembly_join`、`set_assembly_sound`、`preflight_assembly_edit`、`submit_assembly` |
 | 媒体加工和检查 | `get_media_capability`、`create_silence`、`inspect_video`、`transcribe_audio`、`export_silent_video` |

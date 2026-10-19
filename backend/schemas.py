@@ -386,6 +386,30 @@ class AudioEditRequest(BaseModel):
     background_offset_seconds: float = Field(default=0, ge=0, le=120, strict=True, allow_inf_nan=False)
 
 
+class AudioDuckingRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    threshold_db: float = Field(default=-24, ge=-60, le=0, strict=True, allow_inf_nan=False)
+    ratio: float = Field(default=4, ge=1, le=20, strict=True, allow_inf_nan=False)
+    attack_seconds: float = Field(default=.01, ge=.001, le=1, strict=True, allow_inf_nan=False)
+    release_seconds: float = Field(default=.2, ge=.01, le=2, strict=True, allow_inf_nan=False)
+
+
+class AudioMasterRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    source_asset_id: str = Field(min_length=1, max_length=160)
+    background_asset_id: str | None = Field(default=None, min_length=1, max_length=160)
+    idempotency_key: str = Field(min_length=1, max_length=160)
+    target_lufs: float = Field(default=-16, ge=-24, le=-8, strict=True, allow_inf_nan=False)
+    true_peak_dbtp: float = Field(default=-1, ge=-3, le=0, strict=True, allow_inf_nan=False)
+    fade_in_seconds: float = Field(default=0, ge=0, le=10, strict=True, allow_inf_nan=False)
+    fade_out_seconds: float = Field(default=0, ge=0, le=10, strict=True, allow_inf_nan=False)
+    trim_start_seconds: float = Field(default=0, ge=0, le=3600, strict=True, allow_inf_nan=False)
+    trim_duration_seconds: float | None = Field(default=None, gt=0, le=1800, strict=True, allow_inf_nan=False)
+    background_gain_db: float = Field(default=-12, ge=-60, le=12, strict=True, allow_inf_nan=False)
+    ducking: AudioDuckingRequest | None = None
+    pad_silence: StrictBool = False
+
+
 class AssemblyJoinReviewRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     expected_revision: StrictInt = Field(ge=0)
