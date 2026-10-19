@@ -22,6 +22,19 @@
 
 UI、HTTP 和 MCP 共用后端授权与任务记录。任务先冻结输入和归属，再进入执行器；产物登记为候选，审核和采用需显式操作。技术报告、任务成功或页面播放回执均不能替代人的内容验收。
 
+## 平台边界：确定性工具
+
+工作台是确定性工具，不是智能体。理解、判断、选择、改编、审核、采用与验收属于用户或其 Agent；工作台只存储、校验、渲染、对照、装配和记录。维护代码时遵守：
+
+- **不代选、不兜底**：缺少显式制作方案、workflow 或参考范围时返回结构化阻塞。准备度在无法把明确 workflow 解析到已安装方案时返回 `recipe_unresolved`；没有任何显式选择时返回 `stage_required`，并把 `installed_pipeline_stages`、`available_presets` 等事实写入 blocker 的 `options`，不按第一个可执行 stage 或默认配方继续。
+- **模型只产出候选**：模型结果命名为 `observations`、`model_candidates`、`draft_seed` 等，必须带 `provenance`、`user_status` 和待校订状态；不得自动写入 performance/prompt/计划，也不得自动审核或采用。
+- **事实而非推荐**：模板目录返回 `available_templates` 及 `installed`/`missing_models` 等事实，不返回 `recommended`、默认项或无依据排序。
+- **不宣称理解**：UI、API、MCP、文档和提示词只描述可观测事实与显式动作，不写“平台已理解/已分析/已改编/已推荐”。
+- **入口一致**：能由 HTTP/MCP 完成的能力必须有对应入口和回归测试，不能只留 UI。UI 是可选的人工接管层。
+- **保留显式路径**：调用方给出明确选择后，工作台仍完成生成、对照、装配和记录。
+
+新增或修改相关行为时，按 [HTTP API 指南](public-api-guide.md)与 MCP 说明同步更新合同，并补充边界回归（缺显式选择时不写计划、不建任务、不产生业务写入）。
+
 路由拆分只改变代码组织，不改变公开接口、幂等键、`needs_reconcile`、`operationId`、任务冻结或路由注册顺序。新增领域接口应在对应 `backend/routers/` 模块中实现，并通过 `app.py` 的既有注册位置接入；需要被旧测试或其他模块 monkeypatch 的名称继续由 `backend.app` 重新导出。
 
 `tools` 中也保留早期开发辅助脚本；部分默认工作流不随仓库分发，须先检查参数并提供实际输入，不能将无参数脚本当作新设备制作入口。正式创作由 UI/API/MCP 负责登记与执行。
@@ -71,17 +84,40 @@ npm run build
 .\run_tests.ps1 -Suite core
 ```
 
-`python` 应由维护者选择已安装的基础 Python；既有 `.venv` 不需要重建。前端构建执行 TypeScript 检查并输出 `dist`，不代表后端或 GPU 生成通过。Python 依赖已包含 MCP；[requirements-mcp.txt](../requirements-mcp.txt)提供同一依赖入口。`requirements-dev.txt` 只装 lint 工具，不进入生产环境。
+`python` 应由维护者选择已安装的基础 Python；既有 `.venv` 不需要重建。前端构建执行 TypeScript 检查并输出 `dist`，不代表后端或 GPU 生成通过。Python 依赖已包含 MCP；[requirements-mcp.txt](../requirements-mcp.txt)提供同一依赖入口。`requirements-dev.txt` 只装开发检查工具（ruff、pytest-cov、pytest-timeout），不进入生产环境。
 
-完整离线回归用 `run_tests.ps1 -Check`、`run_tests.ps1`。统一入口调用 [run_project_tests.py](../tools/run_project_tests.py)：`all`、`core`、`auk`、`browser` 是可选 suite；核心组在工作台 `.venv` 执行 pytest，AuK 组在 `ComfyUI-Shared/tools/AuK/.venv` 执行声音执行器 unittest。缺少 AuK 环境时完整检查失败，不能把核心组通过报告为完整通过，也不向 API 或 ComfyUI 基础环境安装模型依赖。报告和临时文件保存在工作台数据根的 `runtime` 下（默认 `D:/software/JetBrains/python_workspace/director-workbench-data/runtime`），不提交。
+完整离线回归用 `run_tests.ps1 -Check`、`run_tests.ps1`。统一入口调用 [run_project_tests.py](../tools/run_project_tests.py)：`all`、`core`、`auk`、`browser` 是完整回归/合并门的可选 suite；核心组在工作台 `.venv` 执行 pytest，AuK 组在 `ComfyUI-Shared/tools/AuK/.venv` 执行声音执行器 unittest。缺少 AuK 环境时完整检查失败，不能把核心组通过报告为完整通过，也不向 API 或 ComfyUI 基础环境安装模型依赖。报告和临时文件保存在工作台数据根的 `runtime` 下（默认 `D:/software/JetBrains/python_workspace/director-workbench-data/runtime`），不提交。
 
-本地没有单独名为 `fast` 的 PowerShell suite；fast core 是 CI 使用的 pytest 标记过滤。需要快速复现公开后端层时可直接运行：
+### 分层测试入口
+
+测试按改动边界分层，完整 `core`/`browser` 是合并门，不是每次编辑的默认成本：
+
+| suite | 内容 | 何时运行 |
+| --- | --- | --- |
+| `fast` | `tools/test_impact.toml` 中 `[fast]` 列出的纯单元/契约测试；不启动服务、媒体或浏览器，硬预算 60s | 每次编辑后的第一轮反馈 |
+| `affected` | 调用 [select_tests.py](../tools/select_tests.py)，只跑与 `--base`（默认 `origin/main`）以来改动相关的 pytest；`-WithBrowser` 额外跑选中的浏览器驱动 | 提交前或 PR 的受影响面 |
+| `core`、`browser` | 完整核心组与真实浏览器验收 | 合并、发布，或共享契约/依赖/CI 变更 |
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests tools/test_build_video_finish_workflow.py `
-  --ignore=tests/test_generate_auk_flash.py -q `
-  --basetemp <隔离临时目录> -m "not host_tool and not slow and not windows"
+.\run_tests.ps1 -Suite fast
+.\run_tests.ps1 -Suite affected              # 默认对比 origin/main，含未提交与未跟踪文件
+.\run_tests.ps1 -Suite affected -Base HEAD   # 只对比当前未提交改动
+.\run_tests.ps1 -Suite affected -WithBrowser # 同时跑 selector 选中的浏览器驱动
 ```
+
+选择器是确定性、可解释、fail-closed 的：测试文件变更只选自身；源码变更按 [test_impact.toml](../tools/test_impact.toml) 的 ownership 映射和 Python import 反向依赖选相关测试；核心 schema、路由聚合、认证/存储/任务入口、依赖清单、CI/发布与公共入口等共享契约自动升级为 full core；文档变更只跑公开源/链接门禁；前端改动只选挂载该组件的浏览器驱动；没有任何映射命中时不会静默跳过，而是升级到 full core/全部前端驱动并在输出中要求补映射。映射目标不存在（测试被删除或重命名）会作为配置错误报出，因此移动测试时必须同步更新映射。
+
+需要单独查看或调试选择结果时：
+
+```powershell
+.\.venv\Scripts\python.exe tools\select_tests.py --explain
+.\.venv\Scripts\python.exe tools\select_tests.py --json
+.\.venv\Scripts\python.exe tools\select_tests.py --base origin/main --check-config
+```
+
+pytest 通过 `pytest-timeout` 给每个测试设置 90s 硬超时，挂起按失败处理；`requirements-dev.txt` 安装该插件（`.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt`）。确实需要更久的测试用 `@pytest.mark.timeout(<秒>)` 显式放宽，不能靠移除超时让套件通过。
+
+CI 的公开边界 job 仍使用自己的标记过滤生成不依赖宿主工具的回归集；本地按上面的分层入口运行，两者通过同一份 pytest 断言保持行为一致。
 
 优先运行与修改相关的回归，再按交付范围执行完整入口。离线回归、在线业务、真实 GPU 输出与跨设备访问分别记录。
 
@@ -106,7 +142,7 @@ npm run build
 
 ### 公开仓库的 CI 门禁
 
-[public-source.yml](../.github/workflows/public-source.yml) 在 PR 与 `main` 上执行四个 job：`public-source` 检查公开源码白名单、敏感模式、Python 语法和文档相对链接；`python-lint` 运行 `ruff` 的非侵入规则（语法错误、未定义名称、断言误用）；`frontend-build` 执行 `npm ci && npm run build`；`core-tests` 在 Windows runner 上运行 fast core。
+[public-source.yml](../.github/workflows/public-source.yml) 在 PR 与 `main` 上执行四个 job：`public-source` 检查公开源码白名单、敏感模式、Python 语法、文档相对链接，并校验测试影响映射的目标仍存在（测试删除/重命名后映射过期会失败）；`python-lint` 运行 `ruff` 的非侵入规则（语法错误、未定义名称、断言误用）；`frontend-build` 执行 `npm ci && npm run build`；`core-tests` 在 Windows runner 上运行 fast core。
 
 CI 的 `core-tests` 使用 `pytest -m "not host_tool and not slow and not windows"`，覆盖不依赖本机 FFmpeg、ASR 解释器、ComfyUI 安装或 PowerShell/junction 的用例。[pyproject.toml](../pyproject.toml) 定义 `slow`、`host_tool`、`windows` 三个标记；本地 `run_tests.ps1 -Suite core` 仍运行完整核心组，标记只用于 CI 筛选，不改变断言或跳过结果。
 

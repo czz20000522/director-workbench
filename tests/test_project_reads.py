@@ -8,9 +8,13 @@ REAL_THREAD = threading.Thread
 
 
 def prepare(client):
-    assert client.post('/api/projects/create', json={'series': '测试', 'title': '另一个作品', 'project_id': 'second'}).status_code == 200
+    assert client.post('/api/projects/create', json={'creation_mode': 'advanced', 'series': '测试', 'title': '另一个作品', 'project_id': 'second'}).status_code == 200
     for project_id in ('preset-test', 'second'):
-        assert client.post(f'/api/projects/{project_id}/plan/segments', json={'segment_id': 'S01', 'duration_seconds': 5, 'prompt': project_id}).status_code == 200
+        installed = client.post(f'/api/projects/{project_id}/production-presets/h3-guided')
+        assert installed.status_code == 200, installed.text
+        workflow = installed.json()['project']['production_preset']['workflow']
+        assert client.post(f'/api/projects/{project_id}/plan/segments', json={
+            'segment_id': 'S01', 'duration_seconds': 5, 'prompt': project_id, 'workflow': workflow}).status_code == 200
         backend.append_project_record('creative_settings', {'values': {'intent': project_id}}, project_id=project_id)
         with backend.db() as connection:
             for index in range(3):

@@ -12,14 +12,29 @@ from pydantic import Field, StrictBool
 if __package__:
     from .creation_inputs import GenerationSettings
     from .models import ScriptScene, ShotChanges, ShotMaterials
+    from . import errors, media
 else:
     from creation_inputs import GenerationSettings
     from models import ScriptScene, ShotChanges, ShotMaterials
+    import errors, media
 
-def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, write_record: ToolAnnotations) -> None:
+def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, write_record: ToolAnnotations,
+             idempotent_write: ToolAnnotations) -> None:
     request = client.request
     project_path = client.project_path
     path_id = client.path_id
+
+    async def shape_tasks_result(result: dict[str, Any], project_id: str) -> dict[str, Any]:
+        if not client.remote or not result.get('ok') or not isinstance(result.get('data'), dict):
+            return result
+        result['data'] = await media.shape_tasks(client, project_id, result['data'])
+        return result
+
+    async def shape_task_result(result: dict[str, Any], project_id: str) -> dict[str, Any]:
+        if not client.remote or not result.get('ok') or not isinstance(result.get('data'), dict):
+            return result
+        result['data'] = await media.shape_task(client, project_id, result['data'])
+        return result
 
     @server.tool(annotations=read_only)
     async def list_projects() -> dict[str, Any]:
@@ -46,7 +61,7 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         return await request('GET', '/api/settings/guide', params={'project_id': project_id} if project_id else {})
 
     @server.tool(annotations=write_record)
-    async def update_guide_settings(expected_revision: int, changes: dict[str, Any]) -> dict[str, Any]:
+    async def update_guide_settings(expected_revision: Annotated[int, Field(strict=True, ge=0)], changes: dict[str, Any]) -> dict[str, Any]:
         """保存指南 status、project_id、route、completed_steps；服务端校验版本和作品归属。标记学习进度不代表作品审核通过。"""
         return await request('PATCH', '/api/settings/guide', json={**changes, 'expected_revision': expected_revision})
 
@@ -68,15 +83,18 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         return await request('POST', project_path(project_id) + '/production-presets/' + quote(preset_id, safe=''))
 
     @server.tool(annotations=write_record)
-    async def create_project(series: str, title: str, project_id: str | None = None) -> dict[str, Any]:
-        """创建空白作品，不切换人的当前作品。使用返回的实际 project.id；同名可能自动加后缀。请求结果不确定时先 list_projects 核对，不自动重发。创建后用 save_creative_draft 保存设定。"""
+    async def create_project(series: Annotated[str, Field(min_length=1, max_length=120)],
+                             title: Annotated[str, Field(min_length=1, max_length=160)],
+                             creation_mode: Literal['advanced'], project_id: str | None = None) -> dict[str, Any]:
+        """创建空白作品，不切换人的当前作品。必须显式提供 creation_mode='advanced'；auto 已移除，缺省会被拒绝。使用返回的实际 project.id；同名可能自动加后缀。请求结果不确定时先 list_projects 核对，不自动重发。创建后显式选择制作方案（configure_production_preset）再保存分镜。"""
         if project_id is not None: project_path(project_id)
         return await request('POST', '/api/projects/create', json={'series': series, 'title': title,
+            'creation_mode': creation_mode,
             **({'project_id':project_id} if project_id is not None else {}), 'select': False})
 
     @server.tool(annotations=read_only)
-    async def read_project(project_id: str, section: Literal['manifest', 'plan', 'state', 'pipeline', 'reusable-materials', 'creative-template'] = 'manifest') -> dict[str, Any]:
-        """读取作品档案、分镜、审核、制作步骤、素材；creative-template 返回可沿用的系列设定及来源版本，不修改作品。"""
+    async def read_project(project_id: str, section: Literal['manifest', 'plan', 'state', 'pipeline', 'reusable-templates', 'reusable-materials', 'creative-template'] = 'manifest') -> dict[str, Any]:
+        """读取作品档案、分镜、审核、制作步骤、素材与可用模板；reusable-templates 返回事实清单和是否已配置，不含推荐或默认选择。creative-template 返回可沿用的系列设定及来源版本，不修改作品。"""
         return await request('GET', project_path(project_id) + ('' if section == 'manifest' else '/' + section))
 
     @server.tool(annotations=read_only)
@@ -101,27 +119,40 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
             'scenes': [scene.model_dump() for scene in scenes],
         })
 
-    @server.tool(annotations=read_only)
-    async def list_tasks(project_id: str, limit: int = 50, offset: int = 0) -> dict[str, Any]:
-        """分页读取指定作品的任务。使用 next_offset 继续；未知状态不等于失败。"""
-        return await request('GET', project_path(project_id) + '/tasks', params={'limit': limit, 'offset': offset})
+    @server.tool(annotations=read_only, meta=errors.PAGINATION_META)
+    async def list_tasks(project_id: str,
+                         limit: Annotated[int, Field(strict=True, ge=1, le=100)] = 50,
+                         offset: Annotated[int, Field(strict=True, ge=0)] = 0) -> dict[str, Any]:
+        """分页读取指定作品的任务。使用 next_offset 继续；未知状态不等于失败。
+        远程回执保留任务/素材 ID 和状态，以受控 media 引用替代服务器路径。
+        """
+        result = await request('GET', project_path(project_id) + '/tasks', params={'limit': limit, 'offset': offset})
+        return await shape_tasks_result(result, project_id)
 
     @server.tool(annotations=read_only)
     async def get_task(project_id: str, task_id: str) -> dict[str, Any]:
-        """读取一个任务的状态、冻结输入与结果；任务必须属于指定作品。"""
+        """读取一个任务的状态、冻结输入与结果；任务必须属于指定作品。
+        远程回执保留任务/素材 ID 和状态，以受控 media 引用替代服务器路径。
+        """
         if not task_id or '/' in task_id or '\\' in task_id or task_id in {'.', '..'}:
             raise ValueError('必须提供有效任务 ID')
-        return await request('GET', project_path(project_id) + '/tasks/' + quote(task_id, safe=''))
+        result = await request('GET', project_path(project_id) + '/tasks/' + quote(task_id, safe=''))
+        return await shape_task_result(result, project_id)
 
-    @server.tool(annotations=read_only)
+    @server.tool(annotations=read_only, meta=errors.PAGINATION_META)
     async def list_shot_versions(
         project_id: str, segment_id: str,
         limit: Annotated[int, Field(strict=True, ge=1, le=100)] = 20,
         offset: Annotated[int, Field(strict=True, ge=0)] = 0,
     ) -> dict[str, Any]:
-        """分页读取分镜生成历史及同源inspection/参考差异、实际时长、comparison_sources和change_impact。generated_at为生成完成时间UTC，snapshot_complete=false表示旧任务部分记录；技术探测不等于审核采用，读取不生成。"""
+        """分页读取分镜生成历史及同源inspection/参考差异、实际时长、comparison_sources和change_impact。generated_at为生成完成时间UTC，snapshot_complete=false表示旧任务部分记录；技术探测不等于审核采用，读取不生成。
+        远程候选以 media/candidate_ref 受控引用返回；采用时把该 candidate_ref 传给 approve_candidate，不传服务器路径。
+        """
         path = project_path(project_id) + '/segments/' + path_id(segment_id, '分镜') + '/versions'
-        return await request('GET', path, params={'limit': limit, 'offset': offset})
+        result = await request('GET', path, params={'limit': limit, 'offset': offset})
+        if client.remote and result.get('ok') and isinstance(result.get('data'), dict):
+            result['data'] = await media.shape_versions(client, project_id, result['data'])
+        return result
 
     @server.tool(annotations=write_record)
     async def restore_shot_version(
@@ -134,10 +165,14 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         return await request('POST', path, json={'expected_plan_revision': expected_plan_revision})
 
     @server.tool(annotations=read_only)
-    async def preflight(project_id: str, asset_id: str, stage_id: str = 'auto', values: dict[str, Any] | None = None) -> dict[str, Any]:
-        """预检已保存分镜，不生成；默认由服务端按分镜输入选择实际方式，无需安装方案或猜步骤。高级请求可指定stage_id。"""
+    async def preflight(project_id: str, asset_id: Annotated[str, Field(min_length=1, max_length=160)],
+                        stage_id: Annotated[str, Field(min_length=1, max_length=120)],
+                        values: dict[str, Any] | None = None) -> dict[str, Any]:
+        """预检已保存分镜，不生成。必须显式提供 stage_id（来自 read_project 的 pipeline 或已安装方案）；自动方案已移除，缺省会被拒绝。"""
         if not stage_id or '/' in stage_id or '\\' in stage_id or stage_id in {'.', '..'}:
             raise ValueError('必须提供有效步骤 ID')
+        if stage_id == 'auto':
+            raise ValueError('自动制作方案已移除；请显式选择制作步骤')
         return await request('POST', project_path(project_id) + '/pipeline/' + quote(stage_id, safe='') + '/validate', json={'asset_id': asset_id, 'values': values or {}})
 
     @server.tool(annotations=write_record)
@@ -151,12 +186,17 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
                              json={'task_id': task_id, 'expected_revision': expected_revision, 'dry_run': dry_run})
 
     @server.tool(annotations=write_record)
-    async def save_creative_draft(project_id: str, expected_revision: int, values: dict[str, Any]) -> dict[str, Any]:
+    async def save_creative_draft(project_id: str, expected_revision: Annotated[int, Field(strict=True, ge=0)],
+                                  values: dict[str, Any]) -> dict[str, Any]:
         """保存创作草稿供人或 Agent 接续。先读取 state.creative 的 revision（不存在为 0）；冲突须重新读取比较。不会批准制作。"""
         return await request('POST', project_path(project_id) + '/creative', json={'expected_revision': expected_revision, 'values': values, 'status': 'draft', 'source': 'director-mcp'})
 
     @server.tool(annotations=write_record)
-    async def record_review(project_id: str, asset_id: str, stage: Literal['sample', 'finish', 'final'], expected_revision: int, note: str, status: Literal['pending_review', 'changes_requested'] = 'pending_review', candidate_ref: str | None = None) -> dict[str, Any]:
+    async def record_review(project_id: str, asset_id: str, stage: Literal['sample', 'finish', 'final'],
+                            expected_revision: Annotated[int, Field(strict=True, ge=0)],
+                            note: Annotated[str, Field(max_length=4000)],
+                            status: Literal['pending_review', 'changes_requested'] = 'pending_review',
+                            candidate_ref: Annotated[str | None, Field(max_length=1000)] = None) -> dict[str, Any]:
         """记录候选的初审意见或退回修改，不执行最终采用。版本取 state.reviews[asset_id][stage]，不存在为 0；409 后比较更新，不自动重发。"""
         return await request('POST', project_path(project_id) + '/reviews', json={'asset_id': asset_id, 'stage': stage, 'expected_revision': expected_revision, 'note': note, 'status': status, 'candidate_ref': candidate_ref, 'source': 'director-mcp'})
 
@@ -184,39 +224,54 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
             'note': note, 'confirm_adoption': confirm_adoption})
 
     @server.tool(annotations=write_record)
-    async def update_shot(project_id: str, asset_id: str, expected_revision: int, changes: ShotChanges) -> dict[str, Any]:
-        """修改已有分镜。版本来自 read_project(section='plan').revision；只提交需要修改的字段。素材路径使用作品返回的登记引用，不猜测路径。关联场次在 changes 传 script_scene_id 和 read_script 的 expected_script_revision；空串解除关联。不提交生成。"""
+    async def update_shot(project_id: str, asset_id: str, expected_revision: Annotated[int, Field(strict=True, ge=0)],
+                          changes: ShotChanges) -> dict[str, Any]:
+        """修改已有分镜。版本来自 read_project(section='plan').revision；只提交需要修改的字段。workflow/preset_id 必须显式选择已安装方案；generation 只接受参数（mode 已移除）。素材路径使用作品返回的登记引用，不猜测路径。关联场次在 changes 传 script_scene_id 和 read_script 的 expected_script_revision；空串解除关联。不提交生成。"""
         if not asset_id or asset_id in {'.', '..'} or '/' in asset_id or '\\' in asset_id:
             raise ValueError('必须提供有效分镜 ID')
         patch = changes.model_dump(exclude_unset=True, exclude_none=True)
         if 'script_scene_id' in patch and 'expected_script_revision' not in patch:
             raise ValueError('关联或解除场次需要 expected_script_revision，请先 read_script')
         if not patch:
-            return {'ok': False, 'error': {'code': 'empty_changes', 'message': '至少提供一个分镜修改字段', 'retryable': False}}
+            return errors.error('empty_changes', '至少提供一个分镜修改字段', kind='argument')
         return await request('PATCH', project_path(project_id) + '/plan/segments/' + quote(asset_id, safe=''), json={**patch, 'expected_revision': expected_revision})
 
     @server.tool(annotations=write_record)
-    async def arrange_shot(project_id: str, asset_id: str, expected_revision: int, operation: Literal['copy', 'move', 'split', 'merge', 'merge_range'], target_id: str | None = None, before_id: str | None = None, split_at_seconds: float | None = None) -> dict[str, Any]:
+    async def arrange_shot(project_id: str, asset_id: str, expected_revision: Annotated[int, Field(strict=True, ge=0)],
+                           operation: Literal['copy', 'move', 'split', 'merge', 'merge_range'],
+                           target_id: str | None = None, before_id: str | None = None,
+                           split_at_seconds: Annotated[float | None, Field(gt=0, le=600)] = None) -> dict[str, Any]:
         """整理制作分镜：copy 复制；move 用 before_id 指定插入位置（__end__ 表示末尾）；split 用 split_at_seconds 指定镜内拆分时间；merge 用 target_id 指定相邻分镜；merge_range 将当前分镜至 target_id 的连续范围一次合并（目标必须在当前之后）。版本取 plan.revision，必须提供。操作可能使候选和审核过期，不生成视频；回执不确定先读取计划，禁止盲目重试。"""
         if not asset_id or asset_id in {'.', '..'} or '/' in asset_id or '\\' in asset_id:
             raise ValueError('必须提供有效分镜 ID')
         supplied = {key: value for key, value in {'target_id': target_id, 'before_id': before_id, 'split_at_seconds': split_at_seconds}.items() if value is not None}
         required = {'copy': set(), 'move': {'before_id'}, 'split': {'split_at_seconds'}, 'merge': {'target_id'}, 'merge_range': {'target_id'}}[operation]
         if set(supplied) != required:
-            return {'ok': False, 'error': {'code': 'invalid_operation_arguments', 'message': '仅提供当前操作需要的参数：move=before_id，split=split_at_seconds，merge/merge_range=target_id，copy=无', 'retryable': False}}
+            return errors.error('invalid_operation_arguments', '仅提供当前操作需要的参数：move=before_id，split=split_at_seconds，merge/merge_range=target_id，copy=无', kind='argument')
         return await request('POST', project_path(project_id) + '/plan/segments/' + quote(asset_id, safe='') + '/operate', json={'operation': operation, 'expected_revision': expected_revision, **supplied})
 
     @server.tool(annotations=write_record)
-    async def create_shot(project_id: str, segment_id: str, expected_revision: int, duration_seconds: float, prompt: str = '', performance: str = '', materials: ShotMaterials | None = None,
+    async def create_shot(project_id: str, segment_id: Annotated[str, Field(min_length=1, max_length=160)],
+                          expected_revision: Annotated[int, Field(strict=True, ge=0)],
+                          duration_seconds: Annotated[float, Field(gt=0, le=600)],
+                          prompt: Annotated[str, Field(max_length=100000)] = '',
+                          performance: Annotated[str, Field(max_length=1000)] = '',
+                          materials: ShotMaterials | None = None,
                           script_scene_id: Annotated[str | None, Field(max_length=160)] = None,
                           expected_script_revision: Annotated[int | None, Field(strict=True, ge=0)] = None,
-                          generation: GenerationSettings | None = None) -> dict[str, Any]:
-        """在作品末尾添加分镜草案，不生成媒体。先读取 plan.revision；使用返回的实际 segment.id 接续。旧版本冲突时先核对分镜，不能换最新版本盲目重试；首尾帧等可随后 update_shot。关联场次需 script_scene_id 和 read_script 的 expected_script_revision；duration_seconds 单独指定镜头时长，不复制整场时长。"""
+                          generation: GenerationSettings | None = None,
+                          workflow: Annotated[str | None, Field(max_length=500)] = None,
+                          preset_id: Annotated[str | None, Field(max_length=120)] = None) -> dict[str, Any]:
+        """在作品末尾添加分镜草案，不生成媒体。必须显式选择已安装的 workflow 或 preset_id；未指定时使用作品已明确安装的制作方案，作品没有方案时返回结构化阻塞和可选项，不写计划。先读取 plan.revision；使用返回的实际 segment.id 接续。旧版本冲突时先核对分镜，不能换最新版本盲目重试；首尾帧等可随后 update_shot。关联场次需 script_scene_id 和 read_script 的 expected_script_revision；duration_seconds 单独指定镜头时长，不复制整场时长。"""
         if script_scene_id is not None and expected_script_revision is None:
             raise ValueError('关联场次需要 expected_script_revision，请先 read_script')
         references = materials.model_dump(exclude_unset=True, exclude_none=True) if materials else {}
         if generation is not None:
-            references['generation'] = generation.model_dump()
+            references['generation'] = generation.model_dump(exclude_unset=True)
+        if workflow is not None:
+            references['workflow'] = workflow
+        if preset_id is not None:
+            references['preset_id'] = preset_id
         if script_scene_id is not None:
             references.update(script_scene_id=script_scene_id, expected_script_revision=expected_script_revision)
         return await request('POST', project_path(project_id) + '/plan/segments', json={'segment_id': segment_id, 'expected_revision': expected_revision, 'duration_seconds': duration_seconds, 'prompt': prompt, 'performance': performance, **references})
@@ -226,5 +281,5 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         """把参考作品素材复制并登记到目标作品。先读取来源作品 reusable-materials 获取当前素材 ID。返回 registered 资产记录数组（图片引用为 image_path，音频/视频引用为 sources.A）与 already_registered 数量；已登记时可读目标 manifest 的 reused_from 找到副本。副本不继承审核结论，源素材变化时需重新读取列表。"""
         project_path(source_project_id)
         if not 1 <= len(material_ids) <= 128:
-            return {'ok': False, 'error': {'code': 'invalid_material_count', 'message': '每次选择 1 至 128 个素材', 'retryable': False}}
+            return errors.error('invalid_material_count', '每次选择 1 至 128 个素材', kind='argument')
         return await request('POST', project_path(project_id) + '/materials/reuse', json={'source_project_id': source_project_id, 'material_ids': material_ids})

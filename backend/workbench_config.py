@@ -84,7 +84,7 @@ DIRECTOR_WORKSPACES_ROOT = STORAGE_ROOTS['workspaces']
 PIPELINE_INPUT_OVERRIDES: dict[str, list[dict[str, Any]]] = {}
 SEGMENT_GENERATION_FIELDS = (
     "duration_seconds", "location", "shot_size", "camera", "wardrobe",
-    "performance", "prompt", "workflow", "keyframes", "audio", "reference_asset_id", "generation", "resolved_generation",
+    "performance", "prompt", "workflow", "keyframes", "audio", "reference_asset_id", "generation",
 )
 MATERIAL_EXTENSIONS = {
     "video": {".mp4", ".mov", ".webm", ".mkv", ".m4v"},

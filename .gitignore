@@ -1,6 +1,7 @@
 # Source allowlist. New public files must be reviewed and added explicitly.
 /*
-!/CODEX_REPORT.md
+# Test scratch is project-owned and local-only; never publish it.
+/.t/
 !/start-director-services.ps1
 !/start-director-services.cmd
 !/stop-director-services.cmd
@@ -43,6 +44,7 @@
 !/backend/routers/queue_scheduler.py
 !/backend/routers/events_media.py
 !/backend/assembly_continuity.py
+!/backend/assembly_continuity_check.py
 !/backend/audio_master_tasks.py
 !/contracts/
 /contracts/*
@@ -70,6 +72,8 @@
 !/tests/
 /tests/*
 !/tests/test_assembly_continuity.py
+!/tests/test_assembly_continuity_check.py
+!/tests/test_assembly_adoption_gate.py
 !/tests/test_secure_files.py
 !/tests/conftest.py
 !/tests/support.py
@@ -77,6 +81,11 @@
 !/tools/
 /tools/*
 !/tools/qwen_image_t2i.py
+# Test-impact selection: the tool, its impact map and their contract tests. The map
+# names only repository-relative public paths.
+!/tools/select_tests.py
+!/tools/test_impact.toml
+!/tests/test_test_impact.py
 !/src/quick-create.css
 !/.agents/skills/aigc-video-production/assets/workflows/
 /.agents/skills/aigc-video-production/assets/workflows/*
@@ -149,6 +158,7 @@
 !/index.html
 !/mcp_server/README.md
 !/mcp_server/creation_inputs.py
+!/mcp_server/errors.py
 !/mcp_server/server.py
 !/package-lock.json
 !/package.json
@@ -195,7 +205,7 @@
 !/start_backend.ps1
 !/start_private_workbench.ps1
 !/start_workbench.ps1
-!/tests/automatic_creation_bridge.py
+!/tests/explicit_creation_bridge.py
 !/tests/test_mcp_access_config.py
 !/tests/test_remote_mcp.py
 !/tests/test_analysis_recovery.py
@@ -207,8 +217,9 @@
 !/tests/test_audio_edit.py
 !/tests/test_audio_edit_api.py
 !/tests/test_audio_edit_tasks.py
-!/tests/test_automatic_creation.py
+!/tests/test_explicit_creation.py
 !/tests/test_backend_module_split.py
+!/tests/test_boundary_regression.py
 !/tests/test_candidate_adoption.py
 !/tests/test_comfy_execution_reporting.py
 !/tests/test_comfy_media_staging.py
@@ -269,6 +280,7 @@
 !/tests/test_qwen_reference_conditioning.py
 !/tests/test_readiness.py
 !/tests/test_reference_decompose.py
+!/tests/test_reference_explicit.py
 !/tests/test_reference_queue_safety.py
 !/tests/test_reference_revision.py
 !/tests/test_reference_semantic.py
@@ -347,12 +359,12 @@
 
 # Browser acceptance driven by tools/run_project_tests.py --suite browser.
 # Most listed drivers bundle the front end, intercept their own HTTP and use
-# isolated synthetic media. automatic_creation instead drives
+# isolated synthetic media. explicit_creation instead drives
 # the real local ASGI app through their bridge with seeded synthetic accounts
 # and fixtures, writing only under the runtime directory. None reads a private
 # path, personal account or work asset.
 !/tests/assembly_edit.browser.mjs
-!/tests/automatic_creation.browser.mjs
+!/tests/explicit_creation.browser.mjs
 !/tests/generation_stage.browser.mjs
 !/tests/guide_queue.browser.mjs
 !/tests/guide_review.browser.mjs
@@ -379,4 +391,10 @@
 !/mcp_server/tools_generation.py
 !/mcp_server/tools_media.py
 !/mcp_server/tools_reference.py
+!/mcp_server/media.py
 !/backend/task_store.py
+# Project-scoped short-lived media references; no server path leaves the remote API.
+!/backend/media_refs.py
+!/backend/routers/media_access.py
+!/tests/test_mcp_media_delivery.py
+!/tests/test_mcp_contract.py

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import json
 import math
 import os
@@ -35,8 +36,8 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictInt, field_validator, model_validator
-from . import production_presets, background_jobs, speech, keyframes, audio_edit_tasks, audio_master_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, assembly_continuity, guide, readiness, task_scheduler, creative_inspection, shot_creation
-from . import output_resolution, enhancement, task_store
+from . import production_presets, background_jobs, speech, keyframes, audio_edit_tasks, audio_master_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, assembly_continuity, assembly_continuity_check, guide, readiness, task_scheduler, creative_inspection
+from . import output_resolution, enhancement, task_store, media_refs
 import av
 import paths
 from .private_auth import SecurityHeaders, current_principal
@@ -515,7 +516,7 @@ def blank_project_manifest(project_id: str, series: str, title: str, workspace: 
         "schema_version": 1, "id": project_id, "series": series.strip() or "未命名系列", "title": title.strip() or "未命名作品",
         "tag": "新建项目", "eyebrow": "导演工作台 / 新作品", "subtitle": "从资源登记和制作步骤开始规划。",
         "workspace_root": root_relative_path(workspace), "plan_path": root_relative_path(plan_path), "pipeline_contract": "contracts/pipeline-inputs.json",
-        "assembly_asset_id": "MASTER", "default_task_asset_id": "", "media": {}, "assets": [], "pipeline": [], "task_templates": {},
+        "assembly_asset_id": "MASTER", "media": {}, "assets": [], "pipeline": [], "task_templates": {},
         "assembly": {"filename_prefix": f"导演工作台工作目录/{project_id}/assembly"},
     }
 
@@ -1063,16 +1064,6 @@ def prepare_pipeline_payload(payload: dict[str, Any], stage_id: str, values: dic
         segment = next((item for item in document.get("segments", []) if item.get("id") == payload.get("asset_id")), None)
         if segment is None:
             raise HTTPException(422, "请先保存分镜，再配置生成参数")
-        if (segment.get('generation') or {}).get('mode') == 'auto':
-            _, selected_stage = select_preset_execution(project, segment.get('workflow'), None)
-            if stage_id != selected_stage:
-                raise HTTPException(422, '自动创作方式由已保存输入决定；请预检当前创作输入。')
-            capability = production_presets.catalog(SHARED_ROOT / 'models', h3_preset_id)
-            if not capability.get('available') or capability.get('missing_models'):
-                raise HTTPException(422, {'code': 'creation_resources_missing',
-                    'message': '当前创作所需模型或制作文件不可用，请联系管理员补齐；分镜已保存，不会自动下载。',
-                    'missing_models': capability.get('missing_models', []),
-                    'blockers': [{'code': 'creation_resources_missing', 'message': '所需制作资源不可用，请联系管理员补齐后重试。', 'action': 'contact_administrator'}]})
         defaults = {"first-frame": (segment.get("keyframes") or {}).get("first"), "last-frame": (segment.get("keyframes") or {}).get("last"),
                     "guide": (segment.get("audio") or {}).get("guide"), "prompt": segment.get("prompt"),
                     "duration": segment.get("duration_seconds"), "seed": (segment.get('generation') or {}).get('seed', 42),
@@ -1154,8 +1145,7 @@ def prepare_pipeline_payload(payload: dict[str, Any], stage_id: str, values: dic
     prepared["parameters"] = parameters
     prepared["materials"] = materials
     prepared["executed_prompt"] = executed_prompt
-    if 'segment' in locals() and segment.get('resolved_generation'):
-        prepared['resolved_generation'] = segment['resolved_generation']
+    if 'segment' in locals() and isinstance(segment, dict):
         settings = segment.get('generation') or {}
         resolution = settings.get('output_resolution', 'native')
         if resolution != 'native':
@@ -1163,7 +1153,7 @@ def prepare_pipeline_payload(payload: dict[str, Any], stage_id: str, values: dic
                 output_resolution.require_available(resolution)
             except ValueError as exc:
                 raise HTTPException(422, str(exc)) from exc
-            prepared['output_size'] = {'resolution': resolution, 'aspect_ratio': settings['aspect_ratio']}
+            prepared['output_size'] = {'resolution': resolution, 'aspect_ratio': settings.get('aspect_ratio', '16:9')}
     prepared["_graph_bindings"] = bindings
     if h3_preset_id:
         prepared['h3_duration'] = {
@@ -1252,7 +1242,6 @@ def freeze_task_payload(payload: dict[str, Any], *, project_id: str) -> dict[str
             "parameters": dict(frozen.get("parameters") or {}),
             "materials": dict(frozen.get("materials") or {}),
             "h3_duration": frozen.get("h3_duration"),
-            "resolved_generation": frozen.get("resolved_generation"),
             "output_size": frozen.get("output_size"),
             "creative_inspection": frozen.get("creative_inspection"),
             "pipeline_stage_id": frozen.get("pipeline_stage_id"),
@@ -1371,9 +1360,9 @@ def segment_candidate_identity(segment: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def segment_review_binding(segment: dict[str, Any], reference: str) -> dict[str, Any]:
+def segment_review_binding(segment: dict[str, Any], reference: str, project_id: str | None = None) -> dict[str, Any]:
     """Bind the explicitly selected, visible candidate to its current task."""
-    candidate = adoption_candidate_path(reference)
+    candidate = adoption_candidate_path(reference, project_id)
     video = segment.get('video') or {}
     selected = {'path': video.get('path'), 'prompt_id': segment.get('comfyui_task_id'),
                 'version_task_id': segment.get('current_version_task_id')}
@@ -1388,6 +1377,137 @@ def segment_review_binding(segment: dict[str, Any], reference: str) -> dict[str,
             or not (selected.get('version_task_id') or selected.get('prompt_id'))):
         raise HTTPException(409, '审核候选已变化或缺少任务身份，请重新读取当前作品后再审核')
     return {'current': segment_candidate_identity(segment), 'selected': selected}
+
+
+def adoption_file_identity(path: Path) -> dict[str, Any]:
+    """Freeze the registered candidate identity used by the assembly gate."""
+    stat = path.stat()
+    return {'path': str(path), 'size_bytes': stat.st_size, 'modified_ns': stat.st_mtime_ns}
+
+
+def adoption_segment_signature(document: dict[str, Any], asset_id: str) -> str | None:
+    """Hash only the adopted segment's own assembly-relevant fields.
+
+    A plan revision changes whenever any shot is added or edited; that must not
+    invalidate an untouched shot's adoption. The signature changes only when this
+    segment's duration, order, current candidate or task identity changes.
+    """
+    segment = next((item for item in document.get('segments', [])
+                    if isinstance(item, dict) and str(item.get('id')) == asset_id), None)
+    if segment is None:
+        return None
+    video = segment.get('video') if isinstance(segment.get('video'), dict) else {}
+    alternate = video.get('rework_candidate') or video.get('finish_review') or {}
+    payload = {
+        'id': asset_id,
+        'duration_seconds': segment.get('duration_seconds'),
+        'start_seconds': float(segment.get('start_seconds') or 0),
+        'video_path': video.get('path'),
+        'current_version_task_id': segment.get('current_version_task_id') or segment.get('comfyui_task_id'),
+        'alternate_path': alternate.get('path') if isinstance(alternate, dict) else None,
+        'alternate_task_id': alternate.get('task_id') or alternate.get('prompt_id') if isinstance(alternate, dict) else None,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
+
+
+def adoption_binding_for_review(document: dict[str, Any], asset_id: str, candidate_ref: str,
+                                plan_revision: int, assembly_asset_id: str = 'MASTER',
+                                project_id: str | None = None) -> dict[str, Any]:
+    candidate = adoption_candidate_path(candidate_ref, project_id)
+    if not candidate.is_file():
+        raise HTTPException(409, '采用候选文件不存在，请重新读取当前作品')
+    segment = next((item for item in document.get('segments', [])
+                    if isinstance(item, dict) and str(item.get('id')) == asset_id), None)
+    if segment is not None:
+        binding = segment_review_binding(segment, candidate_ref, project_id)
+        selected = binding['selected']
+        version_task_id = selected.get('version_task_id')
+        task_id = version_task_id or selected.get('prompt_id')
+    elif asset_id == assembly_asset_id:
+        assembly = document.get('assembly') or {}
+        version_task_id = assembly.get('prompt_id')
+        task_id = version_task_id
+    else:
+        version_task_id = None
+        task_id = None
+    return {
+        'task_id': task_id,
+        'version_task_id': version_task_id,
+        'plan_revision': plan_revision,
+        'segment_signature': adoption_segment_signature(document, asset_id),
+        'file_identity': adoption_file_identity(candidate),
+    }
+
+
+def assembly_adoption_blockers(manifest: dict[str, Any], document: dict[str, Any]) -> list[dict[str, Any]]:
+    """Require every assembled segment to reference one current explicit adoption."""
+    project_id = str(manifest['id'])
+    state = build_project_state(project_id)
+    reviews = state.get('reviews') or {}
+    revision = int(document.get('revision', 0) or 0)
+    blockers: list[dict[str, Any]] = []
+    for segment in document.get('segments', []):
+        if not isinstance(segment, dict) or not segment.get('id'):
+            continue
+        asset_id = str(segment['id'])
+        records = reviews.get(asset_id) or {}
+        review = next((records.get(stage) for stage in ('finish', 'sample')
+                       if isinstance(records.get(stage), dict) and records[stage].get('status') == 'approved'), None)
+        base = {'dependency': asset_id, 'object': {'kind': 'segment', 'id': asset_id}}
+        if not review or review.get('source') != 'explicit-adoption' or not isinstance(review.get('adoption_binding'), dict):
+            blockers.append({**base, 'code': 'adoption_required',
+                             'message': f'{asset_id} 尚未有带候选身份的明确采用记录。'})
+            continue
+        binding = review['adoption_binding']
+        if binding.get('segment_signature') != adoption_segment_signature(document, asset_id):
+            blockers.append({**base, 'code': 'adoption_plan_stale',
+                             'message': f'{asset_id} 的分镜内容、时长或当前候选已变化；请重新采用。'})
+            continue
+        file_identity = binding.get('file_identity') or {}
+        try:
+            candidate = resolve_registered_path(str(file_identity.get('path') or ''))
+            current_path = resolve_registered_path(str((segment.get('video') or {}).get('path') or ''))
+            stat = candidate.stat()
+        except (HTTPException, ValueError, OSError):
+            candidate = None
+            current_path = None
+            stat = None
+        current_task_id = segment.get('current_version_task_id') or segment.get('comfyui_task_id')
+        video = segment.get('video') or {}
+        alternate = video.get('rework_candidate') or video.get('finish_review') or {}
+        if alternate.get('path') and candidate is not None and same_registered_media(str(alternate['path']), str(candidate)):
+            current_task_id = alternate.get('task_id') or alternate.get('prompt_id')
+            current_path = candidate
+        if (candidate is None or current_path is None or candidate != current_path or not candidate.is_file()
+                or file_identity.get('size_bytes') != stat.st_size
+                or file_identity.get('modified_ns') != stat.st_mtime_ns):
+            blockers.append({**base, 'code': 'adoption_candidate_changed',
+                             'message': f'{asset_id} 的采用候选文件或路径已变化，请重新采用当前候选。'})
+            continue
+        version_task_id = binding.get('version_task_id') or binding.get('task_id')
+        if not version_task_id or version_task_id != current_task_id:
+            blockers.append({**base, 'code': 'adoption_version_stale',
+                             'message': f'{asset_id} 的采用记录与当前生成版本不一致，请重新采用当前版本。'})
+    return blockers
+
+
+def bind_explicit_assembly_candidates(document: dict[str, Any], manifest: dict[str, Any]) -> None:
+    """Apply only the candidates already proven by the explicit adoption gate."""
+    state = build_project_state(str(manifest['id']))
+    reviews = state.get('reviews') or {}
+    for segment in document.get('segments', []):
+        if not isinstance(segment, dict) or not segment.get('id'):
+            continue
+        records = reviews.get(str(segment['id'])) or {}
+        review = next((records.get(stage) for stage in ('finish', 'sample')
+                       if isinstance(records.get(stage), dict)
+                       and records[stage].get('status') == 'approved'
+                       and records[stage].get('source') == 'explicit-adoption'
+                       and isinstance(records[stage].get('adoption_binding'), dict)), None)
+        if not review or not review.get('candidate_ref'):
+            continue
+        candidate = adoption_candidate_path(str(review['candidate_ref']), str(manifest.get('id') or '') or None)
+        segment['video'] = {**(segment.get('video') or {}), 'path': str(candidate)}
 
 
 def stale_candidate_reviews(project_id: str, asset_id: str, stages: tuple[str, ...], note: str) -> None:
@@ -1878,7 +1998,7 @@ def assembly_builder_blocker(manifest: dict[str, Any] | None = None):
     return None
 
 
-def build_assembly_snapshot(manifest: dict[str, Any] | None = None) -> Path:
+def build_assembly_snapshot(manifest: dict[str, Any] | None = None, *, bind_adoptions: bool = False) -> Path:
     """Materialize an assembly graph from the current plan before submission.
 
     Segment regeneration updates the plan's video path. Reusing the checked-in
@@ -1900,6 +2020,8 @@ def build_assembly_snapshot(manifest: dict[str, Any] | None = None) -> Path:
     module = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)
     document = json.loads(plan_path.read_text(encoding="utf-8-sig"))
+    if bind_adoptions and manifest is not None:
+        bind_explicit_assembly_candidates(document, manifest)
     blocking = assembly_edit.blocking_joins(document)
     if blocking:
         raise ValueError(f"接点尚未按当前视频版本审核通过: {', '.join(blocking)}")
@@ -2152,7 +2274,7 @@ def build_project_state(project_id: str | None = None) -> dict[str, Any]:
                 if not review or review.get('status') != 'approved':
                     continue
                 try:
-                    binding = segment_review_binding(segment, str(review.get('candidate_ref') or ''))
+                    binding = segment_review_binding(segment, str(review.get('candidate_ref') or ''), target_project)
                     valid = bool(review.get('candidate_binding')) and review['candidate_binding'] == binding
                 except (HTTPException, ValueError, OSError):
                     valid = False
@@ -2403,18 +2525,31 @@ def persist_review(request: ReviewRecordRequest, project_id: str | None = None) 
             data.update(status='stale', requested_status='approved',
                         stale_reason='缺少明确候选引用或计划版本，请重新读取候选后确认审核')
         else:
-            data['candidate_binding'] = segment_review_binding(segment, request.candidate_ref)
+            data['candidate_binding'] = segment_review_binding(segment, request.candidate_ref, owner_id)
+    if request.status == 'approved' and request.source == 'explicit-adoption' and request.candidate_ref:
+        owner_manifest = load_project_manifest(owner_id)
+        data['adoption_binding'] = adoption_binding_for_review(
+            document, request.asset_id, request.candidate_ref, int(document.get('revision', 0) or 0),
+            str(owner_manifest.get('assembly_asset_id') or 'MASTER'), owner_id)
     record = append_project_record(f"review:{request.stage}", data, asset_id=request.asset_id, source=request.source, project_id=project_id, expected_revision=request.expected_revision)
     return {**data, "asset_id": request.asset_id, "revision": record["revision"], "source": record["source"], "created_at": record["created_at_iso"]}
 
 
-def adoption_candidate_path(reference: str) -> Path:
+def adoption_candidate_path(reference: str, project_id: str | None = None) -> Path:
     if reference.startswith('/media-file?'):
         parsed = urlsplit(reference)
         query = parse_qs(parsed.query)
         if parsed.fragment or set(query) != {'path'} or len(query['path']) != 1:
             raise HTTPException(422, '候选链接必须包含唯一素材路径')
         reference = query['path'][0]
+    elif reference.split(':', 1)[0] in {'task', 'asset', 'segment', 'assembly'}:
+        if not project_id:
+            raise HTTPException(422, '受控候选引用需要明确的当前作品')
+        try:
+            target = media_refs.decode_media_ref(reference)
+            return media_refs.resolve_target(project_id, target)['path']
+        except media_refs.MediaRefError as exc:
+            raise HTTPException(422, str(exc)) from exc
     try:
         return resolve_registered_path(reference)
     except (ValueError, OSError) as exc:
@@ -2431,7 +2566,7 @@ def adopt_project_candidate(project_id: str, request: AdoptionRequest) -> dict[s
     registered = None
     material_kind_expected = None
     adopted_variant = 'A'
-    candidate = adoption_candidate_path(request.candidate_ref)
+    candidate = adoption_candidate_path(request.candidate_ref, project_id)
     if request.asset_id == str(manifest.get('assembly_asset_id') or 'MASTER'):
         assembly = document.get('assembly') or {}
         blocking = assembly_edit.blocking_joins(document)
@@ -2492,7 +2627,8 @@ def adopt_project_candidate(project_id: str, request: AdoptionRequest) -> dict[s
     outputs = ([item['path'] for item in result.get('outputs', []) if isinstance(item, dict) and item.get('asset_id') == request.asset_id]
                if material_kind_expected == 'media_operation' else
                result.get('published_outputs') or ([result['output']] if result.get('output') else [f'output/{value}' for value in result.get('outputs', [])]))
-    if result.get('status') not in {'success', 'succeeded'} or not any(candidate == adoption_candidate_path(str(value)) for value in outputs):
+    # 回执必须点名当前登记候选；旧回执可能没有 status 字段，但已有 status 时不能把失败执行当成功。
+    if result.get('status') not in {None, 'success', 'succeeded'} or not any(candidate == adoption_candidate_path(str(value)) for value in outputs):
         raise HTTPException(409, '成功回执未包含当前候选，不能采用')
     return persist_review(ReviewRecordRequest(
         asset_id=request.asset_id, stage=request.stage, status='approved',
@@ -2852,9 +2988,9 @@ def restore_project_segment_version(
         for key in SEGMENT_GENERATION_FIELDS:
             if key in snapshot:
                 segment[key] = json.loads(json.dumps(snapshot[key], ensure_ascii=False))
-            elif key in ('generation', 'resolved_generation'):
-                # Older candidates predate automatic creation. Restoring one
-                # must not retain settings from a later automatic version.
+            elif key == 'generation':
+                # Older candidates predate explicit creation settings. Restoring
+                # one must not retain settings written by a later version.
                 segment.pop(key, None)
     timestamp = time.time()
     segment.update(
@@ -2973,7 +3109,7 @@ def create_project(request: ProjectCreateRequest) -> dict[str, Any]:
             for folder in ('plans', 'assets/image', 'assets/audio', 'assets/video', 'workflows/ui', 'workflows/api', 'records/prompts', 'records/tasks', 'records/reviews'):
                 (workspace / folder).mkdir(parents=True, exist_ok=True)
             manifest = blank_project_manifest(project_id, request.series, request.title, workspace)
-            manifest['default_creation_mode'] = request.creation_mode
+            manifest['creation_mode'] = request.creation_mode
             write_json_atomic(workspace / 'director.project.json', manifest)
             persist_project_manifest(manifest, make_default=False)
             if request.select:
@@ -2992,7 +3128,7 @@ def create_project(request: ProjectCreateRequest) -> dict[str, Any]:
     for folder in ("plans", "assets/image", "assets/audio", "assets/video", "workflows/ui", "workflows/api", "records/prompts", "records/tasks", "records/reviews"):
         (workspace / folder).mkdir(parents=True, exist_ok=True)
     manifest = blank_project_manifest(project_id, request.series, request.title, workspace)
-    manifest['default_creation_mode'] = request.creation_mode
+    manifest['creation_mode'] = request.creation_mode
     write_json_atomic(workspace / "director.project.json", manifest)
     persist_project_manifest(manifest, make_default=request.select)
     if request.select:
@@ -3020,17 +3156,22 @@ def production_preset_catalog() -> dict[str, Any]:
 
 @app.get('/api/projects/{project_id}/reusable-templates')
 def reusable_template_catalog(project_id: str) -> dict[str, Any]:
-    """Expose the small, safe template set used by the simplified entry point."""
+    """Expose the factual template catalog used by the simplified entry point.
+
+    The response lists what is available and whether the project already has a
+    compatible preset. It contains no recommendation or default choice: the
+    caller must explicitly pick and install one.
+    """
     manifest = require_project_manifest(project_id)
     installed = (manifest.get('production_preset') or {}).get('id')
     presets = [production_presets.catalog(SHARED_ROOT / 'models', preset_id)
                for preset_id in production_presets.PRESET_IDS]
     by_id = {item['id']: item for item in presets}
-    return {'templates': [
-        {'id': 'image', 'kind': 'image', 'title': '文生图', 'description': '只输入提示词，先得到一张可用图片。', 'recommended': True},
-        {'id': 'text-video', 'kind': 'video', 'title': '文生视频', 'description': '只输入提示词，使用纯文本视频制作方案。', 'recommended': True,
+    return {'available_templates': [
+        {'id': 'image', 'kind': 'image', 'title': '文生图', 'description': '只输入提示词，先得到一张可用图片。'},
+        {'id': 'text-video', 'kind': 'video', 'title': '文生视频', 'description': '只输入提示词，使用纯文本视频制作方案。',
          'preset': by_id.get(production_presets.TEXT_PORTRAIT_PRESET_ID), 'installed': installed in production_presets.TEXT_PRESET_IDS},
-        {'id': 'video', 'kind': 'video', 'title': '图生视频', 'description': '放入开始画面，再描述动作和镜头。', 'recommended': True,
+        {'id': 'video', 'kind': 'video', 'title': '图生视频', 'description': '放入开始画面，再描述动作和镜头。',
          'preset': by_id.get(production_presets.NATIVE_PORTRAIT_PRESET_ID), 'installed': installed == production_presets.NATIVE_PORTRAIT_PRESET_ID},
     ], 'project_id': project_id, 'installed_preset': installed}
 
@@ -3038,26 +3179,24 @@ def reusable_template_catalog(project_id: str) -> dict[str, Any]:
 @app.post("/api/projects/{project_id}/production-presets/{preset_id}")
 @gpu_admission
 def install_production_preset(project_id: str, preset_id: str) -> dict[str, Any]:
+    """Explicitly install one reviewed production recipe into the project manifest.
+
+    This is the only path that installs a preset.  Creating or editing a shot
+    never installs or switches a recipe.
+    """
     ensure_no_release_blocking_tasks("配置制作方案", project_id=project_id)
     if preset_id not in production_presets.PRESET_IDS:
         raise HTTPException(404, "制作方案不存在")
     manifest = require_project_manifest(project_id)
-    result = configure_production_preset(manifest, preset_id)
-    if manifest.get('default_creation_mode') == 'auto':
-        manifest['default_creation_mode'] = 'advanced'
-        save_project_manifest(manifest)
-        result['project'] = public_project(manifest)
-    return result
+    return configure_production_preset(manifest, preset_id)
 
 
-def configure_production_preset(manifest: dict[str, Any], preset_id: str, *, automatic=False) -> dict[str, Any]:
-    """Reuse recipe configuration; automatic additions never overwrite an installed stage."""
+def configure_production_preset(manifest: dict[str, Any], preset_id: str) -> dict[str, Any]:
+    """Reuse recipe configuration; an explicit install never overwrites an installed stage."""
     project_id = str(manifest['id'])
     if (manifest.get("production_preset") or {}).get("id") == preset_id:
         return {"project": public_project(manifest), "already_installed": True}
     stages = manifest.get("pipeline") or []
-    if automatic and any(item.get('id') == production_presets.stage_id(preset_id) for item in stages):
-        return {'project': public_project(manifest), 'already_installed': True}
     if any(item.get("id") == production_presets.preset_stage_id(preset_id) for item in stages):
         raise HTTPException(409, "项目已有视频制作步骤，不能覆盖其执行配置")
     try:
@@ -3077,52 +3216,24 @@ def configure_production_preset(manifest: dict[str, Any], preset_id: str, *, aut
     write_json_atomic(destination, graph)
     workflow = root_relative_path(destination)
     manifest["pipeline"] = [*stages, production_presets.stage(workflow, len(stages) + 1, preset_id)]
-    if not automatic or not manifest.get('production_preset'):
-        manifest["production_preset"] = {"id": preset_id, "title": production_presets.title(preset_id), "workflow": workflow}
+    manifest["production_preset"] = {"id": preset_id, "title": production_presets.title(preset_id), "workflow": workflow}
     save_project_manifest(manifest)
     if project_id == CURRENT_PROJECT_ID:
         apply_project_manifest(manifest)
     return {"project": public_project(manifest), "already_installed": False}
 
 
-def project_default_workflow() -> str | None:
-    return (CURRENT_PROJECT.get("production_preset") or {}).get("workflow")
-
-
-def resolve_automatic_shot(manifest, segment):
-    settings = segment.get('generation') or {}
-    if settings.get('mode') != 'auto':
-        segment.pop('resolved_generation', None)
-        return
-    try:
-        h3_duration.plan(segment.get('duration_seconds'), settings['aspect_ratio'])
-        if not str(segment.get('prompt') or '').strip():
-            raise ValueError('请填写画面与动作描述。')
-        frames, audio = dict(segment.get('keyframes') or {}), dict(segment.get('audio') or {})
-        selected = shot_creation.resolve(settings, first=frames.get('first'), last=frames.get('last'), guide=audio.get('guide'))
-        # Resolve only explicitly bound controls, under the existing owner checks.
-        for key in ('first', 'last'):
-            if frames.get(key):
-                frames[key] = resolve_pipeline_material(frames[key], '图片', manifest)
-        if audio.get('guide'):
-            audio['guide'] = resolve_pipeline_material(audio['guide'], '音频', manifest)
-    except (ValueError, KeyError) as exc:
-        raise HTTPException(422, {'code': 'unsupported_creation_inputs', 'message': str(exc)}) from exc
-    configure_production_preset(manifest, selected['preset_id'], automatic=True)
-    stage = next(row for row in manifest['pipeline'] if row['id'] == production_presets.stage_id(selected['preset_id']))
-    segment.update(keyframes=frames, audio=audio, workflow=stage['execution']['references'][0], resolved_generation=selected)
-
-
 def select_preset_execution(project: dict[str, Any], workflow: str | None, requested_stage: str | None) -> tuple[str | None, str | None]:
     """Keep installed first-only and first/last recipes independently selectable."""
+    if requested_stage == 'auto':
+        raise HTTPException(422, {'code': 'explicit_stage_required',
+                                  'message': '自动制作方案已移除；请显式选择制作步骤或工作流。'})
     known_stages = {production_presets.preset_stage_id(key) for key in production_presets.PRESET_IDS}
-    if requested_stage in (None, 'auto') and workflow:
+    if requested_stage is None and workflow:
         matched = next((stage for stage in project.get('pipeline', []) if stage.get('id') in known_stages and
                         workflow in ((stage.get('execution') or {}).get('references') or [])), None)
         if matched:
             return workflow, str(matched['id'])
-    if requested_stage == 'auto':
-        raise HTTPException(422, '请先保存描述、剧情时长和画幅。')
     if requested_stage in known_stages:
         stage = next((item for item in project.get('pipeline', []) if item.get('id') == requested_stage), None)
         if stage:
@@ -3152,6 +3263,7 @@ from .routers.plan_editing import (
     mark_segment_checkpoints_stale,
     operate_plan_segment,
     persist_plan_edit,
+    plan_selection_error,
     recalculate_segment_timeline,
     record_segment_artifacts,
     shot_reference,
@@ -3179,16 +3291,38 @@ def assembly_trim_summary(manifest, document):
         return None
 
 
+def assembly_sound_selection_state(manifest: dict[str, Any], document: dict[str, Any]) -> dict[str, Any]:
+    """Report whether the sound policy is an explicit record, without choosing one."""
+    edit = document.get('assembly_edit')
+    saved = edit.get('sound') if isinstance(edit, dict) and isinstance(edit.get('sound'), dict) else None
+    if saved and saved.get('policy'):
+        return {'selected': True, 'selection_source': 'assembly_edit'}
+    legacy = (manifest.get('assembly') or {}).get('audio')
+    if legacy:
+        return {'selected': True, 'selection_source': 'legacy_master'}
+    return {'selected': False, 'selection_source': None}
+
+
 def assembly_sound_selection(manifest: dict[str, Any], document: dict[str, Any]) -> dict[str, Any]:
+    state = assembly_sound_selection_state(manifest, document)
     edit = document.get('assembly_edit') or {}
     sound = edit.get('sound') if isinstance(edit, dict) else None
     if not isinstance(sound, dict):
         legacy = (manifest.get('assembly') or {}).get('audio')
-        return {'policy': 'legacy_master' if legacy else 'segment_native', 'audio_asset_id': None,
-                'path': str(resolve_registered_path(str(legacy))) if legacy else None,
-                'duration_seconds': None}
+        if not legacy:
+            return {'policy': 'segment_native', 'audio_asset_id': None, 'path': None,
+                    'duration_seconds': None, **state}
+        try:
+            path = resolve_registered_path(str(legacy))
+        except (HTTPException, ValueError, OSError) as exc:
+            raise ValueError('作品登记的全片音轨路径不可用') from exc
+        if not path.is_file():
+            raise ValueError('作品登记的全片音轨文件不存在')
+        return {'policy': 'legacy_master', 'audio_asset_id': None, 'path': str(path),
+                'duration_seconds': None, **state}
     if sound.get('policy') in {'segment_native', 'mute'}:
-        return {'policy': sound['policy'], 'audio_asset_id': None, 'path': None, 'duration_seconds': None}
+        return {'policy': sound['policy'], 'audio_asset_id': None, 'path': None,
+                'duration_seconds': None, **state}
     if sound.get('policy') != 'complete_master' or not sound.get('audio_asset_id'):
         raise ValueError('全片音轨设置无效')
     asset_id = str(sound['audio_asset_id'])
@@ -3220,7 +3354,68 @@ def assembly_sound_selection(manifest: dict[str, Any], document: dict[str, Any])
         raise ValueError(f'全片音轨仅 {duration} 秒，短于分镜总时长 {round(target, 3)} 秒；请先用全片母版后期明确补静音，或在Mac制作完整母版后上传')
     return {'policy': 'complete_master', 'audio_asset_id': asset_id, 'path': str(path),
             'duration_seconds': duration, 'size_bytes': path.stat().st_size,
-            'modified_ns': path.stat().st_mtime_ns}
+            'modified_ns': path.stat().st_mtime_ns, **state}
+
+
+def assembly_sound_view(manifest: dict[str, Any], document: dict[str, Any], *, include_continuity: bool,
+                        sound_override: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return the saved/validated sound view plus its explicit-selection metadata."""
+    if sound_override is not None:
+        sound = dict(sound_override)
+    elif include_continuity:
+        try:
+            sound = assembly_sound_selection(manifest, document)
+        except ValueError as exc:
+            saved = ((document.get('assembly_edit') or {}).get('sound') or {})
+            legacy = (manifest.get('assembly') or {}).get('audio')
+            sound = {'policy': saved.get('policy', 'legacy_master' if legacy else 'segment_native'),
+                     'audio_asset_id': saved.get('audio_asset_id'), 'path': None,
+                     'duration_seconds': None, 'error': str(exc)}
+    else:
+        saved = ((document.get('assembly_edit') or {}).get('sound') or {})
+        legacy = (manifest.get('assembly') or {}).get('audio')
+        sound = {'policy': saved.get('policy', 'legacy_master' if legacy else 'segment_native'),
+                 'audio_asset_id': saved.get('audio_asset_id'), 'path': None,
+                 'duration_seconds': None}
+    state = assembly_sound_selection_state(manifest, document)
+    sound['selected'] = state['selected']
+    sound['selection_source'] = state['selection_source']
+    return sound
+
+
+def assembly_sound_blockers(manifest: dict[str, Any], document: dict[str, Any],
+                            sound: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Explicit sound policy is required before assembly; invalid selections block too."""
+    project_id = str(manifest.get('id') or '')
+    action = {'id': 'set_assembly_sound', 'label': '显式选择音轨方式', 'method': 'PUT',
+              'path': f'/api/projects/{project_id}/assembly/sound'}
+    state = assembly_sound_selection_state(manifest, document)
+    blockers: list[dict[str, Any]] = []
+    if not state['selected']:
+        blockers.append({
+            'code': 'sound_policy_required',
+            'category': 'sound',
+            'message': '装配前须显式选择音轨方式：保留各段原音、统一完整音轨或全片静音。',
+            'object': {'kind': 'assembly', 'id': 'sound'},
+            'evidence': {'selected': False, 'policy': (sound or {}).get('policy')},
+            'action': action,
+        })
+    error = (sound or {}).get('error')
+    if error:
+        blockers.append({
+            'code': 'sound_policy_invalid',
+            'category': 'sound',
+            'message': str(error),
+            'object': {'kind': 'assembly', 'id': 'sound'},
+            'evidence': {'selected': state['selected'], 'policy': (sound or {}).get('policy'),
+                         'selection_source': state['selection_source']},
+            'action': action,
+        })
+    return blockers
+
+
+def assembly_join_tracking(document: dict[str, Any]) -> str:
+    return 'tracked' if isinstance(document.get('assembly_edit'), dict) else 'legacy_untracked'
 
 
 def assembly_continuity_view(manifest: dict[str, Any], document: dict[str, Any]) -> dict[str, Any]:
@@ -3231,38 +3426,56 @@ def assembly_continuity_view(manifest: dict[str, Any], document: dict[str, Any])
     return result
 
 
+def assembly_continuity_check_view(manifest: dict[str, Any], document: dict[str, Any]) -> dict[str, Any]:
+    """Return the read-only explicit-input cross-shot check (no plan writes)."""
+    video_blockers = assembly_video_blockers(document)
+    adoption_blockers = assembly_adoption_blockers(manifest, document)
+    join_rows = assembly_edit.joins(document, missing_videos=[item['dependency'] for item in video_blockers])
+    sound = assembly_sound_view(manifest, document, include_continuity=True)
+    sound_blockers = assembly_sound_blockers(manifest, document, sound)
+    return assembly_continuity_check.build_report(
+        manifest, document, video_blockers=video_blockers, adoption_blockers=adoption_blockers,
+        joins=join_rows, sound=sound, sound_blockers=sound_blockers,
+        join_tracking=assembly_join_tracking(document),
+        reference_resolver=shot_reference, media_facts=authorized_media_facts)
+
+
 def assembly_edit_view(manifest: dict[str, Any], document: dict[str, Any], *, include_continuity: bool = True,
                        sound_override: dict[str, Any] | None = None,
                        readiness_complete: bool | None = None) -> dict[str, Any]:
     if readiness_complete is None:
         readiness_complete = include_continuity
     video_blockers = assembly_video_blockers(document)
+    adoption_blockers = assembly_adoption_blockers(manifest, document)
+    adoption_by_asset = {}
+    for blocker in adoption_blockers:
+        adoption_by_asset.setdefault(str(blocker.get('dependency')), []).append(blocker)
+    adoption_segments = [
+        {'asset_id': str(segment.get('id')), 'adopted': str(segment.get('id')) not in adoption_by_asset,
+         'blockers': adoption_by_asset.get(str(segment.get('id')), [])}
+        for segment in document.get('segments', []) if isinstance(segment, dict) and segment.get('id')
+    ]
     missing_videos = [item['dependency'] for item in video_blockers if item['code'] == 'video_required']
     join_rows = assembly_edit.joins(document, missing_videos=[item['dependency'] for item in video_blockers])
-    if sound_override is not None:
-        sound = sound_override
-    elif include_continuity:
-        try:
-            sound = assembly_sound_selection(manifest, document)
-        except ValueError as exc:
-            saved = ((document.get('assembly_edit') or {}).get('sound') or {})
-            sound = {'policy': saved.get('policy', 'legacy_master'),
-                     'audio_asset_id': saved.get('audio_asset_id'), 'path': None,
-                     'duration_seconds': None, 'error': str(exc)}
-    else:
-        saved = ((document.get('assembly_edit') or {}).get('sound') or {})
-        legacy = (manifest.get('assembly') or {}).get('audio')
-        sound = {'policy': saved.get('policy', 'legacy_master' if legacy else 'segment_native'),
-                 'audio_asset_id': saved.get('audio_asset_id'), 'path': None,
-                 'duration_seconds': None}
+    blocking_joins = assembly_edit.blocking_joins(document)
+    sound = assembly_sound_view(manifest, document, include_continuity=include_continuity,
+                                sound_override=sound_override)
+    sound_blockers = assembly_sound_blockers(manifest, document, sound)
+    blockers = [*video_blockers, *adoption_blockers, *sound_blockers]
     warnings = ['非 WAV 完整母版的时长尚未验证，成片后须核对尾部声音'] if (
         sound.get('policy') == 'complete_master' and sound.get('duration_seconds') is None and not sound.get('error')) else []
     continuity = assembly_continuity_view(manifest, document) if include_continuity else None
+    continuity_check = assembly_continuity_check.build_report(
+        manifest, document, video_blockers=video_blockers, adoption_blockers=adoption_blockers,
+        joins=join_rows, sound=sound, sound_blockers=sound_blockers,
+        join_tracking=assembly_join_tracking(document),
+        reference_resolver=shot_reference, media_facts=authorized_media_facts)
     return {'project_id': manifest['id'], 'revision': int(document.get('revision', 0) or 0),
-            'joins': join_rows, 'blocking_joins': assembly_edit.blocking_joins(document),
+            'joins': join_rows, 'blocking_joins': blocking_joins,
             'join_review': assembly_edit.review_readiness(join_rows),
-            'continuity': continuity,
-            'missing_videos': missing_videos, 'blockers': video_blockers,
+            'continuity': continuity, 'continuity_check': continuity_check,
+            'missing_videos': missing_videos, 'blockers': blockers,
+            'adoption': {'ready': not adoption_blockers, 'blockers': adoption_blockers, 'segments': adoption_segments},
             'sound': sound, 'warnings': warnings, 'target_duration_seconds': round(sum(float(item.get('duration_seconds') or 0)
                        for item in document.get('segments', []) if isinstance(item, dict)), 3),
             'readiness_complete': readiness_complete,
@@ -3276,8 +3489,8 @@ def assembly_edit_view(manifest: dict[str, Any], document: dict[str, Any], *, in
             'audio_assets': [{'id': item['id'], 'title': item.get('title', item['id'])}
                              for item in manifest.get('assets', []) if isinstance(item, dict)
                              and item.get('kind') == 'audio' and item.get('id')],
-            'ready': readiness_complete and bool(document.get('segments')) and not video_blockers and
-                     not assembly_edit.blocking_joins(document) and not sound.get('error')}
+            'ready': readiness_complete and bool(document.get('segments')) and not blockers and
+                     not blocking_joins and not sound.get('error')}
 
 
 @app.post("/api/projects/{project_id}/upload")
@@ -3340,7 +3553,7 @@ async def upload_project_files(project_id: str, files: list[UploadFile] = File(.
         raise HTTPException(422, str(exc)) from exc
     refreshed["series"] = manifest.get("series", refreshed.get("series", "未命名系列"))
     refreshed["title"] = manifest.get("title", refreshed.get("title", project_id))
-    for key in ("tag", "eyebrow", "subtitle", "pipeline_contract", "assembly_asset_id", "default_task_asset_id", "pipeline", "task_templates", "assembly"):
+    for key in ("tag", "eyebrow", "subtitle", "pipeline_contract", "assembly_asset_id", "pipeline", "task_templates", "assembly"):
         if key in manifest:
             refreshed[key] = manifest[key]
     write_json_atomic(workspace / "director.project.json", refreshed)
@@ -3480,25 +3693,36 @@ app.include_router(_reverse_analysis_router)
 # app.py 与既有测试都以 backend.<名称> 取用它们，身份必须保持同一个对象。
 from .routers.reverse_analysis import (
     ReferenceStopped,
+    _append_observation,
     _convert_reverse_analysis,
+    _has_explicit_frame_observation,
+    _reference_source,
     convert_reverse_analysis,
     correct_reverse_classification,
     create_reverse_analysis,
+    create_reverse_analysis_from_material,
     current_semantic_job,
     execute_reverse_semantic,
+    extract_reference_audio,
+    extract_reference_range,
     get_reverse_analysis,
     list_reverse_analyses,
     merge_semantic_result,
     read_reverse_analysis,
     reconcile_semantic_job,
+    registered_document,
+    registration_failure_document,
     reserve_reverse_semantic,
     reverse_analysis_path,
     reverse_analysis_root,
     reverse_model_status,
     run_reverse_semantic_analysis,
+    sample_reference_frames,
     start_semantic_job,
+    transcribe_reference,
     update_reverse_artifact,
     update_reverse_timeline,
+    write_registered_analysis,
     write_reverse_analysis,
 )
 
@@ -3532,6 +3756,7 @@ from .routers.workbench_status import (
     plan,
     project_pipeline,
     project_readiness,
+    readiness_selection_options,
     public_validate_pipeline,
     scoped_validate_pipeline,
     segment_dependency_blockers,
@@ -3608,6 +3833,7 @@ app.include_router(_batch_assembly_router)
 # app.py、private_mode.py 与既有测试都以 backend.<名称> 取用它们。
 from .routers.batch_assembly import (
     assembly_video_blockers,
+    check_project_assembly_continuity,
     get_project_assembly_edit,
     preflight_project_assembly,
     resume_batch,
@@ -3712,6 +3938,18 @@ from .routers.events_media import (
 )
 
 
+# 受控媒体引用领域已拆到 backend/routers/media_access.py。
+# 远程 Agent 只拿稳定 media_ref 与短期签名 URL；文件仍由本作品 manifest/
+# 计划/参考拆解解析，不提供任意服务器路径下载。
+from .routers.media_access import ROUTER as _media_access_router
+app.include_router(_media_access_router)
+from .routers.media_access import (
+    issue_media_refs,
+    list_media,
+    read_media,
+)
+
+
 class WorkbenchStaticFiles(StaticFiles):
     async def get_response(self, path: str, scope: dict[str, Any]):
         response = await super().get_response(path, scope)
@@ -3729,3 +3967,4 @@ REMOTE_MCP = remote_mcp.install(app,http_app_provider=lambda:app,
 if DIST.is_dir():
     # This mount is last so that /api and /media remain explicit backend routes.
     app.mount("/", WorkbenchStaticFiles(directory=DIST, html=True), name="director-ui")
+

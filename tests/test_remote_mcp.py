@@ -30,15 +30,19 @@ EXPECTED_REMOTE_TOOLS = (
     'read_project', 'read_script', 'save_script', 'list_tasks', 'get_task',
     'list_shot_versions', 'preflight', 'save_creative_draft', 'record_review',
     'approve_candidate', 'update_shot', 'arrange_shot', 'create_shot',
-    'reuse_materials', 'list_references', 'read_reference',
-    'start_reference_analysis', 'reconcile_reference_analysis',
+    'reuse_materials', 'import_reference_from_material', 'import_reference_content',
+    'extract_reference_range', 'extract_reference_audio',
+    'sample_reference_frames', 'transcribe_reference',
+    'list_references', 'read_reference', 'start_reference_analysis',
+    'reconcile_reference_analysis',
     'annotate_reference_timeline', 'correct_reference_artifact',
     'correct_reference_classification', 'convert_reference_to_shots',
     'submit_shot', 'submit_batch', 'get_keyframe_capability', 'submit_assembly',
     'read_assembly_edit', 'review_assembly_join', 'set_assembly_sound',
-    'preflight_assembly_edit', 'submit_keyframe', 'get_speech_capability',
+    'preflight_assembly_edit', 'check_assembly_continuity', 'submit_keyframe', 'get_speech_capability',
     'submit_speech', 'get_submission_receipt', 'reconcile_generation',
-    'stop_generation', 'submit_audio_edit', 'submit_audio_master', 'get_media_capability',
+    'stop_generation', 'list_media', 'get_media_url', 'download_media',
+    'submit_audio_edit', 'submit_audio_master', 'get_media_capability',
     'create_silence', 'inspect_video', 'transcribe_audio', 'export_silent_video',
 )
 FORBIDDEN_REMOTE_TOOLS = {
@@ -101,18 +105,19 @@ def test_remote_wire_two_identities_original_business_preflight_submission_recei
     async def verify():
         async with backend.app.router.lifespan_context(backend.app):
             async with remote(a.headers['Authorization']) as ca,remote(b.headers['Authorization']) as cb:
-                created=await asyncio.gather(ca.call_tool('create_project',{'series':'A','title':'Alpha'}),
-                                            cb.call_tool('create_project',{'series':'B','title':'Beta'}))
+                created=await asyncio.gather(ca.call_tool('create_project',{'series':'A','title':'Alpha','creation_mode':'advanced'}),
+                                            cb.call_tool('create_project',{'series':'B','title':'Beta','creation_mode':'advanced'}))
                 ids=[unpack(row)['data']['project']['id'] for row in created]
+                workflow=a.post(f'/api/projects/{ids[0]}/production-presets/h3-text-native-portrait').json()['project']['production_preset']['workflow']
                 listed=await asyncio.gather(ca.call_tool('list_projects',{}),cb.call_tool('list_projects',{}))
                 assert [[p['id'] for p in unpack(row)['data']['projects']] for row in listed]==[[ids[0]],[ids[1]]]
                 denied=unpack(await cb.call_tool('read_project',{'project_id':ids[0],'section':'plan'}))
                 assert denied['error']['http_status']==404
                 saved=unpack(await ca.call_tool('create_shot',{'project_id':ids[0],'segment_id':'S01','prompt':'User original text',
-                    'duration_seconds':7.3,'expected_revision':0,'generation':{'mode':'auto','aspect_ratio':'9:16','seed':42}}))
+                    'duration_seconds':7.3,'expected_revision':0,'workflow':workflow,'generation':{'aspect_ratio':'9:16','seed':42}}))
                 assert saved['ok'],saved
                 revision=saved['data']['plan']['revision']
-                checked=unpack(await ca.call_tool('preflight',{'project_id':ids[0],'asset_id':'S01'}))
+                checked=unpack(await ca.call_tool('preflight',{'project_id':ids[0],'asset_id':'S01','stage_id':'motion-text-native-portrait-generation'}))
                 assert checked['ok'] and checked['data']['valid'],checked
                 assert checked['data']['h3_duration']['frame_count']==175
                 args={'project_id':ids[0],'asset_id':'S01','expected_revision':revision,'idempotency_key':'agent-wire-once'}
@@ -163,7 +168,7 @@ def test_remote_read_only_expansion_uses_real_fixture_routes(access):
     a, _, _ = access
     project = a.post('/api/projects/create', json={
         'series': 'Testing', 'title': 'Read-only MCP expansion',
-        'select': False, 'creation_mode': 'auto',
+        'select': False, 'creation_mode': 'advanced',
     }).json()['project']['id']
 
     async def verify():
@@ -179,8 +184,9 @@ def test_remote_read_only_expansion_uses_real_fixture_routes(access):
 
 def test_remote_unknown_submission_recovers_receipt_and_expired_identity_stops(access,monkeypatch):
     a,_,browser=access
-    pid=a.post('/api/projects/create',json={'series':'Testing','title':'Text sample','select':False,'creation_mode':'auto'}).json()['project']['id']
-    saved=a.post(f'/api/projects/{pid}/plan/segments',json={'prompt':'Original','duration_seconds':5,'expected_revision':0})
+    pid=a.post('/api/projects/create',json={'series':'Testing','title':'Text sample','select':False,'creation_mode':'advanced'}).json()['project']['id']
+    workflow=a.post(f'/api/projects/{pid}/production-presets/h3-text-native-portrait').json()['project']['production_preset']['workflow']
+    saved=a.post(f'/api/projects/{pid}/plan/segments',json={'prompt':'Original','duration_seconds':5,'expected_revision':0,'workflow':workflow})
     revision=saved.json()['plan']['revision']
     actual_transport=remote_mcp.httpx.ASGITransport
     submissions=[]
@@ -229,7 +235,7 @@ def test_configured_remote_entry_official_wire_retains_account_boundaries(access
     async def verify():
         async with backend.app.router.lifespan_context(backend.app):
             async with remote(a.headers['Authorization'],url,origin) as own, remote(b.headers['Authorization'],url,origin) as other:
-                created=unpack(await own.call_tool('create_project',{'series':'Entry','title':'Isolated'}))
+                created=unpack(await own.call_tool('create_project',{'series':'Entry','title':'Isolated','creation_mode':'advanced'}))
                 assert created['ok'],created
                 pid=created['data']['project']['id']
                 assert [row['id'] for row in unpack(await own.call_tool('list_projects',{}))['data']['projects']]==[pid]

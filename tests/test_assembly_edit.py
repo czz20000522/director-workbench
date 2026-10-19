@@ -26,8 +26,11 @@ def edit_client(tmp_path, monkeypatch):
     created = client.post('/api/projects/create', json={'series': '测试', 'title': '接点', 'project_id': 'edit-test', 'creation_mode': 'advanced'})
     assert created.status_code == 200, created.text
     root = '/api/projects/edit-test'
+    installed = client.post(root + '/production-presets/h3-guided')
+    assert installed.status_code == 200, installed.text
+    workflow = installed.json()['project']['production_preset']['workflow']
     for shot_id in ('S01', 'S02'):
-        response = client.post(root + '/plan/segments', json={'segment_id': shot_id, 'duration_seconds': 5})
+        response = client.post(root + '/plan/segments', json={'segment_id': shot_id, 'duration_seconds': 5, 'workflow': workflow})
         assert response.status_code == 200, response.text
     manifest = backend.load_project_manifest('edit-test')
     manifest['assembly']['builder'] = str(Path(__file__).resolve().parents[1] / 'tools' / 'build_assembly_workflow.py')
@@ -41,6 +44,16 @@ def edit_client(tmp_path, monkeypatch):
         shot['video'] = {'path': str(workspace / f"{shot['id']}.mp4")}
         shot['current_version_task_id'] = f"task-{shot['id']}"
     backend.write_plan_version(plan_path, plan)
+    plan = json.loads(plan_path.read_text(encoding='utf-8'))
+    for shot in plan['segments']:
+        response = client.post(root + '/reviews', json={
+            'asset_id': shot['id'], 'stage': 'sample', 'status': 'approved',
+            'candidate_ref': shot['video']['path'], 'expected_revision': 0,
+            'expected_plan_revision': plan['revision'],
+            'note': 'Explicit isolated adoption for assembly readiness; no human viewing claim.',
+            'source': 'explicit-adoption',
+        })
+        assert response.status_code == 200, response.text
     return client, root, workspace, plan_path
 
 
@@ -63,6 +76,9 @@ def test_join_review_is_version_bound_and_sound_is_project_registered(edit_clien
     client, root, workspace, plan_path = edit_client
     edit = client.get(root + '/assembly/edit').json()
     assert edit['continuity']['advisory'] is True
+    assert edit['continuity_check']['read_only'] is True
+    assert edit['sound']['selected'] is False  # an untouched project has no explicit sound choice
+    assert 'sound_policy_required' in {item['code'] for item in edit['continuity_check']['blockers']}
     assert edit['continuity']['joins'][0]['key'] == 'S01>S02'
     assert edit['joins'][0]['status'] == 'pending'
     assert edit['joins'][0]['cut_seconds'] == 5
@@ -93,6 +109,8 @@ def test_join_review_is_version_bound_and_sound_is_project_registered(edit_clien
     assert chosen.status_code == 200, chosen.text
     assert chosen.json()['sound']['duration_seconds'] == 11
     assert chosen.json()['sound']['audio_asset_id'] == master_id
+    assert chosen.json()['sound']['selected'] is True
+    assert chosen.json()['continuity_check']['inputs']['sound']['selection_source'] == 'assembly_edit'
     manifest = backend.load_project_manifest('edit-test')
     snapshot = backend.build_assembly_snapshot(manifest)
     graph = json.loads(snapshot.read_text(encoding='utf-8'))
@@ -112,7 +130,9 @@ def test_join_review_is_version_bound_and_sound_is_project_registered(edit_clien
     renewed = client.put(root + '/assembly/joins/S01/S02', json={
         'expected_revision': stale['revision'], 'status': 'approved', 'note': '新右段已检查'})
     assert renewed.status_code == 200, renewed.text
-    assert client.get(root + '/assembly/preflight').json()['ready'] is True
+    renewed_preflight = client.get(root + '/assembly/preflight').json()
+    assert renewed_preflight['ready'] is False
+    assert any(item['code'] == 'adoption_required' for item in renewed_preflight['blockers'])
 
 
 def test_continuity_is_read_only_and_degrades_when_ffmpeg_unavailable(edit_client, monkeypatch):
@@ -217,12 +237,16 @@ def test_mcp_assembly_edit_matches_http_contract(edit_client):
 
     client, _, workspace, _ = edit_client
     master_id = register_wav(workspace, 11)
+    # This contract case intentionally exercises the missing-adoption blocker.
+    with backend.db() as connection:
+        connection.execute("DELETE FROM project_records WHERE project_id='edit-test' AND record_type IN ('review:sample','review:finish')")
+        connection.commit()
 
     async def verify():
         async with Client(create_server('http://localhost:4100', httpx.ASGITransport(app=backend.app))) as agent:
             tools = {tool.name for tool in (await agent.list_tools()).tools}
             assert {'read_assembly_edit', 'review_assembly_join', 'set_assembly_sound',
-                    'preflight_assembly_edit'} <= tools
+                    'preflight_assembly_edit', 'check_assembly_continuity'} <= tools
             edit = (await agent.call_tool('read_assembly_edit', {'project_id': 'edit-test'})).structured_content
             assert edit['ok']
             revision = edit['data']['revision']
@@ -239,7 +263,12 @@ def test_mcp_assembly_edit_matches_http_contract(edit_client):
             preflight = (await agent.call_tool('preflight_assembly_edit', {
                 'project_id': 'edit-test',
             })).structured_content
-            assert preflight['data']['ready'] is True
+            assert preflight['data']['ready'] is False
+            assert any(item['code'] == 'adoption_required' for item in preflight['data']['blockers'])
             assert preflight['data']['sound']['audio_asset_id'] == master_id
+            checked = (await agent.call_tool('check_assembly_continuity', {
+                'project_id': 'edit-test'})).structured_content
+            assert checked['ok'] and checked['data']['read_only'] is True
+            assert any(item['code'] == 'adoption_required' for item in checked['data']['blockers'])
 
     asyncio.run(verify())

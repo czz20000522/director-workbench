@@ -12,6 +12,8 @@
 
 需要 Bearer 的非浏览器客户端可调用 `POST /api/auth/agent-token`（JSON 同样只含 `username`/`password`）：成功响应包含 `token`、`username`、`administrator`、`expires_at`，**不设置 Cookie**。把返回的 `token` 作为 `Authorization: Bearer <token>` 使用；Token 等同本人会话凭据，只放本地客户端配置/环境变量，不写仓库、日志或聊天。注销、过期或换账号后重新获取，该入口与登录共用账号、会话和限流。
 
+工作台若通过 HTTPS 和私人 CA 提供，客户端所在操作系统/运行时必须信任该 CA 链；CA 根证书由维护者通过私人渠道提供，只安装到该客户端的受信存储并限定用途。不要关闭证书校验、不要接受任意证书，也不要把 CA 私钥放进客户端；公开仓库不包含 CA、证书或私钥。使用 loopback HTTP 或已配置 SSH 隧道时不需要额外 CA 步骤，但 MCP 仍检查 Host/Origin。
+
 登录后用 `GET /api/auth/me` 核对当前身份，再 `GET /api/projects` 获取本人实际作品 ID。Cookie 写入请求须携带允许的同源 `Origin` 和当前身份 `X-Workspace-User`；Bearer 写入不需要浏览器身份头，但发送的 Origin 仍须符合允许列表。伪造用户名、localhost 来源或 MCP 标签不能获得管理员权限。会话只在当前服务进程内保存，服务重启、过期或密码变化后重新登录；账号切换时更新连接身份。
 
 | 响应 | 接续方式 |
@@ -23,33 +25,43 @@
 | `422` | 检查 schema、输入组合与结构化 blockers |
 | 超时/连接断开 | 写入结果可能已保存，先查询记录或原任务回执 |
 
+MCP 工具把失败统一为 `isError=true` 且同一次调用带结构化 `{ok:false,error:{code,message,kind,retryable,...}}`：`kind=business` 表示 HTTP 业务拒绝（含 `http_status`、`detail`，`code` 优先取后端 `detail.code`），`kind=argument` 表示适配器拒绝的参数或语义，`kind=transport` 表示读取暂时失败可重试，`kind=outcome_unknown` 表示写入结果未知（必须先核对、不可直接重发）。参数缺失、类型不符或超出 schema 范围时，MCP SDK 在工具执行前返回 tool error（文本列出被拒字段），不会调用工作台。分页工具用 `meta.pagination` 声明 `limit`/`offset` 合同并在响应中返回 `next_offset`；`idempotent_hint` 只对可重放原键的写入标 true。
+
 ## 最短创作合同
 
 先读当前服务的对应 OpenAPI schema。下列 JSON 是无真实账号、路径或素材的示例；作品/分镜 ID 和 revision 必须使用实际返回值。创建、上传、添加分镜都改变业务数据，示例不会自动授权生成。
 
-1. 创建空白作品，`select:false` 保留用户当前选择。使用返回的 `project.id`，不要用标题推测 ID。
+1. 创建空白作品，必须显式传 `creation_mode:"advanced"`；`auto` 已移除，缺省或旧值返回 `422`。`select:false` 保留用户当前选择。使用返回的 `project.id`，不要用标题推测 ID。
 
    `POST /api/projects/create`
 
    ```json
-   {"series":"示例系列","title":"示例作品","creation_mode":"auto","select":false}
+   {"series":"示例系列","title":"示例作品","creation_mode":"advanced","select":false}
    ```
 
-2. 读取 `GET /api/projects/{project_id}/plan`，以实际计划版本保存高层分镜。
+2. 显式选择制作方案。先读取 `GET /api/production-presets` 的候选，再用独立写入入口安装：
+
+   `POST /api/projects/{project_id}/production-presets/{preset_id}`
+
+   安装只写项目 manifest 和该方案的执行图，不生成，也不会因为创建分镜自动发生。`GET /api/projects/{project_id}/reusable-templates` 只返回 `available_templates` 事实清单（`id`、`kind`、`title`、`description`、`installed`、`preset`），不含 `recommended` 或默认选择；是否采用由调用方明确决定。安装后从 `GET /api/projects/{project_id}/pipeline` 读取实际 `stage_id` 和 workflow。未安装或未选择方案时，保存分镜返回 `422` 的结构化 `creation_plan_required`／`preset_not_installed` 和可选项，不写计划。
+
+3. 读取 `GET /api/projects/{project_id}/plan`，以实际计划版本保存高层分镜。可以为每段显式传 `workflow` 或已安装的 `preset_id`；两者都不传时使用作品已明确安装的方案，作品没有方案时返回阻塞。工作台不会按画幅、素材或创作分区代选配方，也不会静默 fallback。
 
    `POST /api/projects/{project_id}/plan/segments`
 
    ```json
-   {"prompt":"用户的分镜描述","duration_seconds":5,"generation":{"mode":"auto","aspect_ratio":"16:9","seed":42},"expected_revision":0}
+   {"prompt":"用户的分镜描述","duration_seconds":5,"workflow":"workflows/已登记方案.json","generation":{"aspect_ratio":"16:9","seed":42},"expected_revision":0}
    ```
 
-   这里的 `0` 只表示尚未修改的初始计划示例。H3 单段支持 4–15 秒，画幅 `16:9`、`1:1`、`9:16`；实际输出规格以预检为准。已有分镜用 `PATCH /api/projects/{project_id}/plan/segments/{segment_id}` 修改，传最新 `expected_revision`，保留用户输入。不要求普通用户安装 preset 或猜测技术 stage ID。
+   这里的 `0` 只表示尚未修改的初始计划示例。H3 单段支持 4–15 秒，画幅 `16:9`、`1:1`、`9:16`；显式方案与画幅/首尾帧/声音/创作分区不匹配时返回 `422`，不会换用其他配方。已有分镜用 `PATCH /api/projects/{project_id}/plan/segments/{segment_id}` 修改，传最新 `expected_revision`，保留用户输入。普通用户无需猜技术 stage ID，但必须由人或 Agent 明确选择已安装方案。
 
-3. 图片/声音通过 `POST /api/projects/{project_id}/upload` 的 multipart `files` 上传，使用登记回执中实际素材引用。素材存在于库中不等于已绑定为首帧；角色参考、首尾帧、表演声音和完整母版应按对应字段分别指定。远程客户端不能把自身磁盘路径传给服务器路径导入接口。
+4. 图片/声音通过 `POST /api/projects/{project_id}/upload` 的 multipart `files` 上传，使用登记回执中实际素材引用。素材存在于库中不等于已绑定为首帧；角色参考、首尾帧、表演声音和完整母版应按对应字段分别指定。远程客户端不能把自身磁盘路径传给服务器路径导入接口。
+
+   参考素材同样先上传，再用 `POST /api/projects/{project_id}/reverse-analyses/from-material`（JSON `{"asset_id":"实际素材ID"}`）登记为参考拆解；同一素材已有拆解时返回原拆解并带 `created:false`。MCP 还提供 `import_reference_content`：直接提交参考素材 base64，单文件上限 16 MiB，超限返回 `reference_too_large` 并提示使用该 multipart 入口。两条入口都只登记媒体事实，不自动拆分、抽帧、运行 ASR 或转分镜。远程 MCP 不开放服务器路径导入。
 
    上传有服务端上限：单文件默认 2 GiB、单次默认 200 个文件、单请求默认 4 GiB（部署方可用 `DIRECTOR_MAX_UPLOAD_BYTES`、`DIRECTOR_MAX_UPLOAD_FILES`、`DIRECTOR_MAX_UPLOAD_REQUEST_BYTES` 收紧或调整）。超限返回 `413`，不登记素材；客户端应据此拆分批次或压缩素材，而不是重试同一请求。请求体上限会在 multipart 解析前检查，单文件写入使用分块和临时文件，失败时清理半成品。
 
-4. 无生成预检：`POST /api/projects/{project_id}/pipeline/auto/validate`。
+5. 无生成预检：`POST /api/projects/{project_id}/pipeline/{stage_id}/validate`。`stage_id` 必须来自该作品已安装的 pipeline，`auto` 已移除并返回 `422 explicit_stage_required`。
 
    ```json
    {"asset_id":"实际分镜ID","values":{}}
@@ -57,17 +69,29 @@
 
    读取 `valid`、实际时长/帧数与 `readiness` 中的 blockers、allowed_actions、next_actions 和 revision。预检不生成，不以读取或预检方式改写计划。缺失模型、素材或未支持组合先明确处理。
 
-5. 用户授权一次生成后，先保留唯一请求键和完整参数，再向 `POST /api/projects/{project_id}/tasks` 提交一次。
+   准备度不会替调用方选择配方：分镜没有显式方案/工作流时返回 `stage_required`；已登记 workflow 或 stage 无法解析到本作品已安装方案时返回 `recipe_unresolved`。两种 blocker 都带 `options`（`installed_pipeline_stages`、`available_presets` 等事实）和 `GET .../pipeline` 的显式选择入口，不会按第一个可执行 stage、单一默认 stage 或顺序兜底继续预检。工作台不会把选择写回计划；调用方需显式保存方案后重新读取准备度。
+
+6. 用户授权一次生成后，先保留唯一请求键和完整参数，再向 `POST /api/projects/{project_id}/tasks` 提交一次。
 
    ```json
-   {"asset_id":"实际分镜ID","pipeline_stage_id":"auto","expected_revision":1,"idempotency_key":"客户端为本次操作保存的唯一键"}
+   {"asset_id":"实际分镜ID","pipeline_stage_id":"实际stage_id","expected_revision":1,"idempotency_key":"客户端为本次操作保存的唯一键"}
    ```
 
    `expected_revision` 使用刚才预检的实际版本。相同作品、请求键和参数返回原任务，键相同但参数不同会冲突。未知响应使用 `GET /api/projects/{project_id}/submission-receipt?key=原键` 核对；等待时不换键重发。
 
-6. 用 `GET /api/queue` 和 `GET /api/projects/{project_id}/tasks/{task_id}` 查询原任务。候选通过任务返回的授权媒体入口访问；`GET /api/projects/{project_id}/segments/{segment_id}/versions` 读取历史。`stop_requested` 是停止请求，仍需等实际结束；`needs_reconcile` 需核对原执行。任务成功不表示审核、采用或交付通过。
+   `asset_id` 是必填的单段对象标识；服务端不会从项目默认分镜补值。分镜必须在计划中绑定明确的 `workflow` 或提交明确的 `pipeline_stage_id`，缺失时返回 `422` 的 `workflow_required` blocker，不会使用项目默认 workflow。`pipeline_stage_id:"auto"` 已移除并返回明确阻塞。
 
-创建/上传/新增分镜没有统一幂等回执，未知结果先读取本人作品、计划或素材确认。不要给这些操作套用生成任务的同键保证。
+7. 批次提交必须显式列出非空 `asset_ids`，例如：
+
+   ```json
+   {"asset_ids":["S01","S03"],"idempotency_key":"客户端为本次批次保存的唯一键"}
+   ```
+
+   空列表、缺少字段或未绑定 workflow 的分镜会在创建任务前返回结构化 `422` blocker；服务端不会把所有可执行分镜隐式加入批次。
+
+8. 用 `GET /api/queue` 和 `GET /api/projects/{project_id}/tasks/{task_id}` 查询原任务。候选通过任务返回的受控媒体引用访问；`GET /api/projects/{project_id}/segments/{segment_id}/versions` 读取历史。作品内媒体用稳定 `media_ref` 加短期 URL `/api/projects/{project_id}/media/{token}`（带本人 Bearer）读取/交付，MCP 对应 `list_media`、`get_media_url`、`download_media`；不要构造 `media_ref` 之外的服务器路径，`/media-file?path=` 和 `/media/{asset_name}` 只是本机 UI 的登记引用入口。`stop_requested` 是停止请求，仍需等实际结束；`needs_reconcile` 需核对原执行。任务成功不表示审核、采用或交付通过。
+
+创建/上传/新增分镜没有统一幂等回执，未知结果先读取本人作品、计划或素材确认。不要给这些操作套用生成任务的同键保证。MCP 的 `idempotent_hint` 按真实能力标注：单段/批次/装配/关键帧/语音/音频编辑/母版/媒体任务、按素材幂等登记的参考导入和核对类工具为 true；创建、上传、分镜/计划/审核/采用和观察记录为 false，annotation 只是提示，服务端仍校验权限与版本。
 
 ## 其他业务入口
 
@@ -75,30 +99,64 @@
 
 | 能力 | HTTP 入口 |
 | --- | --- |
-| 完整作品状态与准备度 | `/api/projects/{project_id}/state` |
+| 完整作品状态与准备度 | `/api/projects/{project_id}/state`；无显式方案时 readiness 返回 `stage_required`/`recipe_unresolved` 及显式方案事实 |
+| 可用模板（事实清单） | `/api/projects/{project_id}/reusable-templates`；返回 `available_templates`，不含推荐或默认选择 |
 | 工作台与 ComfyUI 状态 | `/api/health`、`/api/status`；状态响应不返回服务器运行目录等机器路径 |
 | 剧本与场次，独立 revision | `/api/projects/{project_id}/script` |
 | 图片/声音/媒体工具缺项 | `/api/keyframe-capability`、`/api/speech-capability`、`/api/media-capability` |
 | 图片、声音、音频编辑、全片母版后期、媒体处理任务 | `/api/projects/{project_id}/keyframe-tasks`、`speech-tasks`、`audio-edit-tasks`、`audio-master-tasks`、`media-tasks` |
 | 批次任务 | `/api/projects/{project_id}/batches` |
 | 审核与显式采用 | `/api/projects/{project_id}/reviews`、`adoptions` |
-| 参考分析与校订 | `/api/projects/{project_id}/reverse-analyses` |
+| 参考素材登记、显式范围/帧/音频观察、ASR、模型分析与校订 | `/api/projects/{project_id}/reverse-analyses`；从已上传素材登记用 `/reverse-analyses/from-material` |
+| 受控媒体列表、短期 URL 与文件读取 | `/api/projects/{project_id}/media`、`/media-refs`、`/media/{token}` |
+
+参考素材上传只登记原始文件和媒体探测事实，响应中的 `timeline`、`observations` 和任务表都保持为空；不会自动拆分、抽帧或运行 ASR。需要观察时，调用方必须明确调用：
+
+- `POST .../observations/range`：提交 `start_seconds`、`end_seconds`，可选 `frame_seconds`，生成只读范围和帧观察；
+- `POST .../observations/sample`：提交明确的 `times_seconds`，结果标为“等距采样/待确认范围”，不能当作镜头切点；
+- `POST .../observations/audio`：提交明确音频范围；
+- `POST .../observations/asr`：显式运行 ASR，结果标为 `model_inference` / `candidate_needs_review`。
+
+远程 MCP 的观察回执保留观察/分析/工件 ID、`provenance`、`user_status` 和待校订状态，但把服务器路径换成受控媒体引用。HTTP 业务响应仍保留本机 UI 所需的登记路径；远程响应不出现服务器路径。
+
+## 受控媒体读取与交付
+
+作品内媒体通过稳定、不含路径的 `media_ref` 和短期的受 Bearer 鉴权 URL 读取：
+
+| 入口 | 作用 |
+| --- | --- |
+| `GET /api/projects/{project_id}/media` | 分页列出素材、分镜候选、成片、审片、参考观察和任务产物；返回稳定 `media_ref`、文件事实和短期 `url`，不返回服务器路径 |
+| `POST /api/projects/{project_id}/media-refs` | 提交 `{"media_refs":[...]}`（1–100 个）重新签发短期 `url`；可按项返回不可用原因 |
+| `GET /api/projects/{project_id}/media/{token}` | 按签名 URL 返回本作品媒体文件；token 绑定作品和稳定引用，默认 15 分钟过期 |
+
+`media_ref` 形如 `asset:<素材ID>:A`、`segment:<分镜ID>:video`、`assembly`、`task:<任务ID>:video:0`、`reference:<拆解ID>:<观察ID>:frame_0`。URL 仍需本人 `Authorization: Bearer` 会话：未认证 401，其他账号的作品 404/403，过期 token 410，伪造 token 404。客户端不要把 `media_ref` 当成本地路径或直接拼接文件系统路径；URL 过期后用 `media-refs` 或 MCP `get_media_url` 重新签发。
+
+MCP 对应工具为 `list_media`、`get_media_url`、`download_media`。`download_media` 仅对小文件（默认 ≤1 MiB，可调到 4 MiB）返回 base64 内容；大文件只返回 URL，不把大文件放进 JSON。任务/候选回执保留任务、素材和版本 ID，并以受控 `media` 引用替代路径。`list_shot_versions` 的 `candidate_ref` 是稳定媒体引用，可传给 `approve_candidate`；采用门禁仍核对真实文件、任务身份和计划版本，不因引用形式改变而放宽或自动采用。
+
+`POST .../semantic-jobs` 也要求先存在至少一帧显式观察。模型输出只能写入 `observations`／`model_candidate`（展示层称“模型候选”“制作草案种子候选”），保留 `provenance` 和 `user_status`，不会自动覆盖人工校订或制作字段。UI/文档不得把候选描述成平台已经理解、判断或完成了创作；是否采用由用户或 Agent 显式校订后再决定。
+
+转制作使用 `POST .../convert` 时，必须提交非空 `shots` 列表；每项包含显式参考时间段和至少一个明确制作字段。空列表、采样观察或模型候选不会自动创建 `Rxx` 分镜或写入制作计划。
 
 这些为入口索引，不是免校验的参数模板。制作需通过 UI/API/MCP 完成；客户端不直接运行模型、FFmpeg 或 Whisper 补做产品未接入的步骤。保存剧本、计划、审核或采用时使用各自 schema 的版本字段，不能混用计划 revision 与剧本/审核 revision。审核证据与显式采用分别保存，技术报告不能替代画面、音色和表演验收。
 
 ## MCP 和验证边界
 
-远程 MCP 使用同一私人 URL 的 `/mcp/`，要求可配置 Bearer 的 Streamable HTTP 客户端。公网入口由 HTTPS 反向代理转发到本机 `/mcp/`，未认证请求返回 401；远程端固定开放一组经过业务路由授权的安全工具（当前 50 个），按能力覆盖：
+远程 MCP 使用同一私人 URL 的 `/mcp/`，要求可配置 Bearer 的 Streamable HTTP 客户端。公网入口由 HTTPS 反向代理转发到本机 `/mcp/`，未认证请求返回 401；远程端固定开放一组经过业务路由授权的安全工具（当前 60 个；本机 stdio 全量 67 个），按能力覆盖：
 
 | 类别 | 远程能力 |
 | --- | --- |
 | 作品与计划 | 作品/剧本/创作草稿读取与保存、分镜新增/修改/整理、素材上传与复用、审核记录、版本和预检读取 |
-| 参考与素材 | 参考拆解列表/详情、分析任务回执、时间线/分类/产物校订、转为分镜草案 |
+| 参考与素材 | 参考拆解列表/详情、从已上传素材或 base64 内容登记参考、显式范围/帧/音频观察、ASR、分析任务回执、时间线/分类/产物校订、转为分镜草案 |
 | 任务与制作 | 队列/指南/制作方案读取，单段和批次提交，任务读取、请求停止、回执和待核对状态 |
 | 关键帧、声音与媒体 | 关键帧/语音能力检查和候选提交，音频编辑、静音、视频技术检查、转写和无声审片候选 |
-| 装配 | 装配编辑与预检读取、接点/音轨记录、装配提交 |
+| 受控媒体 | 媒体列表、短期 URL 重新签发、小文件内联读取/大文件 URL 交付；任务与候选回执以受控引用替代服务器路径 |
+| 装配 | 装配编辑、跨分镜连续性检查与预检读取、接点/音轨记录、装配提交 |
 
-这些工具仍通过现有 Bearer 认证和 HTTP 业务路由执行；远程端不提供账户或管理操作、删除/清理、任意服务器路径导入或导出、脚本执行、全局设置修改、历史版本恢复、任务恢复/强制收尾等能力。完整适配工具可通过本机 stdio 使用，其他业务使用认证 HTTP。没有 OAuth 登录发现；只能 OAuth 且不能配置现有 Bearer 的宿主尚未支持。
+这些工具仍通过现有 Bearer 认证和 HTTP 业务路由执行；远程端不提供账户或管理操作、删除/清理、任意服务器路径导入或导出、脚本执行、全局设置修改、历史版本恢复、任务恢复/强制收尾等能力。完整适配工具可通过本机 stdio 使用，其他业务使用认证 HTTP。远程入口不暴露 `import_reference`；参考原始文件登记使用 `POST /api/projects/{project_id}/reverse-analyses` 的 multipart 上传。没有 OAuth 登录发现；只能 OAuth 且不能配置现有 Bearer 的宿主尚未支持。
+
+远程 MCP 与 HTTP 使用同一显式创作合同：`create_project` 必须传 `creation_mode:"advanced"`；`preflight` 必须传实际 `stage_id`；`create_shot`／`update_shot` 可传 `workflow` 或已安装的 `preset_id`。`read_project` 的 `section:'state'` 返回同一准备度结构（含 `stage_required`/`recipe_unresolved` 与 `options`），`section:'reusable-templates'` 返回不含推荐的 `available_templates` 事实清单。自动方案、`stage_id:"auto"` 和 `generation.mode` 已移除，缺省时返回结构化阻塞和可选项，不写计划。
+
+可分发 Skill 位于 [director-workbench/SKILL.md](../.agents/skills/director-workbench/SKILL.md)。外部客户端从公开源代码快照取得该目录后，按自身项目级或用户级 Skill 机制安装；工作台不会自动写入客户端目录。当前远程 MCP 只注册 tools，没有注册 resources 或 prompts，因此不能通过 MCP 资源接口拉取 Skill；这是当前限制。Skill 版本与工具数量作为合同快照维护（当前远程 60 / stdio 67），新部署仍以 `tools/list` 和 `/openapi.json` 为准。
 
 MCP 默认保留官方 SDK 的 loopback Host/Origin 限制和 DNS rebinding 防护。公网入口必须在工作台或反向代理启动前配置精确允许列表，不能由客户端请求或 `Forwarded`/`X-Forwarded-Host` 决定：
 
@@ -114,7 +172,7 @@ MCP 默认保留官方 SDK 的 loopback Host/Origin 限制和 DNS rebinding 防�
 
 ## 审核可写值与诊断结果
 
-HTTP `/openapi.json` 为阶段和状态的参数来源：审核阶段为 `sample/finish/final`，审核状态为 `pending_review/approved/changes_requested/stale`；设定、checkpoint 与 artifact 另允许 `draft`。MCP `record_review` 的手动写入子集为 `pending_review/changes_requested`，正式采用通过 `adopt_candidate`，不要把两个入口的权限和参数混用。非法 HTTP 值返回 422，不保存记录。
+HTTP `/openapi.json` 为阶段和状态的参数来源：审核阶段为 `sample/finish/final`，审核状态为 `pending_review/approved/changes_requested/stale`；设定、checkpoint 与 artifact 另允许 `draft`。MCP `record_review` 的手动写入子集为 `pending_review/changes_requested`，正式采用通过 `approve_candidate` 或 HTTP `POST /adoptions`，不要把两个入口的权限和参数混用。非法 HTTP 值返回 422，不保存记录。
 
 `video_qc` 抽帧与联系表是任务诊断结果，保留在任务回执供查看；不登记为创作关键帧，不进入首尾帧或其他作品的可复用图片。旧诊断登记也过滤，旧分镜中的已保存诊断引用需明确改选创作素材，工作台不会擅自改写原计划。
 

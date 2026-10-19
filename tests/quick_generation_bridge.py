@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from backend import app as backend
 from test_enhancement import nodes as enhancement_nodes
 from test_private_workbench import private_workbench
-from test_automatic_creation import complete_frozen_task, seed_test_models
+from test_explicit_creation import complete_frozen_task, seed_test_models
 from test_keyframe_inputs import reference_image
 
 root = Path(sys.argv[1]).resolve()
@@ -168,6 +168,15 @@ for line in sys.stdin:
     if 'body' in request:
         kwargs['content'] = base64.b64decode(request['body'])
     response = browser.request(request['method'], request['path'], **kwargs)
+    if request['method'] == 'POST' and request['path'] == '/api/projects/create' and response.status_code == 200:
+        # Test fixture setup: the quick flow creates the project, then this
+        # explicit install gives the browser real plans to choose from. The
+        # install is not initiated by the app, so the driver can still assert
+        # that creating a shot never installs a preset by itself.
+        project_id = response.json()['project']['id']
+        for preset_id in ('h3-text-native-portrait', 'h3-first-native-portrait'):
+            installed = browser.request('POST', f'/api/projects/{project_id}/production-presets/{preset_id}', headers=headers)
+            assert installed.status_code == 200, installed.text
     response_headers = {k: v for k, v in response.headers.items() if k.lower() in
                         {'content-type', 'set-cookie', 'content-range', 'accept-ranges'}}
     try:

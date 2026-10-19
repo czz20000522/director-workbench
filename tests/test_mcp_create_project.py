@@ -22,10 +22,10 @@ def test_create_forwards_nonselecting_request_without_contract_probe():
         return httpx.Response(200, json={'project': {'id': 'requested-2'}, 'created': True})
     async def verify():
         async with Client(create_server('http://localhost:4100', httpx.MockTransport(respond))) as client:
-            result = (await client.call_tool('create_project', {'series': '系列', 'title': '新集', 'project_id': 'requested'})).structured_content
+            result = (await client.call_tool('create_project', {'series': '系列', 'title': '新集', 'project_id': 'requested', 'creation_mode': 'advanced'})).structured_content
             assert result['data']['project']['id'] == 'requested-2'
     asyncio.run(verify())
-    assert writes == [{'series': '系列', 'title': '新集', 'project_id': 'requested', 'select': False}]
+    assert writes == [{'series': '系列', 'title': '新集', 'creation_mode': 'advanced', 'project_id': 'requested', 'select': False}]
 
 
 def test_create_and_continue_draft_against_real_backend(preset_client, monkeypatch):
@@ -38,7 +38,7 @@ def test_create_and_continue_draft_against_real_backend(preset_client, monkeypat
     async def verify():
         async with Client(create_server('http://localhost:4100', httpx.ASGITransport(app=backend.app))) as client:
             created = (await client.call_tool('create_project', {
-                'series': 'Agent 验收', 'title': '新故事', 'project_id': 'agent-story',
+                'series': 'Agent 验收', 'title': '新故事', 'project_id': 'agent-story', 'creation_mode': 'advanced',
             })).structured_content
             assert created['ok'], created
             project_id = created['data']['project']['id']

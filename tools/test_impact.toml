@@ -1,0 +1,606 @@
+# Deterministic test impact mapping for tools/select_tests.py.
+#
+# Every changed path is classified by these rules (first match wins):
+#   shared paths -> full core suite; docs -> public-source/doc gates; test files ->
+#   themselves; [[mapping]] -> its pytest/browser targets; Python sources -> reverse
+#   imports; frontend/frontend_shared -> browser drivers; anything else -> fail-closed.
+#
+# Mapping targets are validated by `python tools/select_tests.py --check-config`;
+# delete or rename a test and the matching entry must move in the same change.
+schema_version = 1
+# Change set is diffed against this ref unless --base overrides it.
+default_base = "origin/main"
+
+# Shared contracts: schemas, route aggregation, auth/storage/task entry points,
+# dependency manifests, CI/release, public entry points, and test infrastructure.
+# Any of these escalates to the full core suite because a per-feature answer would
+# not be trustworthy.
+[shared]
+paths = [
+  "backend/__init__.py",
+  "backend/app.py",
+  "backend/schemas.py",
+  "backend/routers/__init__.py",
+  "backend/routers/task_entry.py",
+  "backend/private_app.py",
+  "backend/private_auth.py",
+  "backend/private_deletion.py",
+  "backend/private_mode.py",
+  "backend/private_sessions.py",
+  "backend/private_workspaces.py",
+  "backend/storage.py",
+  "backend/task_scheduler.py",
+  "backend/task_store.py",
+  "backend/user_context.py",
+  "backend/workbench_config.py",
+  "mcp_server/models.py",
+  "mcp_server/server.py",
+  "paths.py",
+  "production/storage_layout.py",
+  "contracts/**",
+  "requirements.txt",
+  "requirements-dev.txt",
+  "requirements-mcp.txt",
+  "requirements-audio-tests.txt",
+  "pyproject.toml",
+  "package.json",
+  "package-lock.json",
+  "tsconfig.json",
+  "vite.config.ts",
+  ".github/**",
+  ".gitignore",
+  "run_tests.ps1",
+  "tools/export_public_source.py",
+  "tools/check_public_docs.py",
+  "tools/run_project_tests.py",
+  "tools/select_tests.py",
+  "tools/test_impact.toml",
+  "tests/conftest.py",
+  "tests/support.py",
+  "tests/runtime_scratch.py",
+]
+
+# Documentation-only changes run the public source boundary test and the same
+# syntax/link gates the public-source CI job uses.  Both are cheap and local.
+[docs]
+paths = [
+  "*.md",
+  "docs/**",
+  "mcp_server/README.md",
+  ".agents/**",
+]
+tests = ["tests/test_public_source.py"]
+gates = [
+  { name = "public-source-export", argv = ["python", "tools/export_public_source.py", "--check"] },
+  { name = "public-docs", argv = ["python", "tools/check_public_docs.py"] },
+]
+
+# UI paths.  A frontend path with a [[mapping]] entry selects only its drivers;
+# an unmapped UI path is fail-closed to every driver rather than silently skipped.
+[frontend]
+paths = [
+  "src/**",
+  "index.html",
+  "prototype.html",
+  "public/**",
+]
+# Cross-panel shell and utilities: every driver bundles them, so every driver runs.
+shared_paths = [
+  "src/App.tsx",
+  "src/main.tsx",
+  "src/styles.css",
+  "src/app/**",
+  "src/api/**",
+  "src/data.ts",
+  "src/sessionFetch.ts",
+]
+
+# The local fast layer: pure unit/contract tests, no service, media or browser.
+# `run_tests.ps1 -Suite fast` runs exactly this list; the budget is checked by the
+# runner and a slower layer must not be added silently.
+[fast]
+budget_seconds = 60
+tests = [
+  "tests/test_test_impact.py",
+  "tests/test_project_test_runner.py",
+  "tests/test_secure_files.py",
+  "tests/test_atomic_files.py",
+  "tests/test_optimization_atomic_json.py",
+  "tests/test_paths.py",
+  "tests/test_user_context.py",
+  "tests/test_storage_layout.py",
+  "tests/test_runtime_scratch.py",
+  "tests/test_review_openapi.py",
+  "tests/test_static_ui.py",
+  "tests/test_public_source.py",
+]
+
+# ---------------------------------------------------------------------------
+# Impact areas.  `paths` are repository-relative globs; `tests` are pytest files
+# or file::node ids; `browser` are tests/*.browser.mjs drivers.
+# ---------------------------------------------------------------------------
+
+[[mapping]]
+name = "assembly-editing"
+paths = [
+  "backend/assembly_continuity.py",
+  "backend/assembly_edit.py",
+  "backend/routers/batch_assembly.py",
+  "src/AssemblyEditPanel.tsx",
+  "src/AssemblyEditPanel.css",
+]
+tests = [
+  "tests/test_assembly_adoption_gate.py",
+  "tests/test_assembly_candidates.py",
+  "tests/test_assembly_continuity.py",
+  "tests/test_assembly_edit.py",
+  "tests/test_scoped_assembly.py",
+  "tests/test_plan_assembly_stale.py",
+  "tests/test_segment_versions.py",
+  "tests/test_merge_range.py",
+]
+browser = [
+  "tests/assembly_edit.browser.mjs",
+  "tests/guide_joins.browser.mjs",
+  "tests/creative_review.browser.mjs",
+]
+
+[[mapping]]
+name = "audio-edit"
+paths = [
+  "backend/audio_edit.py",
+  "backend/audio_edit_tasks.py",
+  "src/AudioEditPanel.tsx",
+]
+tests = [
+  "tests/test_audio_edit.py",
+  "tests/test_audio_edit_api.py",
+  "tests/test_audio_edit_tasks.py",
+  "tests/test_mcp_audio_edit.py",
+]
+browser = [
+  "tests/queued_panels.browser.mjs",
+  "tests/creative_review.browser.mjs",
+]
+
+[[mapping]]
+name = "audio-master"
+paths = ["backend/audio_master_tasks.py"]
+tests = [
+  "tests/test_audio_master.py",
+  "tests/test_locked_audio_preset.py",
+]
+
+[[mapping]]
+name = "atomic-files"
+paths = ["backend/atomic_files.py"]
+tests = [
+  "tests/test_atomic_files.py",
+  "tests/test_optimization_atomic_json.py",
+]
+
+[[mapping]]
+name = "candidate-review"
+paths = [
+  "backend/creative_inspection.py",
+  "src/CreativeInspectionPanel.tsx",
+  "src/CandidateComparison.tsx",
+  "src/candidate-comparison.css",
+]
+tests = [
+  "tests/test_creative_inspection.py",
+  "tests/test_creative_template.py",
+  "tests/test_artifact_review_history.py",
+  "tests/test_candidate_adoption.py",
+  "tests/test_candidate_review_invalidation.py",
+  "tests/test_mcp_creative_template.py",
+]
+browser = ["tests/creative_review.browser.mjs"]
+
+[[mapping]]
+name = "enhancement"
+paths = [
+  "backend/enhancement.py",
+  "src/EnhancementPanel.tsx",
+  "src/enhancement.css",
+]
+tests = ["tests/test_enhancement.py"]
+browser = ["tests/enhancement.browser.mjs"]
+
+[[mapping]]
+name = "gpu-idle"
+paths = [
+  "backend/gpu_idle_release.py",
+  "backend/routers/gpu_idle.py",
+]
+tests = [
+  "tests/test_gpu_idle_release.py",
+  "tests/test_monitor_uncertainty.py",
+]
+
+[[mapping]]
+name = "guide"
+paths = [
+  "backend/guide.py",
+  "src/FirstUseGuide.tsx",
+  "src/FirstUseGuide.css",
+]
+tests = ["tests/test_guide_joins.py"]
+browser = [
+  "tests/guide_joins.browser.mjs",
+  "tests/guide_queue.browser.mjs",
+  "tests/guide_review.browser.mjs",
+]
+
+[[mapping]]
+name = "keyframes"
+paths = [
+  "backend/keyframes.py",
+  "src/KeyframePanel.tsx",
+  "tools/qwen_image_edit.py",
+  "tools/qwen_image_t2i.py",
+]
+tests = [
+  "tests/test_keyframe_capability.py",
+  "tests/test_keyframe_inputs.py",
+  "tests/test_keyframe_tasks.py",
+  "tests/test_krea_text_image.py",
+  "tests/test_adult_profiles.py",
+  "tests/test_mcp_keyframes.py",
+  "tests/test_qwen_reference_conditioning.py",
+]
+browser = ["tests/queued_panels.browser.mjs"]
+
+[[mapping]]
+name = "mcp-access"
+paths = ["backend/mcp_access_config.py"]
+tests = ["tests/test_mcp_access_config.py"]
+
+[[mapping]]
+name = "media-operations"
+paths = [
+  "backend/media_operations.py",
+  "backend/routers/events_media.py",
+  "tools/process_media.py",
+  "src/MediaToolsPanel.tsx",
+  "src/MaterialSelect.tsx",
+  "src/materialOptions.ts",
+]
+tests = [
+  "tests/test_media_operations.py",
+  "tests/test_media_operations_api.py",
+  "tests/test_media_qc.py",
+  "tests/test_mcp_media_tools.py",
+  "tests/test_comfy_media_staging.py",
+  "tests/test_generated_material_chain.py",
+]
+browser = [
+  "tests/media_tools_panel.browser.mjs",
+  "tests/media_qc.browser.mjs",
+]
+
+[[mapping]]
+name = "output-resolution"
+paths = [
+  "backend/output_resolution.py",
+  "src/ResolutionPicker.tsx",
+]
+tests = ["tests/test_output_resolution.py"]
+browser = [
+  "tests/quick_generation.browser.mjs",
+  "tests/generation_stage.browser.mjs",
+]
+
+[[mapping]]
+name = "production-presets"
+paths = [
+  "backend/h3_duration.py",
+  "backend/production_presets.py",
+  "src/ProductionPresetPicker.tsx",
+]
+tests = [
+  "tests/test_production_presets.py",
+  "tests/test_first_frame_preset.py",
+  "tests/test_locked_audio_preset.py",
+  "tests/test_creative_template.py",
+  "tests/test_mcp_creative_template.py",
+]
+browser = [
+  "tests/quick_generation.browser.mjs",
+  "tests/generation_stage.browser.mjs",
+]
+
+[[mapping]]
+name = "readiness"
+paths = [
+  "backend/readiness.py",
+  "src/readiness.ts",
+]
+tests = ["tests/test_readiness.py"]
+browser = ["tests/queued_panels.browser.mjs"]
+
+[[mapping]]
+name = "remote-mcp"
+paths = ["backend/remote_mcp.py"]
+tests = [
+  "tests/test_remote_mcp.py",
+  "tests/test_mcp_adapter.py",
+]
+
+[[mapping]]
+name = "secure-files"
+paths = ["backend/secure_files.py"]
+tests = [
+  "tests/test_secure_files.py",
+  "tests/test_media_operations_api.py",
+  "tests/test_optimization_auth_hardening.py",
+]
+
+[[mapping]]
+name = "shot-creation"
+paths = [
+  "backend/shot_creation.py",
+  "src/ShotPromptEditor.tsx",
+  "src/ScriptWorkbench.tsx",
+  "src/script-workbench.css",
+]
+tests = [
+  "tests/test_scoped_creative.py",
+  "tests/test_explicit_creation.py",
+  "tests/test_reference_explicit.py",
+  "tests/test_screenplay.py",
+]
+browser = [
+  "tests/explicit_creation.browser.mjs",
+  "tests/quick_generation.browser.mjs",
+  "tests/generation_stage.browser.mjs",
+]
+
+[[mapping]]
+name = "speech"
+paths = [
+  "backend/speech.py",
+  "src/SpeechPanel.tsx",
+]
+tests = [
+  "tests/test_speech_flash_dispatch.py",
+  "tests/test_speech_process.py",
+  "tests/test_speech_receipts.py",
+  "tests/test_speech_tasks.py",
+  "tests/test_mcp_speech.py",
+  "tests/test_generate_speech.py",
+]
+browser = ["tests/speech_panel.browser.mjs"]
+
+[[mapping]]
+name = "task-controls"
+paths = [
+  "backend/background_jobs.py",
+  "backend/routers/queue_scheduler.py",
+  "backend/routers/task_control.py",
+  "src/TaskQueueStatus.tsx",
+]
+tests = [
+  "tests/test_scheduler_app.py",
+  "tests/test_task_scheduler.py",
+  "tests/test_scheduler_restart.py",
+  "tests/test_queue_readiness_integration.py",
+  "tests/test_task_reconciliation.py",
+  "tests/test_stop_confirmation.py",
+  "tests/test_finish_tasks.py",
+  "tests/test_lost_submission_response.py",
+  "tests/test_mcp_task_controls.py",
+  "tests/test_scoped_task_actions.py",
+  "tests/test_submission_idempotency.py",
+]
+browser = [
+  "tests/queued_panels.browser.mjs",
+  "tests/guide_queue.browser.mjs",
+]
+
+[[mapping]]
+name = "plan-editing"
+paths = ["backend/routers/plan_editing.py"]
+tests = [
+  "tests/test_plan_revision.py",
+  "tests/test_plan_assembly_stale.py",
+  "tests/test_scoped_assembly.py",
+  "tests/test_scoped_batches.py",
+  "tests/test_scoped_creative.py",
+  "tests/test_scoped_records.py",
+  "tests/test_scoped_submission.py",
+  "tests/test_scoped_task_actions.py",
+  "tests/test_segment_versions.py",
+  "tests/test_merge_range.py",
+  "tests/test_reference_revision.py",
+  "tests/test_guide_joins.py",
+]
+
+[[mapping]]
+name = "project-catalog"
+paths = [
+  "backend/routers/private_series.py",
+  "backend/routers/project_catalog.py",
+]
+tests = [
+  "tests/test_project_create_selection.py",
+  "tests/test_project_reads.py",
+  "tests/test_private_workbench.py",
+  "tests/test_private_startup.py",
+]
+
+[[mapping]]
+name = "project-transfer"
+paths = ["backend/routers/project_transfer.py"]
+tests = [
+  "tests/test_project_reads.py",
+  "tests/test_private_workbench.py",
+  "tests/test_optimization_tenant_scope.py",
+  "tests/test_scoped_records.py",
+]
+
+[[mapping]]
+name = "material-library"
+paths = [
+  "backend/routers/material_library.py",
+  "src/MaterialBridge.tsx",
+  "src/ProjectMaterialLibrary.tsx",
+]
+tests = [
+  "tests/test_material_bridge.py",
+  "tests/test_material_reuse.py",
+  "tests/test_project_reads.py",
+  "tests/test_generated_material_chain.py",
+  "tests/test_scoped_records.py",
+  "tests/test_mcp_media_tools.py",
+]
+browser = [
+  "tests/media_qc.browser.mjs",
+  "tests/media_tools_panel.browser.mjs",
+  "tests/queued_panels.browser.mjs",
+]
+
+[[mapping]]
+name = "reverse-analysis"
+paths = [
+  "backend/routers/reverse_analysis.py",
+  "src/ReverseWorkbench.tsx",
+]
+tests = [
+  "tests/test_reverse_workbench.py",
+  "tests/test_analysis_recovery.py",
+  "tests/test_mcp_reference_analysis.py",
+  "tests/test_mcp_reference_write.py",
+  "tests/test_reference_explicit.py",
+  "tests/test_reference_queue_safety.py",
+  "tests/test_reference_revision.py",
+]
+browser = ["tests/reference_queue.browser.mjs"]
+
+[[mapping]]
+name = "workbench-status"
+paths = ["backend/routers/workbench_status.py"]
+tests = [
+  "tests/test_private_workbench.py",
+  "tests/test_readiness.py",
+  "tests/test_project_reads.py",
+  "tests/test_scheduler_app.py",
+  "tests/test_monitor_uncertainty.py",
+]
+
+[[mapping]]
+name = "task-media-routes"
+paths = ["backend/routers/task_media.py"]
+tests = [
+  "tests/test_audio_edit_api.py",
+  "tests/test_audio_edit_tasks.py",
+  "tests/test_audio_master.py",
+  "tests/test_keyframe_tasks.py",
+  "tests/test_locked_audio_preset.py",
+  "tests/test_media_operations_api.py",
+  "tests/test_media_qc.py",
+  "tests/test_mcp_audio_edit.py",
+  "tests/test_mcp_keyframes.py",
+  "tests/test_mcp_media_tools.py",
+  "tests/test_mcp_speech.py",
+  "tests/test_speech_flash_dispatch.py",
+  "tests/test_speech_process.py",
+  "tests/test_speech_receipts.py",
+  "tests/test_speech_tasks.py",
+]
+
+[[mapping]]
+name = "mcp-server-tools"
+paths = [
+  "mcp_server/creation_inputs.py",
+  "mcp_server/tools_creative.py",
+  "mcp_server/tools_generation.py",
+  "mcp_server/tools_media.py",
+  "mcp_server/tools_reference.py",
+]
+tests = [
+  "tests/test_mcp_adapter.py",
+  "tests/test_mcp_adoption.py",
+  "tests/test_mcp_assembly.py",
+  "tests/test_mcp_audio_edit.py",
+  "tests/test_mcp_classification.py",
+  "tests/test_mcp_create_project.py",
+  "tests/test_mcp_creative_template.py",
+  "tests/test_mcp_keyframes.py",
+  "tests/test_mcp_media_tools.py",
+  "tests/test_mcp_missing_execution.py",
+  "tests/test_mcp_reference_analysis.py",
+  "tests/test_mcp_reference_write.py",
+  "tests/test_mcp_script.py",
+  "tests/test_mcp_speech.py",
+  "tests/test_mcp_submission.py",
+  "tests/test_mcp_task_controls.py",
+  "tests/test_remote_mcp.py",
+  "tests/test_artifact_review_history.py",
+]
+
+# ---------------------------------------------------------------------------
+# Tooling executors.  A tools/ script is an owned producer with its own tests.
+# ---------------------------------------------------------------------------
+
+[[mapping]]
+name = "tool-build-assembly-workflow"
+paths = ["tools/build_assembly_workflow.py"]
+tests = ["tests/test_assembly_builder.py"]
+
+[[mapping]]
+name = "tool-build-video-finish-workflow"
+paths = ["tools/build_video_finish_workflow.py"]
+tests = [
+  "tools/test_build_video_finish_workflow.py",
+  "tests/test_finish_tasks.py",
+]
+
+[[mapping]]
+name = "tool-generate-auk-flash"
+paths = ["tools/generate_auk_flash.py"]
+tests = ["tests/test_generate_auk_flash.py"]
+
+[[mapping]]
+name = "tool-generate-speech"
+paths = ["tools/generate_speech.py"]
+tests = [
+  "tests/test_generate_speech.py",
+  "tests/test_speech_process.py",
+]
+
+[[mapping]]
+name = "tool-private-accounts"
+paths = ["tools/private_accounts.py"]
+tests = ["tests/test_private_startup.py"]
+
+[[mapping]]
+name = "tool-reference-audio"
+paths = ["tools/reference_audio.py"]
+tests = ["tests/test_reference_decompose.py"]
+
+[[mapping]]
+name = "tool-reference-decompose"
+paths = ["tools/reference_decompose.py"]
+tests = [
+  "tests/test_reference_decompose.py",
+  "tests/test_analysis_recovery.py",
+]
+
+[[mapping]]
+name = "tool-reference-semantic"
+paths = ["tools/reference_semantic.py"]
+tests = [
+  "tests/test_reference_semantic.py",
+  "tests/test_analysis_recovery.py",
+]
+
+[[mapping]]
+name = "tool-restore-engine"
+paths = ["tools/restore_comfy_engine.py"]
+tests = ["tests/test_engine_recovery.py"]
+
+[[mapping]]
+name = "tool-remove-tree"
+paths = ["tools/remove_tree.py"]
+tests = ["tests/test_runtime_scratch.py"]

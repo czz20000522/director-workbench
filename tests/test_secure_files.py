@@ -46,7 +46,10 @@ def test_copy_checked_keeps_existing_destination_when_source_changes(tmp_path, m
     real_verify = secure_files.verify_identity
 
     def replace_before_final_check(path, expected):
-        source.write_bytes(b'replaced')
+        # A different size is used deliberately: identity compares size, inode and
+        # mtime, and a same-size rewrite could land inside the filesystem timestamp
+        # granularity and go undetected, making this test flaky by construction.
+        source.write_bytes(b'replaced-with-different-size')
         return real_verify(path, expected)
 
     monkeypatch.setattr(secure_files, 'verify_identity', replace_before_final_check)
@@ -66,7 +69,13 @@ async def _messages(response: VerifiedFileResponse, method: str = 'GET', range_h
         messages.append(message)
 
     headers = [] if range_header is None else [(b'range', range_header.encode())]
-    scope = {'type': 'http', 'method': method, 'headers': headers, 'extensions': {}}
+    # Starlette 1.x streams FileResponse in a collapsed task group and watches
+    # ``receive()`` for ``http.disconnect`` only when the scope does not announce
+    # ASGI response-send/2.4.  This fake server has no connection lifecycle, so a
+    # 2.0 scope leaves it busy-looping on the request forever; announcing 2.4
+    # takes the direct send path this test is actually about.
+    scope = {'type': 'http', 'method': method, 'headers': headers, 'extensions': {},
+             'asgi': {'version': '3.0', 'spec_version': '2.4'}}
     await response(scope, receive, send)
     return messages
 

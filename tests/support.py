@@ -16,7 +16,12 @@ from backend import app as backend, production_presets
 def create(client):
     response = client.post('/api/projects/create', json={'title': '同名作品', 'series': '同系列', 'project_id': 'same', 'select': True, 'creation_mode': 'advanced'})
     assert response.status_code == 200, response.text
-    return response.json()['project']
+    project = response.json()['project']
+    # Test setup installs one explicit plan; the product itself never chooses.
+    installed = client.post(f"/api/projects/{project['id']}/production-presets/{production_presets.PRESET_ID}")
+    if installed.status_code == 200:
+        return installed.json()['project']
+    return project
 
 
 def install(client):
@@ -30,10 +35,30 @@ def add_shot(client, project, shot_id, with_audio=True):
     for name in (f'{shot_id}.png', f'{shot_id}.wav'):
         (assets / name).write_bytes(b'test asset')
     image = str(assets / f'{shot_id}.png')
-    response = client.post('/api/projects/preset-test/plan/segments', json={'segment_id': shot_id, 'duration_seconds': 5, 'prompt': f'{shot_id} waves', 'first_frame': image, 'last_frame': image})
+    audio = str(assets / f'{shot_id}.wav') if with_audio else None
+    manifest = backend.load_project_manifest('preset-test')
+    workflow = next((ref for stage in manifest.get('pipeline', []) for ref in (stage.get('execution') or {}).get('references', []) if ref), None)
+    # An explicit plan is required even before a preset is installed. The
+    # install-repeat test intentionally saves a shot first, so use a named
+    # placeholder workflow instead of asking the workbench to choose one.
+    workflow = workflow or 'workflows/planned.json'
+    preset_id = (manifest.get('production_preset') or {}).get('id')
+    first_frame, last_frame, audio_guide = image, image, audio
+    if preset_id == production_presets.PRESET_ID:
+        pass
+    elif preset_id in production_presets.TEXT_PRESET_IDS:
+        first_frame = last_frame = audio_guide = None
+    elif preset_id in production_presets.END_PRESET_IDS:
+        audio_guide = None
+    elif preset_id in (production_presets.LOCKED_PRESET_ID, production_presets.FIRST_PRESET_ID):
+        last_frame = None
+    elif preset_id:
+        last_frame = audio_guide = None
+    response = client.post('/api/projects/preset-test/plan/segments', json={
+        'segment_id': shot_id, 'duration_seconds': 5, 'prompt': f'{shot_id} waves',
+        'first_frame': first_frame, 'last_frame': last_frame, 'audio_guide': audio_guide,
+        'workflow': workflow})
     assert response.status_code == 200, response.text
-    if with_audio:
-        assert client.patch(f'/api/projects/preset-test/plan/segments/{shot_id}', json={'audio_guide': str(assets / f'{shot_id}.wav')}).status_code == 200
 
 
 def reference_image(tmp_path):

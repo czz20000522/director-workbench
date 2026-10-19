@@ -10,12 +10,17 @@ STAGE = {'id': 'custom-video-recipe', 'execution': {'mode': 'comfyui'}}
 
 
 def build(*, validate=None, **overrides):
-    args = {'project_id': 'project-a', 'plan': {'revision': 7, 'segments': [{'id': 'S01'}]},
+    args = {'project_id': 'project-a',
+            'plan': {'revision': 7, 'segments': [{'id': 'S01', 'pipeline_stage_id': STAGE['id']}]},
             'stages': [STAGE], 'project_state': {}, 'tasks': [],
             'validate': validate or (lambda stage, asset, values: {'valid': True, 'values': values}),
             'assembly_preflight': lambda: {'ready': True, 'missing_videos': [], 'blocking_joins': []}}
     args.update(overrides)
     return build_project_readiness(**args)
+
+
+SELECTION = {'installed_stages': [{'stage_id': 'native-a', 'title': '原生', 'workflow': 'workflows/native.json'}],
+             'available_presets': []}
 
 
 def test_multiple_missing_inputs_are_passed_from_authoritative_validator_once():
@@ -41,7 +46,9 @@ def test_stage_ids_and_model_ranges_are_not_reimplemented(stage_id, valid):
     validator_result = {'valid': valid, 'h3_duration': {'frames': 209, 'output_seconds': 8.708}}
     if not valid:
         validator_result['blockers'] = [{'code': 'duration_out_of_range', 'input_id': 'duration', 'message': '时长越界'}]
-    row = build(stages=[{'id': stage_id}], validate=lambda *args: validator_result)['segments'][0]
+    row = build(stages=[{'id': stage_id}],
+                plan={'revision': 1, 'segments': [{'id': 'S01', 'pipeline_stage_id': stage_id}]},
+                validate=lambda *args: validator_result)['segments'][0]
     assert row['stage_id'] == stage_id
     assert row['ready'] is valid
     assert row['validation'] == validator_result
@@ -50,7 +57,7 @@ def test_stage_ids_and_model_ranges_are_not_reimplemented(stage_id, valid):
 
 
 def test_draft_and_saved_versions_use_same_validator_without_mutation():
-    plan = {'revision': 12, 'segments': [{'id': 'S01', 'prompt': 'saved'}]}
+    plan = {'revision': 12, 'segments': [{'id': 'S01', 'pipeline_stage_id': STAGE['id'], 'prompt': 'saved'}]}
     saved = deepcopy(plan)
     calls = []
     def validate(stage, asset, values):
@@ -71,11 +78,43 @@ def test_multiple_stages_require_service_selection_and_empty_project_has_next_ac
         pytest.fail('must not validate an unselected recipe')
     assert build(plan={'revision': 0, 'segments': []}, validate=never)['next_actions'][0]['id'] == 'add_segment'
     stages = [{'id': 'native-a'}, {'id': 'custom-b'}]
-    row = build(stages=stages, validate=never)['segments'][0]
+    unselected = {'revision': 1, 'segments': [{'id': 'S01'}]}
+    row = build(plan=unselected, stages=stages, validate=never, selection_options=SELECTION)['segments'][0]
     assert row['blockers'][0]['code'] == 'stage_required'
+    assert row['blockers'][0]['options'] == SELECTION
+    assert row['stage_id'] is None
     assert 'validate' not in {action['id'] for action in row['allowed_actions']}
-    selected = build(stages=stages, stage_selector=lambda segment, choices: choices[1]['id'])['segments'][0]
+    selected = build(plan=unselected, stages=stages, selection_options=SELECTION,
+                     stage_selector=lambda segment, choices: choices[1]['id'])['segments'][0]
     assert selected['stage_id'] == 'custom-b' and selected['ready']
+
+
+def test_single_installed_stage_is_not_selected_implicitly():
+    def never(*args):
+        pytest.fail('a single installed stage must not be chosen for the caller')
+    row = build(plan={'revision': 1, 'segments': [{'id': 'S01'}]}, validate=never,
+                selection_options=SELECTION)['segments'][0]
+    assert row['blockers'][0]['code'] == 'stage_required'
+    assert row['blockers'][0]['options'] == SELECTION
+    assert row['stage_id'] is None and not row['ready'] and not row['queueable']
+
+
+def test_explicit_workflow_with_no_matching_recipe_reports_recipe_unresolved():
+    def never(*args):
+        pytest.fail('an unresolved workflow must not be validated against another stage')
+    plan = {'revision': 1, 'segments': [{'id': 'S01', 'workflow': 'workflows/not-installed.json'}]}
+    row = build(plan=plan, stages=[STAGE, {'id': 'other'}], validate=never,
+                selection_options=SELECTION)['segments'][0]
+    assert row['blockers'][0]['code'] == 'recipe_unresolved'
+    assert row['blockers'][0]['action']['path'] == '/api/projects/project-a/pipeline'
+    assert row['blockers'][0]['options'] == SELECTION
+
+
+def test_explicit_stage_that_is_no_longer_installed_reports_recipe_unresolved():
+    row = build(plan={'revision': 1, 'segments': [{'id': 'S01', 'pipeline_stage_id': 'removed-recipe'}]},
+                validate=lambda *args: pytest.fail('must not validate a removed recipe'))['segments'][0]
+    assert row['blockers'][0]['code'] == 'recipe_unresolved'
+    assert row['stage_id'] is None
 
 
 def test_dependency_reasons_and_unknown_codes_survive_without_localized_parsing():
@@ -148,15 +187,22 @@ def test_other_users_tasks_do_not_affect_this_project_and_result_does_not_alias_
 
 
 @pytest.mark.parametrize(('status', 'expected'), [
-    (None, 'pending_review'), ('pending_review', 'pending_review'), ('approved', 'adopted'),
+    (None, 'pending_review'), ('pending_review', 'pending_review'), ('approved', 'pending_adoption'),
     ('changes_requested', 'redo_required'), ('stale', 'review_stale'),
 ])
 def test_success_is_not_automatic_quality_approval(status, expected):
     state = {'reviews': {'S01': {'sample': {'status': status}}}}
-    row = build(project_state=state, plan={'revision': 3, 'segments': [{'id': 'S01', 'video': {'path': 'candidate.mp4'}}]})['segments'][0]
+    row = build(project_state=state, plan={'revision': 3, 'segments': [{'id': 'S01', 'pipeline_stage_id': STAGE['id'], 'video': {'path': 'candidate.mp4'}}]})['segments'][0]
     assert row['state'] == expected
     assert row['ready']  # generation eligibility and quality state are separate
-    assert row['next_actions'][0]['id'] in {'review', 'redo'}
+    assert row['next_actions'][0]['id'] in {'review', 'redo', 'adopt'}
+
+
+def test_only_explicit_adoption_enters_adopted_state():
+    state = {'reviews': {'S01': {'sample': {'status': 'approved', 'source': 'explicit-adoption',
+                                            'adoption_binding': {'task_id': 't1'}}}}}
+    row = build(project_state=state, plan={'revision': 3, 'segments': [{'id': 'S01', 'pipeline_stage_id': STAGE['id'], 'video': {'path': 'candidate.mp4'}}]})['segments'][0]
+    assert row['state'] == 'adopted'
 
 
 def test_assembly_collects_all_preflight_blockers_and_uses_real_routes():
@@ -184,7 +230,7 @@ def test_restart_reconciliation_and_final_review_apply_to_assembly_too():
     assert row['next_actions'][0]['path'].endswith('/tasks/master-task')
     row = build(plan={'segments': [], 'assembly': {'output': 'old.mp4'}},
                 project_state={'reviews': {'MASTER': {'final': {'status': 'approved'}}}})['assembly']
-    assert row['state'] == 'adopted'
+    assert row['state'] == 'pending_adoption'
 
 
 def test_structured_exceptions_and_invalid_callback_results_fail_closed():

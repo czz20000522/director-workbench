@@ -15,7 +15,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 import math
 import shlex
-from .. import production_presets, readiness
+from .. import production_presets, readiness, shot_creation
 from ..schemas import PipelineValidateRequest
 from .. import app as backend
 
@@ -204,6 +204,8 @@ def pipeline_contract(stage: dict[str, Any], manifest: dict[str, Any] | None = N
                       and stage.get('recipe', '').startswith('H3 ')), None)
     if preset_id:
         value['input_specs'] = production_presets.input_specs(preset_id)
+        value['preset_id'] = preset_id
+        value['aspect_ratio'] = production_presets.aspect_ratio(preset_id)
     output_state = "待接入" if stage.get("status") == "待接入" else "待生成"
     value["output_specs"] = stage["output_specs"] if isinstance(stage.get("output_specs"), list) else [
         {"id": f"output-{index}", "label": label, "kind": backend.pipeline_value_kind(label),
@@ -245,15 +247,8 @@ def public_validate_pipeline(stage_id, request, manifest=None):
     project = manifest or backend.CURRENT_PROJECT
     try:
         if stage_id == 'auto':
-            document, _ = backend.load_project_plan(str(project['id']))
-            segment = next((row for row in document.get('segments', []) if row.get('id') == request.asset_id), None)
-            if not segment:
-                raise HTTPException(404, '分镜不存在')
-            _, selected = backend.select_preset_execution(project, segment.get('workflow'), None)
-            if not selected:
-                raise HTTPException(422, {'code': 'creation_recipe_unresolved',
-                    'message': '当前制作方式无法与已保存输入对应。请核对执行回执并修复配方身份；预检未修改作品。'})
-            stage_id = selected
+            raise HTTPException(422, {'code': 'explicit_stage_required',
+                                      'message': '自动制作方案已移除；请显式选择制作步骤后再预检。'})
         return backend.validate_project_pipeline(stage_id, request, manifest)
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, dict) else {'code': 'validation_failed', 'message': str(exc.detail)}
@@ -273,7 +268,6 @@ def validate_project_pipeline(stage_id: str, request: PipelineValidateRequest, m
     stages = project.get('pipeline', []) if manifest is not None else backend.PIPELINE_STAGES
     templates = project.get('task_templates', {}) if manifest is not None else backend.TASK_TEMPLATES
     plan_path = backend.resolve_registered_path(str(project['plan_path'])) if manifest is not None else backend.PLAN_PATH
-    default_workflow = (project.get('production_preset') or {}).get('workflow')
     stage = next((item for item in stages if item["id"] == stage_id), None)
     if stage is None:
         raise HTTPException(404, "制作步骤不存在")
@@ -288,8 +282,16 @@ def validate_project_pipeline(stage_id: str, request: PipelineValidateRequest, m
     segment = next((item for item in document.get("segments", []) if isinstance(item, dict) and item.get("id") == request.asset_id), None)
     if isinstance(segment, dict) and segment.get("workflow") and not payload.get("workflow"):
         payload["workflow"] = str(segment["workflow"])
-    if not payload.get("workflow") and not payload.get("prompt") and default_workflow:
-        payload["workflow"] = default_workflow
+    if not payload.get('workflow'):
+        payload['workflow'], _ = backend.select_preset_execution(project, None, stage_id)
+    if not payload.get('workflow'):
+        raise HTTPException(422, {
+            'code': 'workflow_required',
+            'message': f'{request.asset_id} 尚未明确绑定可执行工作流或制作方案。',
+            'blockers': [{'code': 'workflow_required', 'object': {'kind': 'segment', 'id': request.asset_id},
+                          'action': {'id': 'choose_workflow', 'label': '选择制作方案', 'method': 'PATCH',
+                                     'path': f'/api/projects/{project["id"]}/plan/segments/{request.asset_id}'}}],
+        })
     payload['workflow'], stage_id = backend.select_preset_execution(project, payload.get('workflow'), stage_id)
     prepared = backend.prepare_pipeline_payload(payload, stage_id, request.values, manifest)
     result = backend.validate_pipeline_values(stage, prepared["pipeline_values"], manifest)
@@ -300,8 +302,6 @@ def validate_project_pipeline(stage_id: str, request: PipelineValidateRequest, m
         result['h3_duration'] = prepared['h3_duration']
     if prepared.get('creative_inspection'):
         result['creative_inspection'] = prepared['creative_inspection']
-    if prepared.get('resolved_generation'):
-        result['resolved_generation'] = prepared['resolved_generation']
     blockers = backend.segment_dependency_blockers(document, segment or {})
     result['valid'] = not blockers
     result['blockers'] = blockers
@@ -327,6 +327,20 @@ def segment_dependency_blockers(document: dict[str, Any], segment: dict[str, Any
     return blockers
 
 
+def readiness_selection_options(manifest: dict[str, Any], stages: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return explicit selection facts only; nothing here chooses a recipe."""
+    options = shot_creation.creation_options(manifest)
+    installed = []
+    for stage in stages:
+        if not isinstance(stage, dict) or not stage.get('id'):
+            continue
+        references = (stage.get('execution') or {}).get('references') or []
+        installed.append({'stage_id': str(stage['id']), 'title': stage.get('title', stage['id']),
+                          'workflow': str(references[0]) if len(references) == 1 and references[0] else None})
+    options['installed_pipeline_stages'] = installed
+    return options
+
+
 def project_readiness(project_id: str, state: dict[str, Any]) -> dict[str, Any]:
     signature = backend.project_cache_signature(project_id)
     cache_key = (backend.project_cache_scope(), str(project_id))
@@ -344,7 +358,9 @@ def project_readiness(project_id: str, state: dict[str, Any]) -> dict[str, Any]:
     for task in task_values:
         task['queue'] = queue_values.get(task['id'], {})
     def select_stage(segment, available):
-        workflow = segment.get('workflow') or (manifest.get('production_preset') or {}).get('workflow')
+        workflow = segment.get('workflow')
+        if not workflow:
+            return None
         _, selected = backend.select_preset_execution(manifest, workflow, None)
         if selected:
             return selected
@@ -352,16 +368,14 @@ def project_readiness(project_id: str, state: dict[str, Any]) -> dict[str, Any]:
         executable = [stage for stage in contracts if (stage.get('execution') or {}).get('mode') == 'comfyui' and
                       any(item.get('kind') == '视频' for item in stage.get('output_specs', []))]
         matched = next((stage for stage in executable if workflow in (stage.get('execution') or {}).get('references', [])), None)
-        return (matched or (executable[0] if executable else {})).get('id')
+        return (matched or {}).get('id')
     result = readiness.build_project_readiness(project_id=project_id, plan=document, stages=stages, project_state=state,
-        tasks=task_values, stage_selector=select_stage, assembly_asset_id=str(manifest.get('assembly_asset_id') or 'MASTER'),
+        tasks=task_values, stage_selector=select_stage, selection_options=backend.readiness_selection_options(manifest, stages),
+        assembly_asset_id=str(manifest.get('assembly_asset_id') or 'MASTER'),
         validate=lambda stage, asset, values: backend.validate_project_pipeline(stage, PipelineValidateRequest(asset_id=asset, values=values), manifest),
         assembly_preflight=lambda: backend.preflight_project_assembly(project_id))
     result['installed_stages'] = [{'id': stage['id'], 'title': stage.get('title', stage['id'])} for stage in stages]
-    result['creation_mode'] = 'auto' if ((not document.get('segments') and manifest.get('default_creation_mode') == 'auto') or result['segments'] and all((segment.get('generation') or {}).get('mode') == 'auto' for segment in document.get('segments', []))) else 'advanced'
-    selected_stages = {row.get('stage_id') for row in result['segments']}
-    if not selected_stages:
-        selected_stages = {select_stage({}, stages)}
+    selected_stages = {row.get('stage_id') for row in result['segments'] if row.get('stage_id')}
     result['input_requirements'] = [spec for stage in stages if stage.get('id') in selected_stages
                                     for spec in backend.pipeline_contract(stage, manifest).get('input_specs', [])]
     with _READINESS_CACHE_LOCK:

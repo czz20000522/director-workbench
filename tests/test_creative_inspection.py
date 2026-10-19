@@ -212,7 +212,10 @@ def test_reference_and_comparison_are_private_owner_scoped(private_workbench):
     a, b, _, _ = private_workbench
     first, second = create(a), create(b)
     root = '/api/projects/' + first['id']
-    assert a.post(root + '/plan/segments', json={'segment_id': 'S01', 'duration_seconds': 5}).status_code == 200
+    installed = a.post(root + '/production-presets/h3-guided')
+    assert installed.status_code == 200, installed.text
+    workflow = installed.json()['project']['production_preset']['workflow']
+    assert a.post(root + '/plan/segments', json={'segment_id': 'S01', 'duration_seconds': 5, 'workflow': workflow}).status_code == 200
     assert b.get(root + '/segments/S01/versions').status_code == 404
     before = a.get(root + '/plan').json()
     rejected = a.patch(root + '/plan/segments/S01', json={'reference_asset_id': 'another-project'})

@@ -6,6 +6,7 @@ app.py 只重新导出这些名字。pydantic/OpenAPI 的组件名取自类的 _
 """
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any, Literal
 
@@ -17,7 +18,7 @@ from . import shot_creation
 class StartRequest(BaseModel):
     expected_revision: int | None = Field(default=None, ge=0)
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=160)
-    asset_id: str = Field(default="")
+    asset_id: str = Field(min_length=1, max_length=160)
     prompt: str | None = None
     seed: int | None = None
     pipeline_stage_id: str | None = Field(default=None, max_length=120)
@@ -38,7 +39,7 @@ class FinishRequest(BaseModel):
 class BatchRequest(BaseModel):
     expected_revision: int | None = Field(default=None, ge=0)
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=160)
-    asset_ids: list[str] = Field(default_factory=list, max_length=128)
+    asset_ids: list[str] = Field(min_length=1, max_length=128)
     prompt: str | None = None
     pipeline_stage_id: str | None = Field(default=None, max_length=120)
     pipeline_values_by_asset: dict[str, dict[str, Any]] = Field(default_factory=dict)
@@ -59,7 +60,9 @@ class ProjectImportRequest(BaseModel):
 
 
 class ProjectCreateRequest(BaseModel):
-    creation_mode: Literal['auto', 'advanced'] = 'auto'
+    # Creation mode is explicit and no longer has an implicit default.  `auto`
+    # was removed by Issue #116; only the explicit advanced contract remains.
+    creation_mode: Literal['advanced']
     series: str = Field(min_length=1, max_length=120)
     title: str = Field(min_length=1, max_length=160)
     project_id: str | None = None
@@ -111,6 +114,7 @@ class PlanSegmentCreateRequest(BaseModel):
     performance: str = Field(default="", max_length=1000)
     prompt: str = Field(default="", max_length=100000)
     workflow: str | None = Field(default=None, max_length=500)
+    preset_id: str | None = Field(default=None, max_length=120)
     first_frame: str | None = Field(default=None, max_length=500)
     last_frame: str | None = Field(default=None, max_length=500)
     audio_guide: str | None = Field(default=None, max_length=500)
@@ -183,7 +187,83 @@ class ReverseArtifactUpdateRequest(BaseModel):
 
 
 class ReverseConvertRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
     expected_revision: int = Field(ge=0)
+    shots: list['ReverseShotDraft'] = Field(min_length=1, max_length=256)
+
+
+class ReverseShotDraft(BaseModel):
+    """调用方明确提交的制作分镜来源与字段。
+
+    参考观察只能作为证据；所有会进入制作计划的字段必须由调用方显式提供。
+    """
+
+    model_config = ConfigDict(extra='forbid')
+
+    segment_id: str | None = Field(default=None, min_length=1, max_length=120)
+    start_seconds: float = Field(ge=0, allow_inf_nan=False)
+    end_seconds: float = Field(gt=0, allow_inf_nan=False)
+    fields: dict[str, Any] = Field(min_length=1, max_length=32)
+
+    @model_validator(mode='after')
+    def validate_range(self) -> 'ReverseShotDraft':
+        if self.end_seconds <= self.start_seconds:
+            raise ValueError('参考时间段结束时间必须大于开始时间')
+        allowed = {
+            'location', 'shot_size', 'camera', 'wardrobe', 'performance', 'prompt', 'workflow',
+            'first_frame', 'last_frame', 'audio_guide', 'delivery_master', 'script_scene_id',
+            'source_observation', 'source_user_note',
+        }
+        if not any(key in allowed and value not in (None, '') for key, value in self.fields.items()):
+            raise ValueError('制作分镜至少需要一个明确的非空字段')
+        return self
+
+
+class ReferenceRangeExtractRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    start_seconds: float = Field(ge=0, allow_inf_nan=False)
+    end_seconds: float = Field(gt=0, allow_inf_nan=False)
+    frame_seconds: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+
+    @model_validator(mode='after')
+    def validate_range(self) -> 'ReferenceRangeExtractRequest':
+        if self.end_seconds <= self.start_seconds:
+            raise ValueError('参考时间段结束时间必须大于开始时间')
+        if self.frame_seconds is not None and not self.start_seconds <= self.frame_seconds <= self.end_seconds:
+            raise ValueError('帧时间必须位于显式参考时间段内')
+        return self
+
+
+class ReferenceSampleRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    times_seconds: list[float] = Field(min_length=1, max_length=64)
+
+    @field_validator('times_seconds')
+    @classmethod
+    def validate_times(cls, values: list[float]) -> list[float]:
+        if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)) or value < 0 for value in values):
+            raise ValueError('采样时间必须是有限的非负数字')
+        return values
+
+
+class ReferenceAudioExtractRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    start_seconds: float = Field(ge=0, allow_inf_nan=False)
+    end_seconds: float = Field(gt=0, allow_inf_nan=False)
+
+    @model_validator(mode='after')
+    def validate_range(self) -> 'ReferenceAudioExtractRequest':
+        if self.end_seconds <= self.start_seconds:
+            raise ValueError('参考音频范围结束时间必须大于开始时间')
+        return self
+
+
+class ReferenceAsrRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
 
 
 class ReverseClassificationRequest(BaseModel):
@@ -227,6 +307,7 @@ class PlanSegmentUpdateRequest(BaseModel):
     performance: str | None = Field(default=None, max_length=1000)
     prompt: str | None = Field(default=None, max_length=100000)
     workflow: str | None = Field(default=None, max_length=500)
+    preset_id: str | None = Field(default=None, max_length=120)
     first_frame: str | None = Field(default=None, max_length=500)
     last_frame: str | None = Field(default=None, max_length=500)
     audio_guide: str | None = Field(default=None, max_length=500)
@@ -433,3 +514,21 @@ class AssemblyRequest(BaseModel):
 class MissingExecutionResolution(BaseModel):
     confirm_execution_ended: Literal[True]
     note: str = Field(min_length=1, max_length=2000)
+
+
+class ReferenceFromMaterialRequest(BaseModel):
+    """Register an existing project-owned audio/video material as reference input.
+
+    The request names a material already registered in the work; it never accepts
+    a server path or client path. Uploading the bytes remains the separate
+    multipart/base64 material-upload entry.
+    """
+    model_config = ConfigDict(extra='forbid')
+    asset_id: str = Field(min_length=1, max_length=160)
+
+
+class MediaRefsRequest(BaseModel):
+    """Issue short-lived signed download URLs for stable media references."""
+    model_config = ConfigDict(extra='forbid')
+    media_refs: list[str] = Field(min_length=1, max_length=100)
+    ttl_seconds: int = Field(default=900, ge=60, le=3600, strict=True)

@@ -9,15 +9,24 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import paths
+from tools import select_tests
 from tools.remove_tree import remove_tree
 
 PROJECT = paths.PROJECT_ROOT
+# The layered entry points.  `core`/`browser` stay the merge gate; `fast` is the
+# sub-minute local layer and `affected` runs the selector's changed-surface answer.
+LAYERED_SUITES = ('fast', 'affected')
+FAST_MODULES = ('pytest', 'pytest_timeout')
+INSTALL_DEV_HINT = ('Install development test tooling into the project interpreter: '
+                    r'.venv\Scripts\python.exe -m pip install -r requirements-dev.txt')
+DEFAULT_IMPACT_CONFIG = Path('tools/test_impact.toml')
 BROWSER_TESTS = (
-    'assembly_edit', 'automatic_creation', 'client_restore', 'enhancement',
+    'assembly_edit', 'explicit_creation', 'client_restore', 'enhancement',
     'generation_stage', 'guide_queue', 'guide_review', 'media_tools_panel',
     'queued_panels', 'reference_queue', 'speech_panel',
     'quick_generation', 'media_qc', 'guide_joins', 'creative_review',
@@ -89,7 +98,7 @@ def suite_specs(project: Path, run_root: Path, desktop: Path | None = None) -> d
             'modules': ['fastapi', 'uvicorn', 'httpx', 'pytest', 'mcp', 'numpy', 'av'],
             'args': ['-m', 'pytest', 'tests', 'tools/test_build_video_finish_workflow.py',
                      '--ignore=tests/test_generate_auk_flash.py', '-q',
-                     '--basetemp', str(run_root / 'pytest')],
+                     '--basetemp', str(run_root / 'p')],
         },
         'auk': {
             'python': host / 'ComfyUI-Shared/tools/AuK/.venv/Scripts/python.exe',
@@ -142,6 +151,218 @@ def captured(command: list[str], *, cwd: Path, env: dict) -> tuple[int, str]:
     if output:
         print(output, end='' if output.endswith('\n') else '\n', flush=True)
     return completed.returncode, tail_of(output)
+
+
+def suite_environment(run_root: Path, temporary: Path) -> dict:
+    """The child environment every interpreter suite shares.
+
+    PYTHONHOME/PYTHONPATH are cleared so the checkout's interpreter is not polluted by
+    the parent shell, and the scratch roots point inside this run so retention owns them.
+    """
+    environment = dict(os.environ)
+    environment.pop('PYTHONHOME', None)
+    environment.pop('PYTHONPATH', None)
+    environment['PYTHONNOUSERSITE'] = '1'
+    environment.update({key: str(temporary) for key in ('TMP', 'TEMP', 'TMPDIR')})
+    environment['DIRECTOR_TEST_RUNTIME'] = str(run_root)
+    return environment
+
+
+def probe_environment(result: dict, interpreter: Path, project: Path, environment: dict,
+                      modules: tuple[str, ...], host: Path) -> list[str]:
+    """Record interpreter/package availability, returning the missing module names."""
+    try:
+        probe = subprocess.run([str(interpreter), '-c', PROBE, *modules],
+                               cwd=project, env=environment, capture_output=True, text=True,
+                               encoding='utf-8', errors='replace', timeout=60)
+        if probe.returncode:
+            result['errors'].append(with_output(
+                f'Environment probe failed (exit {probe.returncode}).',
+                tail_of((probe.stdout or '') + (probe.stderr or ''))))
+            return []
+        details = json.loads(probe.stdout)
+        result['environment'] = details
+        missing = [key for key, value in details['modules'].items() if not value['available']]
+        result['missing_modules'] = missing
+        if missing:
+            result['errors'].append('Missing modules: ' + ', '.join(missing))
+        base_prefix = Path(details['base_prefix']).resolve()
+        if not (base_prefix.is_relative_to(host) or base_prefix.is_relative_to(paths.DATA_ROOT)):
+            result['warnings'].append('Python base_prefix is outside the configured machine roots; '
+                                      'the environment depends on that installation.')
+        return missing
+    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError) as exc:
+        result['errors'].append(f'Environment probe could not complete: {type(exc).__name__}.')
+        return []
+
+
+def interpreter_suite(*, name: str, project: Path, run_root: Path, interpreter: Path,
+                      args: list[str], modules: tuple[str, ...], check: bool, host: Path,
+                      budget_seconds: int | None = None) -> dict:
+    """Run one pytest-style child on an interpreter and build its receipt entry."""
+    temporary = run_root / name
+    temporary.mkdir()
+    environment = suite_environment(run_root, temporary)
+    result = {'interpreter': str(interpreter), 'cwd': str(project),
+              'temporary': str(temporary), 'warnings': [], 'errors': [],
+              'test_exit_code': None}
+    print(f'[{name}] Python: {interpreter}', flush=True)
+    if not interpreter.is_file():
+        result['errors'].append('Required interpreter is missing; this suite is failed, not skipped.')
+        return result
+    probe_environment(result, interpreter, project, environment, modules, host)
+    if check:
+        return result
+    command = [str(interpreter), *args]
+    result['command'] = command
+    started = time.monotonic()
+    try:
+        code, detail = captured(command, cwd=project, env=environment)
+    except OSError as exc:
+        result['errors'].append(f'Test suite could not start: {type(exc).__name__}.')
+        return result
+    result['elapsed_seconds'] = round(time.monotonic() - started, 1)
+    result['test_exit_code'] = code
+    result['output'] = detail
+    if code:
+        result['errors'].append(with_output(f'Test suite failed (exit {code}).', detail))
+    if budget_seconds is not None and result['elapsed_seconds'] > budget_seconds:
+        result['warnings'].append(
+            f'Fast layer took {result["elapsed_seconds"]}s, above its {budget_seconds}s budget; '
+            f'move slower tests out of the fast suite instead of growing the budget silently.')
+    return result
+
+
+def impact_config_path(project: Path, impact_config: Path | None) -> Path:
+    path = Path(impact_config) if impact_config else project / DEFAULT_IMPACT_CONFIG
+    return path if path.is_absolute() else project / path
+
+
+def fast_suite(project: Path, run_root: Path, check: bool, host: Path,
+               impact_config: Path | None) -> dict:
+    """The sub-minute local layer: pure unit/contract tests, no service or browser."""
+    config = select_tests.load_config(impact_config_path(project, impact_config), project)
+    args = ['-m', 'pytest', *config.fast_tests, '-q',
+            '--basetemp', str(run_root / 'p')]
+    result = interpreter_suite(name='fast', project=project, run_root=run_root,
+                               interpreter=project / '.venv/Scripts/python.exe', args=args,
+                               modules=FAST_MODULES, check=check, host=host,
+                               budget_seconds=config.fast_budget_seconds)
+    result['tests'] = list(config.fast_tests)
+    result['budget_seconds'] = config.fast_budget_seconds
+    result['config_errors'] = list(config.errors)
+    result['errors'].extend(config.errors)
+    if 'pytest_timeout' in result.get('missing_modules', ()):
+        result['errors'].append(INSTALL_DEV_HINT)
+    return result
+
+
+def affected_suite(project: Path, run_root: Path, check: bool, host: Path, *,
+                   base: str | None, impact_config: Path | None,
+                   with_browser: bool) -> dict:
+    """Run only the checks the impact selector maps to this change set.
+
+    A full-core escalation runs the same command as `core`; a stale mapping or a
+    Git/config error fails the suite instead of quietly running a smaller subset.
+    """
+    result: dict = {'warnings': [], 'errors': [], 'test_exit_code': None,
+                    'commands': [], 'gates': []}
+    config_path = impact_config_path(project, impact_config)
+    try:
+        config = select_tests.load_config(config_path, project)
+        base_ref = base or config.default_base
+        base_commit = select_tests.resolve_base(project, base_ref)
+        changes = select_tests.collect_changes(project, base_ref)
+    except select_tests.GitError as exc:
+        result['errors'].append(f'Test impact selection could not start: {exc}')
+        return result
+    selection = select_tests.select(config, changes, base_commit=base_commit)
+    selection.base = base_ref
+    result['selection'] = selection.to_dict()
+    result['warnings'].extend(selection.warnings)
+    result['errors'].extend(selection.errors)
+    print(f'[affected] base={base_ref} @ {base_commit[:12]} changed={len(changes)} '
+          f'status={selection.status}', flush=True)
+    print('[affected] pytest: '
+          + (', '.join(selection.pytest) if selection.pytest else '(none)'), flush=True)
+    if selection.browser:
+        suffix = '' if with_browser else ' (not requested; pass --with-browser)'
+        print('[affected] browser: ' + ', '.join(selection.browser) + suffix, flush=True)
+    if selection.errors:
+        return result
+    if not changes:
+        result['errors'].append(
+            f'No changed files vs {base_ref}; nothing can be selected. Run the core suite, '
+            f'or pass --base with the ref this change should be compared against.')
+        return result
+    interpreter = project / '.venv/Scripts/python.exe'
+    if not interpreter.is_file():
+        result['errors'].append('Required interpreter is missing; this suite is failed, not skipped.')
+        return result
+    temporary = run_root / 'affected'
+    temporary.mkdir(parents=True, exist_ok=True)
+    environment = suite_environment(run_root, temporary)
+    result['interpreter'] = str(interpreter)
+    result['temporary'] = str(temporary)
+    result['run_root'] = str(run_root)
+    missing = probe_environment(result, interpreter, project, environment, FAST_MODULES, host)
+    if 'pytest_timeout' in missing:
+        result['errors'].append(INSTALL_DEV_HINT)
+    if check:
+        return result
+    for gate in selection.gates:
+        argv = [str(interpreter) if token == 'python' else token for token in gate['argv']]
+        result['commands'].append(argv)
+        try:
+            code, detail = captured(argv, cwd=project, env=environment)
+        except OSError as exc:
+            result['gates'].append({'name': gate['name'], 'exit_code': None})
+            result['errors'].append(f'{gate["name"]} could not start: {type(exc).__name__}.')
+            continue
+        result['gates'].append({'name': gate['name'], 'exit_code': code, 'output': detail})
+        if code:
+            result['errors'].append(with_output(f'{gate["name"]} failed (exit {code}).', detail))
+    if selection.full_core:
+        args = suite_specs(project, run_root, host)['core']['args']
+        mode = 'full-core'
+    elif selection.pytest:
+        args = ['-m', 'pytest', *selection.pytest, '-q',
+                '--basetemp', str(run_root / 'p')]
+        mode = 'selected'
+    else:
+        args = None
+        mode = 'gates-only'
+    result['mode'] = mode
+    result['pytest_targets'] = list(selection.pytest)
+    if args is not None:
+        command = [str(interpreter), *args]
+        result['commands'].append(command)
+        try:
+            code, detail = captured(command, cwd=project, env=environment)
+        except OSError as exc:
+            result['errors'].append(f'Test suite could not start: {type(exc).__name__}.')
+        else:
+            result['test_exit_code'] = code
+            result['output'] = detail
+            if code:
+                result['errors'].append(with_output(f'Test suite failed (exit {code}).', detail))
+    if with_browser and selection.browser:
+        browser_spec = {'scripts': list(selection.browser)}
+        browser_result = browser_suite(browser_spec, project, run_root, 'affected-browser', check)
+        browser_result['status'] = 'failed' if browser_result['errors'] else 'passed'
+        result['browser'] = browser_result
+        result['warnings'].extend(browser_result['warnings'])
+        result['errors'].extend(browser_result['errors'])
+        result['commands'].extend(browser_result.get('commands', []))
+    elif with_browser:
+        result['warnings'].append('--with-browser was requested, but the selection contains '
+                                  'no browser driver.')
+    if args is None and not selection.gates and not selection.browser:
+        result['errors'].append(
+            'Affected selection produced no runnable check (an empty or deleted-only change '
+            'set). Add the missing test or mapping instead of accepting a silent pass.')
+    return result
+
 
 
 def browser_prerequisite_errors(project: Path, spec: dict) -> list[str]:
@@ -239,7 +460,7 @@ def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: b
                 command.append(str(target))
             elif name in BROWSER_PYTEST_FIXTURES:
                 module, handed = BROWSER_PYTEST_FIXTURES[name]
-                basetemp = run_root / f'pytest-{name}'
+                basetemp = run_root / f'p-{name}'
                 # --basetemp creates its own directory but not the parent, and the run root
                 # already exists here. The producer's output is read-only in places (the
                 # ancestor-link fixtures hold a real .git), so retention removes it through
@@ -314,7 +535,9 @@ def _mtime(entry: Path) -> float:
 
 def run(suite: str = 'all', check: bool = False, report_path: Path | None = None,
         *, project: Path = PROJECT, desktop: Path | None = None,
-        runtime: Path | None = None, keep_runs: int = KEEP_RUNS) -> int:
+        runtime: Path | None = None, keep_runs: int = KEEP_RUNS,
+        base: str | None = None, with_browser: bool = False,
+        impact_config: Path | None = None) -> int:
     if keep_runs < 1:
         raise ValueError('keep_runs must be at least 1: the run in flight is one of the kept roots')
     project = project.resolve()
@@ -339,62 +562,26 @@ def run(suite: str = 'all', check: bool = False, report_path: Path | None = None
                              'removed_run_roots': [str(entry) for entry in pruned],
                              'errors': prune_errors}}
     for name in names:
+        if name == 'fast':
+            receipt['suites'][name] = fast_suite(project, run_root, check, host, impact_config)
+            report_suite(name, receipt['suites'][name])
+            continue
+        if name == 'affected':
+            receipt['suites'][name] = affected_suite(
+                project, run_root, check, host, base=base,
+                impact_config=impact_config, with_browser=with_browser)
+            report_suite(name, receipt['suites'][name])
+            continue
         spec = specs[name]
         if spec.get('runner') == 'node':
             print(f'[{name}] Runner: node', flush=True)
             receipt['suites'][name] = browser_suite(spec, project, run_root, name, check)
             report_suite(name, receipt['suites'][name])
             continue
-        interpreter = spec['python']
-        temporary = run_root / name
-        temporary.mkdir()
-        environment = dict(os.environ)
-        environment.pop('PYTHONHOME', None)
-        environment.pop('PYTHONPATH', None)
-        environment['PYTHONNOUSERSITE'] = '1'
-        environment.update({key: str(temporary) for key in ('TMP', 'TEMP', 'TMPDIR')})
-        # Tests that must write inside the machine runtime tree ask tests/runtime_scratch.py
-        # where to put their scratch; pointing it at this run root keeps those artifacts
-        # inside the tree this run removes, instead of in a fixed directory that grows.
-        environment['DIRECTOR_TEST_RUNTIME'] = str(run_root)
-        result = {'interpreter': str(interpreter), 'cwd': str(project), 'temporary': str(temporary),
-                  'warnings': [], 'errors': [], 'test_exit_code': None}
+        result = interpreter_suite(name=name, project=project, run_root=run_root,
+                                   interpreter=spec['python'], args=spec['args'],
+                                   modules=tuple(spec['modules']), check=check, host=host)
         receipt['suites'][name] = result
-        print(f'[{name}] Python: {interpreter}', flush=True)
-        if not interpreter.is_file():
-            result['errors'].append('Required interpreter is missing; this suite is failed, not skipped.')
-        else:
-            try:
-                probe = subprocess.run([str(interpreter), '-c', PROBE, *spec['modules']],
-                                       cwd=project, env=environment, capture_output=True, text=True,
-                                       encoding='utf-8', errors='replace', timeout=60)
-                if probe.returncode:
-                    result['errors'].append(with_output(
-                        f'Environment probe failed (exit {probe.returncode}).',
-                        tail_of((probe.stdout or '') + (probe.stderr or ''))))
-                else:
-                    details = json.loads(probe.stdout)
-                    result['environment'] = details
-                    missing = [key for key, value in details['modules'].items() if not value['available']]
-                    if missing:
-                        result['errors'].append('Missing modules: ' + ', '.join(missing))
-                    base_prefix = Path(details['base_prefix']).resolve()
-                    if not (base_prefix.is_relative_to(host) or base_prefix.is_relative_to(paths.DATA_ROOT)):
-                        result['warnings'].append('Python base_prefix is outside the configured machine roots; the environment depends on that installation.')
-            except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError) as exc:
-                result['errors'].append(f'Environment probe could not complete: {type(exc).__name__}.')
-            if not check:
-                command = [str(interpreter), *spec['args']]
-                result['command'] = command
-                try:
-                    code, detail = captured(command, cwd=project, env=environment)
-                except OSError as exc:
-                    result['errors'].append(f'Test suite could not start: {type(exc).__name__}.')
-                else:
-                    result['test_exit_code'] = code
-                    result['output'] = detail
-                    if code:
-                        result['errors'].append(with_output(f'Test suite failed (exit {code}).', detail))
         report_suite(name, result)
     failed = [name for name, result in receipt['suites'].items() if result['status'] == 'failed']
     receipt['exit_code'] = int(bool(failed))
@@ -408,7 +595,8 @@ def run(suite: str = 'all', check: bool = False, report_path: Path | None = None
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--suite', choices=('all', 'core', 'auk', 'browser'), default='all')
+    parser.add_argument('--suite', choices=('all', 'core', 'fast', 'affected', 'auk', 'browser'),
+                        default='all')
     parser.add_argument('--check', action='store_true', help='Probe interpreters and package metadata without importing models or running tests.')
     parser.add_argument('--report', type=Path, help='Optional JSON receipt path; default: unique workspace runtime directory.')
     parser.add_argument('--runtime', type=Path,
@@ -417,9 +605,19 @@ def main() -> int:
                         help='Run roots left behind for diagnosis, counting the run just '
                              f'started; older ones are removed first, so at least 1 '
                              f'(default: {KEEP_RUNS}).')
+    parser.add_argument('--base', help='Affected suite: git ref to diff the working tree '
+                                       'against (default: the impact config default_base).')
+    parser.add_argument('--with-browser', action='store_true',
+                        help='Affected suite: also run the browser drivers the selector maps '
+                             'to this change set.')
+    parser.add_argument('--impact-config', type=Path,
+                        help=f'Affected/fast suite impact config (default: {DEFAULT_IMPACT_CONFIG}).')
     args = parser.parse_args()
-    return run(args.suite, args.check, args.report, runtime=args.runtime, keep_runs=args.keep_runs)
+    return run(args.suite, args.check, args.report, runtime=args.runtime,
+               keep_runs=args.keep_runs, base=args.base, with_browser=args.with_browser,
+               impact_config=args.impact_config)
 
 
 if __name__ == '__main__':
     sys.exit(main())
+

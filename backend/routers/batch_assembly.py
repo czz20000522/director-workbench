@@ -48,7 +48,6 @@ def submit_project_batch(request: BatchRequest, manifest: dict[str, Any] | None 
                 rows = connection.execute('SELECT id FROM tasks WHERE batch_id=? ORDER BY sequence', (existing['batch_id'],)).fetchall()
             return {'batch_id': existing['batch_id'], 'task_ids': [row['id'] for row in rows], 'status': 'accepted'}
     plan_path = backend.resolve_registered_path(str(project['plan_path'])) if manifest is not None else backend.PLAN_PATH
-    default_workflow = (project.get('production_preset') or {}).get('workflow')
     backend.require_submission_capacity()
     try:
         plan_document = json.loads(plan_path.read_text(encoding="utf-8-sig"))
@@ -56,9 +55,7 @@ def submit_project_batch(request: BatchRequest, manifest: dict[str, Any] | None 
         raise HTTPException(500, f"无法读取分段计划: {exc}") from exc
     backend.check_plan_revision(plan_document, request.expected_revision)
     plan_segments = {str(item.get("id")): item for item in plan_document.get("segments", []) if isinstance(item, dict) and item.get("id")}
-    requested_ids = request.asset_ids or [asset_id for asset_id, segment in plan_segments.items() if segment.get("workflow") or default_workflow]
-    if not requested_ids:
-        raise HTTPException(400, "当前项目计划没有可提交的片段工作流")
+    requested_ids = list(request.asset_ids)
     if len(requested_ids) != len(set(requested_ids)):
         raise HTTPException(422, "批次不能重复包含同一个分镜")
     unsupported = sorted(set(requested_ids) - set(plan_segments))
@@ -76,6 +73,9 @@ def submit_project_batch(request: BatchRequest, manifest: dict[str, Any] | None 
                                       'action': 'reorder_batch'})
     for asset_id in requested_ids:
         backend.ensure_asset_not_pending(project_id, asset_id)
+    if request.pipeline_stage_id == 'auto':
+        raise HTTPException(422, {'code': 'explicit_stage_required',
+                                  'message': '自动制作方案已移除；请显式选择制作步骤或工作流后再提交批次。'})
     batch_id = str(uuid.uuid4())
     now = time.time()
     task_ids: list[str] = []
@@ -84,13 +84,19 @@ def submit_project_batch(request: BatchRequest, manifest: dict[str, Any] | None 
         backend.check_queue_limits(connection, backend.settings_owner(), len(requested_ids))
         for sequence, asset_id in enumerate(requested_ids, start=1):
             segment = plan_segments[asset_id]
-            if (segment.get('generation') or {}).get('mode') == 'auto':
-                _, resolved_stage = backend.select_preset_execution(project, segment.get('workflow'), None)
-                if request.pipeline_stage_id not in (None, 'auto', resolved_stage):
-                    raise HTTPException(422, '自动分镜需按已保存输入生成；更换技术步骤前请切换高级模式。')
-            workflow = segment.get("workflow") or default_workflow
+            workflow = segment.get("workflow")
+            if not workflow and request.pipeline_stage_id is not None:
+                workflow, _ = backend.select_preset_execution(project, None, request.pipeline_stage_id)
             if not workflow:
-                raise HTTPException(400, f"{asset_id} 尚未登记可提交的 ComfyUI 工作流")
+                raise HTTPException(422, {
+                    'code': 'workflow_required',
+                    'message': f'{asset_id} 尚未明确绑定可执行工作流或制作方案；批次未创建。',
+                    'blockers': [{
+                        'code': 'workflow_required', 'object': {'kind': 'segment', 'id': asset_id},
+                        'action': {'id': 'choose_workflow', 'label': '选择制作方案', 'method': 'PATCH',
+                                   'path': f'/api/projects/{project_id}/plan/segments/{asset_id}'},
+                    }],
+                })
             payload = {
                 "asset_id": asset_id,
                 "workflow": str(workflow),
@@ -129,6 +135,17 @@ def get_project_assembly_edit(project_id: str) -> dict[str, Any]:
     document, _ = backend.load_project_plan(project_id)
     try:
         return backend.assembly_edit_view(manifest, document)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@ROUTER.get('/api/projects/{project_id}/assembly/continuity-check')
+def check_project_assembly_continuity(project_id: str) -> dict[str, Any]:
+    """Read-only cross-shot continuity check; never writes the plan or adopts a candidate."""
+    manifest = backend.require_project_manifest(project_id)
+    document, _ = backend.load_project_plan(project_id)
+    try:
+        return backend.assembly_continuity_check_view(manifest, document)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 
@@ -256,18 +273,29 @@ def submit_project_assembly(manifest: dict[str, Any] | None = None, request: Ass
     blocking = assembly_edit.blocking_joins(plan_document)
     if blocking:
         raise HTTPException(409, f"接点审核未通过或已过期: {', '.join(blocking)}")
+    adoption_blockers = backend.assembly_adoption_blockers(project, plan_document)
+    if adoption_blockers:
+        raise HTTPException(409, {
+            'code': 'assembly_adoption_required',
+            'message': '所有参与装配的分镜都必须明确采用当前候选后才能装配。',
+            'blockers': adoption_blockers,
+        })
     segment_ids = [str(item.get("id")) for item in plan_document.get("segments", []) if isinstance(item, dict) and item.get("id")]
     if not segment_ids:
         raise HTTPException(422, "装配需要至少一个分镜")
-    missing_video = [asset_id for asset_id in segment_ids if not next(
-        ((item.get("video") or {}).get("path") for item in plan_document["segments"]
-         if isinstance(item, dict) and str(item.get("id")) == asset_id), None
-    )]
-    if missing_video:
-        raise HTTPException(409, f"{len(missing_video)} 个分镜尚无当前生成视频")
+    continuity = backend.assembly_continuity_check_view(project, plan_document)
+    if continuity['blockers']:
+        raise HTTPException(409, {
+            'code': 'assembly_continuity_blocked',
+            'message': '跨分镜连续性检查存在阻断项；请按 blockers 逐项人工处理后重新检查。',
+            'blockers': continuity['blockers'],
+        })
     try:
-        workflow_path = backend.build_assembly_snapshot(manifest) if manifest is not None else backend.build_assembly_snapshot()
-    except (OSError, ValueError, RuntimeError) as exc:
+        workflow_path = (backend.build_assembly_snapshot(manifest, bind_adoptions=True)
+                         if manifest is not None else backend.build_assembly_snapshot())
+    except ValueError as exc:
+        raise HTTPException(409, {'code': 'assembly_snapshot_invalid', 'message': str(exc)}) from exc
+    except (OSError, RuntimeError) as exc:
         raise HTTPException(500, f"无法根据最新分段计划生成装配工作流: {exc}") from exc
     active_statuses = tuple(task_scheduler.WAITING | task_scheduler.EXECUTING)
     assembly_asset_id = str(project.get("assembly_asset_id", "MASTER"))

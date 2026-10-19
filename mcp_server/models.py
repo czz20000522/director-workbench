@@ -8,6 +8,8 @@ from .creation_inputs import GenerationSettings
 
 class ShotChanges(BaseModel):
     generation: GenerationSettings | None = None
+    workflow: str | None = Field(default=None, max_length=500)
+    preset_id: str | None = Field(default=None, max_length=120)
     reference_asset_id: str | None = Field(default=None, max_length=160)
     model_config = ConfigDict(extra='forbid')
     script_scene_id: str | None = Field(default=None, max_length=160)

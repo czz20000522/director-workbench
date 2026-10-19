@@ -97,10 +97,10 @@ def test_apply_result_marks_model_output_for_human_review() -> None:
     reference_semantic.apply_result(document, result)
 
     assert document["status"] == "needs_human_review"
-    assert document["timeline"][0]["inference"] == "人物位于画面中央。"
-    assert document["artifacts"]["mechanisms"]["provenance"] == "model_inference"
-    assert document["artifacts"]["production_seed"]["model"] == "Qwen3.8-27B-Uncensored-Q4_K_M"
-    assert document["content_mode"] == "music_performance"
+    assert document["timeline"][0]["model_candidate"]["observation"] == "人物位于画面中央。"
+    assert document["artifacts"]["mechanisms"]["model_candidate"]["provenance"] == "model_inference"
+    assert document["artifacts"]["production_seed"]["model_candidate"]["model"] == "Qwen3.8-27B-Uncensored-Q4_K_M"
+    assert document["content_mode_model_candidate"]["content_mode"] == "music_performance"
     assert document["stages"] == [{"id": "semantic", "status": "done"}, {"id": "review", "status": "ready"}]
 
 
@@ -112,7 +112,8 @@ def test_reanalysis_preserves_corrected_classification():
     assert document['content_mode_reason'] == '仅角色问候'
     assert document['content_mode_user_status'] == 'reviewed'
     assert document['content_mode_history'] == [{'content_mode': 'other'}]
-    assert document['content_mode_model_candidate'] == {'content_mode': 'music_performance', 'content_mode_reason': '模型猜测'}
+    assert document['content_mode_model_candidate']['content_mode'] == 'music_performance'
+    assert document['content_mode_model_candidate']['user_status'] == 'unreviewed'
 
 
 def test_observation_checkpoint_only_resumes_matching_analysis(tmp_path: Path) -> None:
@@ -147,7 +148,7 @@ def test_rerun_keeps_human_corrections_and_stores_model_candidate() -> None:
     reference_semantic.apply_result(document, result)
     assert document["timeline"][0]["status"] == "reviewed"
     assert document["timeline"][0]["user_note"] == "人工判断"
-    assert document["timeline"][0]["inference"] == "新的模型观察"
+    assert document["timeline"][0]["model_candidate"]["observation"] == "新的模型观察"
     artifact = document["artifacts"]["story"]
     assert artifact["summary"] == "人工结构"
     assert artifact["provenance"] == "user_confirmed"

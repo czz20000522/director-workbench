@@ -10,24 +10,34 @@ from support import add_shot
 def test_submission_freezes_previous_assembly_identity(preset_client, monkeypatch):
     client, project = preset_client
     add_shot(client, project, 'S01')
-    assert client.post('/api/projects/preset-test/reviews', json={
-        'asset_id': 'S01', 'status': 'approved', 'expected_revision': 0,
-    }).status_code == 200
     manifest = backend.require_project_manifest('preset-test')
     plan = backend.resolve_registered_path(manifest['plan_path'])
     document = json.loads(plan.read_text(encoding='utf-8'))
     video = project / 'workspaces/preset-test/assets/S01.mp4'
     video.write_bytes(b'current video fixture')
     document['segments'][0]['video'] = {'path': str(video)}
+    document['segments'][0]['current_version_task_id'] = 'current-task'
     previous = {'prompt_id': 'prior-prompt', 'output': 'output/prior.mp4'}
     document['assembly'] = previous
     plan.write_text(json.dumps(document), encoding='utf-8')
+    adopted = client.post('/api/projects/preset-test/reviews', json={
+        'asset_id': 'S01', 'stage': 'sample', 'status': 'approved',
+        'candidate_ref': str(video), 'expected_revision': 0,
+        'expected_plan_revision': document['revision'],
+        'note': 'Explicit isolated adoption for the assembly identity fixture.',
+        'source': 'explicit-adoption',
+    })
+    assert adopted.status_code == 200, adopted.text
+    plan_revision = client.get('/api/projects/preset-test/plan').json()['revision']
+    sound = client.put('/api/projects/preset-test/assembly/sound', json={
+        'expected_revision': plan_revision, 'policy': 'segment_native'})
+    assert sound.status_code == 200, sound.text
     graph = project / 'empty-assembly.json'
     graph.write_text('{}', encoding='utf-8')
     builder = backend.assembly_builder_path(manifest)
     builder.parent.mkdir(parents=True, exist_ok=True)
     builder.write_text('# Isolated builder availability fixture; snapshot generation is replaced below.\n', encoding='utf-8')
-    monkeypatch.setattr(backend, 'build_assembly_snapshot', lambda _: graph)
+    monkeypatch.setattr(backend, 'build_assembly_snapshot', lambda *args, **kwargs: graph)
     response = client.post('/api/projects/preset-test/assembly', json={'idempotency_key': 'freeze-prior'})
     assert response.status_code == 200, response.text
     assert response.json()['payload']['previous_assembly_candidate'] == previous
@@ -46,7 +56,7 @@ def test_new_assembly_requires_new_final_review(preset_client, monkeypatch):
     assert response.status_code == 200, response.text
     # A late completion belongs to its frozen plan even after UI selection moves.
     assert client.post('/api/projects/create', json={
-        'series': '测试', 'title': '另一作品', 'project_id': 'other-work',
+        'creation_mode': 'advanced', 'series': '测试', 'title': '另一作品', 'project_id': 'other-work',
     }).status_code == 200
     monkeypatch.setattr(backend, 'CURRENT_PROJECT_ID', 'other-work')
     monkeypatch.setattr(backend, 'CURRENT_PROJECT', backend.require_project_manifest('other-work'))

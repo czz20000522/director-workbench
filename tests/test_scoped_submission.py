@@ -11,7 +11,7 @@ def prepare(client, project):
     image = project / 'workspaces/preset-test/assets/S01.png'
     original['assets'] = [{'id': 'hero', 'image_path': str(image)}]
     backend.save_project_manifest(original)
-    assert client.post('/api/projects/create', json={'series': '测试', 'title': 'other', 'project_id': 'other'}).status_code == 200
+    assert client.post('/api/projects/create', json={'creation_mode': 'advanced', 'series': '测试', 'title': 'other', 'project_id': 'other'}).status_code == 200
     other = backend.load_project_manifest('other')
     other_image = project / 'workspaces/other/assets/other.png'
     other_image.write_bytes(b'wrong project')
@@ -54,6 +54,15 @@ def test_target_without_recipe_does_not_use_selected_project_recipe(preset_clien
     prepare(client, project)
     backend.apply_project_manifest(backend.load_project_manifest('preset-test'))
     response = client.post('/api/projects/other/tasks', json={'asset_id': 'S01'})
-    assert response.status_code == 400
+    assert response.status_code == 422
+    assert response.json()['detail']['code'] == 'workflow_required'
     assert client.get('/api/projects/other/tasks').json()['tasks'] == []
     assert client.post('/api/projects/missing/tasks', json={'asset_id': 'S01'}).status_code == 404
+
+
+def test_single_submission_requires_explicit_asset_id_and_does_not_create_task(preset_client):
+    client, project = preset_client
+    prepare(client, project)
+    response = client.post('/api/projects/preset-test/tasks', json={})
+    assert response.status_code == 422
+    assert client.get('/api/projects/preset-test/tasks').json()['tasks'] == []

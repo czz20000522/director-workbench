@@ -12,7 +12,7 @@ def setup_source(client, project):
     backend.save_project_manifest(source)
     plan_path = backend.resolve_registered_path(source['plan_path'])
     plan_path.write_text(json.dumps({'segments': [{'id': 'S01', 'keyframes': {'first': str(image)}}]}), encoding='utf-8')
-    response = client.post('/api/projects/create', json={'series': '测试', 'title': '续作', 'project_id': 'sequel'})
+    response = client.post('/api/projects/create', json={'creation_mode': 'advanced', 'series': '测试', 'title': '续作', 'project_id': 'sequel'})
     assert response.status_code == 200
     return image, (backend.PROJECTS_ROOT / 'preset-test.json').read_bytes(), plan_path.read_bytes()
 

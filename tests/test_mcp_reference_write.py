@@ -31,7 +31,9 @@ def test_mcp_conversion_preserves_existing_shot_edits(reverse_client):
     _, _, _ = reverse_client
     async def verify():
         async with Client(create_server('http://localhost:4100', httpx.ASGITransport(app=backend.app))) as client:
-            args = {'project_id': 'project-a', 'analysis_id': 'ref-test', 'expected_revision': 0}
+            args = {'project_id': 'project-a', 'analysis_id': 'ref-test', 'expected_revision': 0,
+                    'shots': [{'segment_id': 'caller-shot', 'start_seconds': 0, 'end_seconds': 5,
+                               'fields': {'prompt': '明确制作提示'}}]}
             converted = (await client.call_tool('convert_reference_to_shots', args)).structured_content
             assert converted['ok'], converted
             shot = converted['data']['created_segments'][0]
