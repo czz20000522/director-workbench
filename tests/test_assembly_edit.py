@@ -129,6 +129,28 @@ def test_continuity_is_read_only_and_degrades_when_ffmpeg_unavailable(edit_clien
     assert client.get(root + '/plan').json() == before
 
 
+def test_edit_saves_return_lightweight_result_without_continuity_analysis(edit_client, monkeypatch):
+    client, root, _, _ = edit_client
+    edit = client.get(root + '/assembly/edit').json()
+    called = []
+
+    def unexpected_analysis(*args, **kwargs):
+        called.append(True)
+        raise AssertionError('连续性媒体分析不得在计划编辑锁内执行')
+
+    monkeypatch.setattr(backend, 'assembly_continuity_view', unexpected_analysis)
+    response = client.put(root + '/assembly/joins/S01/S02', json={
+        'expected_revision': edit['revision'], 'status': 'pending', 'note': '保存轻量接点记录'})
+    assert response.status_code == 200, response.text
+    assert response.json()['continuity'] is None
+    assert called == []
+    sound = client.put(root + '/assembly/sound', json={
+        'expected_revision': response.json()['revision'], 'policy': 'mute'})
+    assert sound.status_code == 200, sound.text
+    assert sound.json()['continuity'] is None
+    assert called == []
+
+
 def test_sound_setting_can_explicitly_disable_legacy_master(edit_client):
     client, root, workspace, _ = edit_client
     register_wav(workspace, 11)

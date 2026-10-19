@@ -140,7 +140,7 @@ def save_project_assembly_join(project_id: str, left_id: str, right_id: str,
     manifest = backend.require_project_manifest(project_id)
     document, plan_path = backend.load_project_plan(project_id)
     backend.check_plan_revision(document, request.expected_revision)
-    view = backend.assembly_edit_view(manifest, document)
+    view = backend.assembly_edit_view(manifest, document, include_continuity=False)
     join = next((item for item in view['joins']
                  if item['left_id'] == left_id and item['right_id'] == right_id), None)
     if join is None:
@@ -156,7 +156,7 @@ def save_project_assembly_join(project_id: str, left_id: str, right_id: str,
     if request.status != 'approved' and isinstance(document.get('assembly'), dict) and (document['assembly'] or {}).get('output'):
         document['assembly'].update(status='stale', notes='接点审核要求修改，旧成片保留但需重新装配')
     backend.write_plan_version(plan_path, document)
-    return backend.assembly_edit_view(manifest, document)
+    return backend.assembly_edit_view(manifest, document, include_continuity=False)
 
 
 @ROUTER.put('/api/projects/{project_id}/assembly/sound')
@@ -176,7 +176,7 @@ def save_project_assembly_sound(project_id: str, request: AssemblySoundRequest) 
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     backend.persist_plan_edit(project_id, document, plan_path)
-    return backend.assembly_edit_view(manifest, document)
+    return backend.assembly_edit_view(manifest, document, include_continuity=False)
 
 
 @ROUTER.get('/api/projects/{project_id}/assembly/preflight')
@@ -184,7 +184,7 @@ def preflight_project_assembly(project_id: str) -> dict[str, Any]:
     manifest = backend.require_project_manifest(project_id)
     document, _ = backend.load_project_plan(project_id)
     try:
-        view = backend.assembly_edit_view(manifest, document)
+        view = backend.assembly_edit_view(manifest, document, include_continuity=False)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     builder_blocker = backend.assembly_builder_blocker(manifest)

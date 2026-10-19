@@ -3221,7 +3221,7 @@ def assembly_continuity_view(manifest: dict[str, Any], document: dict[str, Any])
     return result
 
 
-def assembly_edit_view(manifest: dict[str, Any], document: dict[str, Any]) -> dict[str, Any]:
+def assembly_edit_view(manifest: dict[str, Any], document: dict[str, Any], *, include_continuity: bool = True) -> dict[str, Any]:
     video_blockers = assembly_video_blockers(document)
     missing_videos = [item['dependency'] for item in video_blockers if item['code'] == 'video_required']
     join_rows = assembly_edit.joins(document, missing_videos=[item['dependency'] for item in video_blockers])
@@ -3234,7 +3234,7 @@ def assembly_edit_view(manifest: dict[str, Any], document: dict[str, Any]) -> di
                  'duration_seconds': None, 'error': str(exc)}
     warnings = ['非 WAV 完整母版的时长尚未验证，成片后须核对尾部声音'] if (
         sound.get('policy') == 'complete_master' and sound.get('duration_seconds') is None and not sound.get('error')) else []
-    continuity = assembly_continuity_view(manifest, document)
+    continuity = assembly_continuity_view(manifest, document) if include_continuity else None
     return {'project_id': manifest['id'], 'revision': int(document.get('revision', 0) or 0),
             'joins': join_rows, 'blocking_joins': assembly_edit.blocking_joins(document),
             'join_review': assembly_edit.review_readiness(join_rows),
