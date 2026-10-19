@@ -15,8 +15,17 @@ import time
 import uuid
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from .. import background_jobs
-from ..schemas import ReverseArtifactUpdateRequest, ReverseClassificationRequest, ReverseConvertRequest, ReverseTimelineUpdateRequest
+from ..schemas import (
+    ReferenceAsrRequest,
+    ReferenceRangeExtractRequest,
+    ReferenceSampleRequest,
+    ReverseArtifactUpdateRequest,
+    ReverseClassificationRequest,
+    ReverseConvertRequest,
+    ReverseTimelineUpdateRequest,
+)
 from .. import app as backend
+from tools import reference_decompose
 
 
 ROUTER = APIRouter()
@@ -112,20 +121,12 @@ def list_reverse_analyses(project_id: str) -> dict[str, Any]:
 @ROUTER.get("/api/projects/{project_id}/reverse-analyses/{analysis_id}")
 def get_reverse_analysis(project_id: str, analysis_id: str) -> dict[str, Any]:
     document, _ = backend.read_reverse_analysis(project_id, analysis_id)
-    with backend.DB_LOCK, backend.db() as connection:
-        row = connection.execute('SELECT id FROM tasks WHERE project_id=? AND asset_id=? ORDER BY created_at DESC LIMIT 1',
-                                 (project_id, f'reference-import-{analysis_id}')).fetchone()
-    if row:
-        task = backend.get_task(row['id'])
-        document = {**document, 'import_task_id': task['id'], 'import_status': task['status'],
-                    'import_task': {'id': task['id'], 'status': task['status'], 'queue': task['queue'], 'error': task.get('error')}}
     return document
 
 
 @ROUTER.post("/api/projects/{project_id}/reverse-analyses", status_code=202)
 async def create_reverse_analysis(project_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
     backend.require_project_manifest(project_id)
-    backend.require_submission_capacity()
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".mp3", ".wav", ".flac", ".m4a", ".aac"}:
         raise HTTPException(422, "只支持常见音视频参考素材")
@@ -135,31 +136,162 @@ async def create_reverse_analysis(project_id: str, file: UploadFile = File(...))
     source_dir.mkdir(parents=True, exist_ok=False)
     source = source_dir / f"reference{suffix}"
     await backend.stream_upload(file, source)
-    command = [
-        sys.executable, str(backend.REFERENCE_DECOMPOSER), "--project-id", project_id,
-        "--analysis-id", analysis_id, "--source", str(source), "--output", str(output),
-        "--original-name", file.filename or source.name,
-    ]
-    task_id = str(uuid.uuid4())
-    receipt_path = output / 'import-completion.json'
-    command.extend(['--task-id', task_id, '--completion-receipt', str(receipt_path)])
-    document = {'id': analysis_id, 'project_id': project_id, 'title': file.filename or '参考素材',
-                'source': {'original_name': file.filename or source.name, 'path': backend.root_relative_path(source), 'duration_seconds': 0, 'width': None, 'height': None},
-                'stages': [{'id': 'materials', 'status': 'waiting'}], 'timeline': [], 'artifacts': {},
-                'import_task_id': task_id, 'import_status': 'scheduler_waiting'}
-    payload = {'kind': 'reference_decomposition', 'project_id': project_id, 'asset_id': f'reference-import-{analysis_id}',
-               'analysis_id': analysis_id, 'source': str(source), 'analysis_path': str(output / 'analysis.json'), 'receipt_path': str(receipt_path), 'command': command}
-    if backend.PRIVATE_WORKSPACES is not None:
-        backend.PRIVATE_WORKSPACES.freeze_owner(payload, project_id)
-    with backend.GPU_ADMISSION_LOCK, backend.DB_LOCK, backend.db() as connection:
-        backend.check_queue_limits(connection, backend.settings_owner())
-        connection.execute('INSERT INTO tasks(id,asset_id,status,created_at,updated_at,payload,project_id) VALUES (?,?,?,?,?,?,?)',
-                           (task_id, payload['asset_id'], 'scheduler_waiting', time.time(), time.time(), json.dumps(payload, ensure_ascii=False), project_id))
+    try:
+        facts = reference_decompose.media_facts(source)
+    except Exception as exc:
+        document = {
+            'schema_version': 2, 'id': analysis_id, 'project_id': project_id,
+            'title': file.filename or '参考素材', 'status': 'registration_failed',
+            'source': {'original_name': file.filename or source.name, 'path': backend.root_relative_path(source),
+                       'probe_error': str(exc)},
+            'stages': [{'id': 'import', 'status': 'done'}, {'id': 'probe', 'status': 'failed'}],
+            'observations': [], 'timeline': [], 'artifacts': {},
+        }
         backend.write_reverse_analysis(document, output / 'analysis.json')
-        connection.commit()
-        backend.GPU_IDLE_RELEASER.note_activity()
-    backend.TASK_SCHEDULER.wake()
+        raise HTTPException(422, f'参考素材媒体探测失败: {exc}') from exc
+    document = {
+        'schema_version': 2, 'id': analysis_id, 'project_id': project_id,
+        'title': file.filename or '参考素材', 'status': 'registered', 'created_at': time.time(),
+        'source': {'asset_id': f'reference-{analysis_id}', 'original_name': file.filename or source.name,
+                   'path': backend.root_relative_path(source), 'size_bytes': source.stat().st_size,
+                   'registered': True, **facts},
+        'stages': [
+            {'id': 'import', 'label': '参考素材登记', 'status': 'done', 'executor': 'script'},
+            {'id': 'probe', 'label': '媒体探测', 'status': 'done', 'executor': 'script'},
+            {'id': 'observation', 'label': '显式观察工具', 'status': 'ready', 'executor': 'caller'},
+            {'id': 'semantic', 'label': '模型观察', 'status': 'waiting', 'executor': 'caller'},
+            {'id': 'review', 'label': '人工校订', 'status': 'waiting', 'executor': 'human'},
+            {'id': 'production', 'label': '转入正向生产', 'status': 'waiting', 'executor': 'caller'},
+        ],
+        'observations': [], 'timeline': [],
+        'artifacts': {'source': {
+            'title': '源素材档案', 'status': 'ready', 'provenance': 'observable_fact',
+            'summary': f"{facts.get('width') or '?'}x{facts.get('height') or '?'} · {facts.get('duration_seconds', 0):.2f}s · {facts.get('fps') or '?'}fps",
+            'facts': facts, 'evidence': [backend.root_relative_path(source)], 'confidence': 1.0,
+            'user_status': 'unreviewed',
+        }},
+    }
+    with backend.REVERSE_DOCUMENT_LOCK:
+        backend.write_reverse_analysis(document, output / 'analysis.json')
     return backend.get_reverse_analysis(project_id, analysis_id)
+
+
+def _reference_source(document: dict[str, Any]) -> Path:
+    source = document.get('source') if isinstance(document.get('source'), dict) else {}
+    value = source.get('path')
+    if not value:
+        raise HTTPException(422, '参考素材缺少已登记路径')
+    try:
+        path = backend.resolve_registered_path(str(value))
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(422, f'参考素材路径无法解析: {exc}') from exc
+    if not path.is_file():
+        raise HTTPException(404, '参考素材文件不存在')
+    return path
+
+
+def _append_observation(document: dict[str, Any], observation: dict[str, Any]) -> None:
+    observations = document.setdefault('observations', [])
+    if not isinstance(observations, list):
+        observations = []
+        document['observations'] = observations
+    observations.append(observation)
+    timeline = document.setdefault('timeline', [])
+    if not isinstance(timeline, list):
+        timeline = []
+        document['timeline'] = timeline
+    # Timeline is an observation index only. It is never treated as a shot list.
+    timeline.append(observation)
+
+
+@ROUTER.post('/api/projects/{project_id}/reverse-analyses/{analysis_id}/observations/range', status_code=201)
+def extract_reference_range(project_id: str, analysis_id: str, request: ReferenceRangeExtractRequest) -> dict[str, Any]:
+    with backend.REVERSE_DOCUMENT_LOCK:
+        document, path = backend.read_reverse_analysis(project_id, analysis_id)
+        source = _reference_source(document)
+        facts = document.get('source') if isinstance(document.get('source'), dict) else {}
+        observation_id = f"range-{uuid.uuid4().hex[:10]}"
+        try:
+            extracted = reference_decompose.extract_explicit_range(
+                source, path.parent / 'observations', facts, request.start_seconds, request.end_seconds,
+                frame_seconds=request.frame_seconds, artifact_id=observation_id,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise HTTPException(422, f'显式参考范围提取失败: {exc}') from exc
+        observation = {
+            'id': observation_id, 'type': 'explicit_range', 'start_seconds': extracted['start_seconds'],
+            'end_seconds': extracted['end_seconds'], 'frame_seconds': request.frame_seconds,
+            'segment_path': backend.root_relative_path(extracted['segment_path']),
+            'frame_path': backend.root_relative_path(extracted['frame_path']) if extracted['frame_path'] else None,
+            'provenance': 'observable_fact', 'status': 'pending_review', 'user_status': 'unreviewed',
+            'is_shot_cut': False, 'conversion_source': 'caller_must_submit_shot_list',
+        }
+        _append_observation(document, observation)
+        backend.write_reverse_analysis(document, path)
+        return {'observation': observation, 'analysis': document}
+
+
+@ROUTER.post('/api/projects/{project_id}/reverse-analyses/{analysis_id}/observations/sample', status_code=201)
+def sample_reference_frames(project_id: str, analysis_id: str, request: ReferenceSampleRequest) -> dict[str, Any]:
+    with backend.REVERSE_DOCUMENT_LOCK:
+        document, path = backend.read_reverse_analysis(project_id, analysis_id)
+        source = _reference_source(document)
+        facts = document.get('source') if isinstance(document.get('source'), dict) else {}
+        observation_id = f"sample-{uuid.uuid4().hex[:10]}"
+        try:
+            frames = reference_decompose.extract_explicit_frames(
+                source, path.parent / 'observations', facts, request.times_seconds, sample_id=observation_id,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise HTTPException(422, f'显式采样失败: {exc}') from exc
+        observation = {
+            'id': observation_id, 'type': 'explicit_sampling', 'sampling_mode': 'caller_selected',
+            'times_seconds': [round(value, 3) for value in request.times_seconds],
+            'frames': [{'time_seconds': item['time_seconds'], 'path': backend.root_relative_path(item['frame_path'])} for item in frames],
+            'provenance': 'observable_fact', 'status': 'pending_review', 'user_status': 'unreviewed',
+            'is_shot_cut': False, 'review_label': '等距采样/待确认范围',
+            'conversion_source': 'caller_must_submit_shot_list',
+        }
+        _append_observation(document, observation)
+        backend.write_reverse_analysis(document, path)
+        return {'observation': observation, 'analysis': document}
+
+
+@ROUTER.post('/api/projects/{project_id}/reverse-analyses/{analysis_id}/observations/asr', status_code=201)
+def transcribe_reference(project_id: str, analysis_id: str, _request: ReferenceAsrRequest) -> dict[str, Any]:
+    with backend.REVERSE_DOCUMENT_LOCK:
+        document, path = backend.read_reverse_analysis(project_id, analysis_id)
+        source = _reference_source(document)
+        facts = document.get('source') if isinstance(document.get('source'), dict) else {}
+        if not facts.get('has_audio'):
+            raise HTTPException(422, '参考素材没有可供 ASR 使用的音轨')
+        working = path.parent / 'observations' / 'asr'
+        try:
+            audio_path = reference_decompose.extract_audio_for_asr(source, working)
+            transcript, error = reference_decompose.transcribe_audio(audio_path, working)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise HTTPException(422, f'显式 ASR 失败: {exc}') from exc
+        if transcript is None:
+            raise HTTPException(409, error or 'ASR 运行环境未就绪')
+        observation_id = f"asr-{uuid.uuid4().hex[:10]}"
+        observation = {
+            'id': observation_id, 'type': 'asr', 'audio_path': backend.root_relative_path(audio_path),
+            'transcript_path': backend.root_relative_path(working / 'transcript.raw.json'),
+            'transcript': transcript, 'provenance': 'model_inference', 'status': 'candidate_needs_review',
+            'user_status': 'unreviewed', 'review_label': '模型候选/待校订',
+        }
+        _append_observation(document, observation)
+        transcript_artifact = document.setdefault('artifacts', {}).setdefault('transcript', {
+            'title': '台词与歌词候选', 'evidence': [],
+        })
+        transcript_artifact.update({
+            'status': 'candidate_needs_review', 'provenance': 'model_inference',
+            'summary': f"显式 ASR 生成 {len(transcript.get('segments', []))} 个候选片段；必须人工核对",
+            'evidence': [observation['transcript_path']], 'confidence': 0.25,
+            'user_status': 'unreviewed', 'model_candidate': observation,
+        })
+        backend.write_reverse_analysis(document, path)
+        return {'observation': observation, 'analysis': document}
 
 
 @ROUTER.patch("/api/projects/{project_id}/reverse-analyses/{analysis_id}/artifacts/{artifact_id}")
@@ -389,20 +521,19 @@ def reconcile_semantic_job(project_id: str, analysis_id: str) -> dict[str, Any]:
 
 @ROUTER.post("/api/projects/{project_id}/reverse-analyses/{analysis_id}/convert")
 @backend.plan_transaction
-def convert_reverse_analysis(project_id: str, analysis_id: str, request: ReverseConvertRequest | None = None) -> dict[str, Any]:
+def convert_reverse_analysis(project_id: str, analysis_id: str, request: ReverseConvertRequest) -> dict[str, Any]:
     with backend.REVERSE_DOCUMENT_LOCK:
-        if request is not None:
-            document, _ = backend.read_reverse_analysis(project_id, analysis_id)
-            current_revision = int(document.get('revision', 0))
-            if request.expected_revision != current_revision:
-                raise HTTPException(409, {'code': 'analysis_revision_conflict', 'message': '参考拆解已更新，请重新读取并核对后再转为制作草案', 'current_revision': current_revision, 'retryable': False})
-        return backend._convert_reverse_analysis(project_id, analysis_id)
+        document, _ = backend.read_reverse_analysis(project_id, analysis_id)
+        current_revision = int(document.get('revision', 0))
+        if request.expected_revision != current_revision:
+            raise HTTPException(409, {'code': 'analysis_revision_conflict', 'message': '参考拆解已更新，请重新读取并核对后再转为制作草案', 'current_revision': current_revision, 'expected_revision': request.expected_revision, 'retryable': False})
+        return backend._convert_reverse_analysis(project_id, analysis_id, request.shots)
 
 
-def _convert_reverse_analysis(project_id: str, analysis_id: str) -> dict[str, Any]:
+def _convert_reverse_analysis(project_id: str, analysis_id: str, shots: list[Any]) -> dict[str, Any]:
     document, analysis_path = backend.read_reverse_analysis(project_id, analysis_id)
-    if not document.get("timeline"):
-        raise HTTPException(422, "参考拆解尚无时间段，请先完成拆解")
+    if not shots:
+        raise HTTPException(422, "必须提交至少一个明确制作分镜")
     manifest = backend.load_project_manifest(project_id)
     workspace = backend.resolve_registered_path(str(manifest.get("workspace_root")))
     if not manifest.get("plan_path"):
@@ -423,15 +554,20 @@ def _convert_reverse_analysis(project_id: str, analysis_id: str) -> dict[str, An
         if not isinstance(item, dict):
             continue
         if item.get("source_analysis") == analysis_id:
-            linked.add(str(item.get("source_segment")))
+            linked.add(str(item.get("source_shot_id")))
         for entry in item.get("version_history") or []:
             if isinstance(entry, dict) and isinstance(entry.get("merged_segment"), dict):
                 pending.append(entry["merged_segment"])
     created: list[dict[str, Any]] = []
-    for index, reference in enumerate(document.get("timeline", []), start=1):
-        if not isinstance(reference, dict):
-            continue
-        if str(reference.get("id")) in linked:
+    allowed_fields = {'location', 'shot_size', 'camera', 'wardrobe', 'performance', 'prompt', 'workflow',
+                      'first_frame', 'last_frame', 'audio_guide', 'delivery_master', 'script_scene_id'}
+    for index, draft in enumerate(shots, start=1):
+        values = draft.model_dump() if hasattr(draft, 'model_dump') else dict(draft)
+        start_seconds = float(values['start_seconds'])
+        end_seconds = float(values['end_seconds'])
+        fields = values.get('fields') if isinstance(values.get('fields'), dict) else {}
+        source_shot_id = str(values.get('segment_id') or f"{start_seconds:.3f}-{end_seconds:.3f}-{index}")
+        if source_shot_id in linked:
             continue
         base_id = f"REF-{analysis_id[-8:]}-{index:02d}"
         segment_id = base_id
@@ -440,32 +576,23 @@ def _convert_reverse_analysis(project_id: str, analysis_id: str) -> dict[str, An
             segment_id = f"{base_id}-{counter}"
             counter += 1
         known.add(segment_id)
-        duration = max(float(reference.get("end_seconds", 0)) - float(reference.get("start_seconds", 0)), 0.1)
-        note = str(reference.get("user_note") or reference.get("inference") or "等待人工补充分镜意图")
         segment = {
             "id": segment_id,
-            "duration_seconds": round(duration, 3),
+            "duration_seconds": round(end_seconds - start_seconds, 3),
             "status": "planned",
-            "location": "由参考拆解待确认",
-            "shot_size": "待识别",
-            "camera": "待识别",
-            "wardrobe": "参考机制，不直接复制具体造型",
-            "performance": note,
-            "prompt": None,
-            "workflow": None,
+            **{key: fields.get(key) for key in allowed_fields},
             "keyframes": {"first": None, "last": None},
-            "reference_frame": reference.get("frame"),
             "source_analysis": analysis_id,
-            "source_segment": reference.get("id"),
+            "source_shot_id": source_shot_id,
             "source_revision": int(document.get("revision", 0)),
-            "source_range_seconds": [reference.get("start_seconds", 0), reference.get("end_seconds", 0)],
-            "source_note_status": reference.get("status", "pending_review"),
-            "source_observation": str(reference.get("inference") or ""),
-            "source_user_note": str(reference.get("user_note") or ""),
+            "source_range_seconds": [start_seconds, end_seconds],
+            "source_note_status": "pending_review",
+            "source_observation": str(fields.get("source_observation") or ""),
+            "source_user_note": str(fields.get("source_user_note") or ""),
         }
         created.append(segment)
         segments.append(segment)
-        linked.add(str(reference.get("id")))
+        linked.add(source_shot_id)
     plan["segments"] = segments
     if created:
         backend.persist_plan_edit(project_id, plan, plan_path)
@@ -477,7 +604,7 @@ def _convert_reverse_analysis(project_id: str, analysis_id: str) -> dict[str, An
         "project_id": project_id,
         "created_segments": [item["id"] for item in segments if isinstance(item, dict) and item.get("source_analysis") == analysis_id],
         "artifacts": document.get("artifacts", {}),
-        "note": "参考拆解仅生成制作草案；角色、场景、动作与传播机制仍需人工确认。",
+        "note": "制作分镜来自调用方提交的明确时间段和字段；模型观察仅作为待校订证据。",
     }
     saved_seed = document.get("production_seed")
     seed_path = backend.resolve_registered_path(saved_seed) if saved_seed else analysis_path.parent / "production-seed.json"

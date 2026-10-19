@@ -39,7 +39,17 @@ CONTENT_MODES = ("narrative", "music_performance", "dance", "showcase", "mood", 
 
 
 def pick_frames(document: dict[str, Any], maximum: int = 36) -> list[tuple[str, Path]]:
-    candidates = [item for item in document.get("timeline", []) if isinstance(item, dict) and item.get("frame")]
+    candidates: list[dict[str, Any]] = []
+    for item in document.get("timeline", []):
+        if not isinstance(item, dict):
+            continue
+        if item.get("frame"):
+            candidates.append(item)
+        elif item.get("frame_path"):
+            candidates.append({**item, "frame": item["frame_path"]})
+        for frame in item.get("frames") or []:
+            if isinstance(frame, dict) and frame.get("path"):
+                candidates.append({"id": f"{item.get('id')}@{frame.get('time_seconds')}", "frame": frame["path"]})
     if len(candidates) <= maximum:
         selected = candidates
     else:
@@ -287,9 +297,15 @@ def apply_result(document: dict[str, Any], result: dict[str, Any]) -> None:
     }
     for segment in document.get("timeline", []):
         if isinstance(segment, dict) and observations.get(str(segment.get("id"))):
-            segment["inference"] = observations[str(segment["id"])]
+            segment["model_candidate"] = {
+                "observation": observations[str(segment["id"])],
+                "provenance": "model_inference",
+                "user_status": "unreviewed",
+                "status": "candidate_needs_review",
+                "model": "Qwen3.8-27B-Uncensored-Q4_K_M",
+            }
             if segment.get("status") != "reviewed":
-                segment["status"] = "model_analyzed"
+                segment["status"] = "candidate_needs_review"
     artifacts = document.get("artifacts") if isinstance(document.get("artifacts"), dict) else {}
     model_artifacts = result.get("artifacts") if isinstance(result.get("artifacts"), dict) else {}
     for artifact_id in ARTIFACT_IDS:
@@ -306,17 +322,18 @@ def apply_result(document: dict[str, Any], result: dict[str, Any]) -> None:
             "user_status": "unreviewed",
             "model": "Qwen3.8-27B-Uncensored-Q4_K_M",
         }
-        if target.get("user_status") == "reviewed":
-            target["model_candidate"] = candidate
-        else:
-            target.update(candidate)
+        target["model_candidate"] = candidate
+        if target.get("user_status") != "reviewed":
+            target["status"] = "candidate_needs_review"
     classification = {'content_mode': str(result.get('content_mode', 'other')),
                       'content_mode_reason': str(result.get('content_mode_reason', '')).strip()}
-    if document.get('content_mode_user_status') == 'reviewed':
-        document['content_mode_model_candidate'] = classification
-    else:
-        document.update(classification)
-        document['content_mode_user_status'] = 'unreviewed'
+    document['content_mode_model_candidate'] = {
+        **classification,
+        'provenance': 'model_inference',
+        'user_status': 'unreviewed',
+        'status': 'candidate_needs_review',
+    }
+    document.setdefault('content_mode_user_status', 'unreviewed')
     document["semantic_route"] = result.get("analysis_route", {})
     for stage in document.get("stages", []):
         if isinstance(stage, dict) and stage.get("id") == "semantic":

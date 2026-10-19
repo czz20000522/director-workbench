@@ -183,7 +183,56 @@ class ReverseArtifactUpdateRequest(BaseModel):
 
 
 class ReverseConvertRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
     expected_revision: int = Field(ge=0)
+    shots: list['ReverseShotDraft'] = Field(min_length=1, max_length=256)
+
+
+class ReverseShotDraft(BaseModel):
+    """调用方明确提交的制作分镜来源与字段。
+
+    参考观察只能作为证据；所有会进入制作计划的字段必须由调用方显式提供。
+    """
+
+    model_config = ConfigDict(extra='forbid')
+
+    segment_id: str | None = Field(default=None, min_length=1, max_length=120)
+    start_seconds: float = Field(ge=0)
+    end_seconds: float = Field(gt=0)
+    fields: dict[str, Any] = Field(min_length=1, max_length=32)
+
+    @model_validator(mode='after')
+    def validate_range(self) -> 'ReverseShotDraft':
+        if self.end_seconds <= self.start_seconds:
+            raise ValueError('参考时间段结束时间必须大于开始时间')
+        return self
+
+
+class ReferenceRangeExtractRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    start_seconds: float = Field(ge=0)
+    end_seconds: float = Field(gt=0)
+    frame_seconds: float | None = Field(default=None, ge=0)
+
+    @model_validator(mode='after')
+    def validate_range(self) -> 'ReferenceRangeExtractRequest':
+        if self.end_seconds <= self.start_seconds:
+            raise ValueError('参考时间段结束时间必须大于开始时间')
+        if self.frame_seconds is not None and not self.start_seconds <= self.frame_seconds <= self.end_seconds:
+            raise ValueError('帧时间必须位于显式参考时间段内')
+        return self
+
+
+class ReferenceSampleRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    times_seconds: list[float] = Field(min_length=1, max_length=64)
+
+
+class ReferenceAsrRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
 
 
 class ReverseClassificationRequest(BaseModel):
