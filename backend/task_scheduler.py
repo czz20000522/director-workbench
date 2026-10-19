@@ -15,7 +15,7 @@ from typing import Any, Callable
 log = logging.getLogger("uvicorn.error")
 WAITING = {"scheduler_waiting", "batch_waiting"}
 TERMINAL = {"succeeded", "failed", "stopped"}
-CPU_KINDS = {"audio_edit", "media_operation"}
+CPU_KINDS = {"audio_edit", "audio_master", "media_operation"}
 EXECUTING = {"preparing", "submitting", "queued", "running", "submitted", "stopping", "stop_requested", "finalizing", "needs_reconcile"}
 REASON_MESSAGES = {
     "waiting_execution_slot": "等待共享执行资源", "waiting_reconciliation": "有执行回执待核对",

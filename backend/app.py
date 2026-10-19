@@ -35,7 +35,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictInt, field_validator, model_validator
-from . import production_presets, background_jobs, speech, keyframes, audio_edit_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, assembly_continuity, guide, readiness, task_scheduler, creative_inspection, shot_creation
+from . import production_presets, background_jobs, speech, keyframes, audio_edit_tasks, audio_master_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, assembly_continuity, guide, readiness, task_scheduler, creative_inspection, shot_creation
 from . import output_resolution, enhancement, task_store
 import av
 import paths
@@ -276,7 +276,7 @@ def ensure_no_release_blocking_tasks(action: str, *, gpu_only: bool = False,
 
     def blocks(row) -> bool:
         payload = json.loads(row['payload'])
-        if gpu_only and payload.get('kind') in {'audio_edit', 'media_operation'}:
+        if gpu_only and payload.get('kind') in {'audio_edit', 'audio_master', 'media_operation'}:
             return False
         if owner is None:
             return True
@@ -708,7 +708,7 @@ def gpu_admission(function):
         task_id = kwargs.get('task_id')
         if task_id is None and function.__name__ in {'resume', 'resume_project_task', 'reconcile_project_task', 'resolve_missing_execution'}:
             task_id = args[0 if function.__name__ == 'resume' else 1] if len(args) > (0 if function.__name__ == 'resume' else 1) else None
-        if task_id and (get_task(task_id) or {}).get('payload', {}).get('kind') in {'audio_edit', 'media_operation'}:
+        if task_id and (get_task(task_id) or {}).get('payload', {}).get('kind') in {'audio_edit', 'audio_master', 'media_operation'}:
             return function(*args, **kwargs)
         with GPU_ADMISSION_LOCK:
             GPU_IDLE_RELEASER.note_activity()
@@ -2447,7 +2447,7 @@ def adopt_project_candidate(project_id: str, request: AdoptionRequest) -> dict[s
             asset = next((item for item in manifest.get('assets', []) if item.get('id') == request.asset_id), None)
             if not asset or request.stage != 'sample' or not asset.get('ready'):
                 raise HTTPException(409, '此素材或阶段没有可采用的当前候选')
-            for field, kind in (('keyframe_task_id', 'keyframe'), ('speech_task_id', 'speech'), ('audio_edit_task_id', 'audio_edit'), ('media_task_id', 'media_operation')):
+            for field, kind in (('keyframe_task_id', 'keyframe'), ('speech_task_id', 'speech'), ('audio_edit_task_id', 'audio_edit'), ('audio_master_task_id', 'audio_master'), ('media_task_id', 'media_operation')):
                 if asset.get(field):
                     task_id, material_kind_expected = asset[field], kind
                     break
@@ -3207,7 +3207,7 @@ def assembly_sound_selection(manifest: dict[str, Any], document: dict[str, Any])
     if target is None:
         target = sum(float(item.get('duration_seconds') or 0) for item in document.get('segments', []) if isinstance(item, dict))
     if duration + 0.01 < target:
-        raise ValueError(f'全片音轨仅 {duration} 秒，短于分镜总时长 {round(target, 3)} 秒；请先用CPU音频处理明确补静音，或在Mac制作完整母版后上传')
+        raise ValueError(f'全片音轨仅 {duration} 秒，短于分镜总时长 {round(target, 3)} 秒；请先用全片母版后期明确补静音，或在Mac制作完整母版后上传')
     return {'policy': 'complete_master', 'audio_asset_id': asset_id, 'path': str(path),
             'duration_seconds': duration, 'size_bytes': path.stat().st_size,
             'modified_ns': path.stat().st_mtime_ns}
@@ -3253,10 +3253,12 @@ def assembly_edit_view(manifest: dict[str, Any], document: dict[str, Any], *, in
             'sound': sound, 'warnings': warnings, 'target_duration_seconds': round(sum(float(item.get('duration_seconds') or 0)
                        for item in document.get('segments', []) if isinstance(item, dict)), 3),
             'timing_summary': assembly_trim_summary(manifest, document),
-            'sound_processing': {'task_path': f"/api/projects/{manifest['id']}/audio-edit-tasks",
-                                 'max_seconds': 120, 'gain_range': [0, 8], 'short_audio': 'reject_or_explicit_pad_in_cpu_task',
-                                 'long_audio': 'explicit_trim_in_cpu_task', 'mixing': 'complete_master_replaces_all_segment_audio',
-                                 'note': '音量和淡入淡出通过原CPU音频处理产生新素材；试听后主动选择母版。原音接缝不自动混合，复杂多轨在Mac剪辑。'},
+            'sound_processing': {'task_path': f"/api/projects/{manifest['id']}/audio-master-tasks",
+                                 'legacy_task_path': f"/api/projects/{manifest['id']}/audio-edit-tasks",
+                                 'max_seconds': 1800, 'input_max_bytes': 2 * 1024 ** 3,
+                                 'short_audio': 'reject_or_explicit_pad_in_audio_master_task',
+                                 'long_audio': 'explicit_trim_in_audio_master_task', 'mixing': 'complete_master_replaces_all_segment_audio',
+                                 'note': '全片母版后期产生新PCM16候选；试听并主动选择母版。原音接缝不自动混合，复杂多轨在Mac剪辑。'},
             'audio_assets': [{'id': item['id'], 'title': item.get('title', item['id'])}
                              for item in manifest.get('assets', []) if isinstance(item, dict)
                              and item.get('kind') == 'audio' and item.get('id')],
@@ -3560,7 +3562,9 @@ app.include_router(_task_media_router)
 # app.py、private_mode.py 与既有测试都以 backend.<名称> 取用它们。
 from .routers.task_media import (
     audio_edit_owner_alive,
+    audio_master_owner_alive,
     audio_edit_source,
+    complete_audio_master_task,
     complete_audio_edit_task,
     complete_keyframe_task,
     complete_media_operation_task,
@@ -3569,10 +3573,12 @@ from .routers.task_media import (
     media_capability,
     media_operation_source,
     run_audio_edit_task,
+    run_audio_master_task,
     run_media_operation_task,
     run_speech_task,
     speech_capability,
     start_audio_edit_task,
+    start_audio_master_task,
     start_keyframe_task,
     start_media_operation,
     start_speech_task,

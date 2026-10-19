@@ -8,6 +8,11 @@ type Draft = { source_asset_id: string; background_asset_id?: string; start_seco
 type Submission = Draft & { idempotency_key: string };
 type Saved = { draft: Draft; pending?: Submission; completedTaskId?: string };
 type Task = { id: string; status: string; queue?: QueueReceipt['queue']; error?: string | null; result?: unknown };
+type MasterDraft = { source_asset_id: string; background_asset_id?: string; target_lufs: number; true_peak_dbtp: number;
+  fade_in_seconds: number; fade_out_seconds: number; trim_start_seconds: number; trim_duration_seconds: number | null;
+  background_gain_db: number; pad_silence: boolean; ducking?: { threshold_db: number; ratio: number; attack_seconds: number; release_seconds: number } };
+const masterInitial: MasterDraft = { source_asset_id: '', target_lufs: -16, true_peak_dbtp: -1, fade_in_seconds: 0, fade_out_seconds: 0,
+  trim_start_seconds: 0, trim_duration_seconds: null, background_gain_db: -12, pad_silence: false };
 const initial: Draft = { source_asset_id: '', start_seconds: 0, duration_seconds: null, pad_silence: false, gain: 1, fade_in_seconds: 0,
   fade_out_seconds: 0, background_gain: .25, background_offset_seconds: 0 };
 const terminal = ['succeeded', 'failed', 'stopped'];
@@ -21,6 +26,14 @@ function valid(d: Draft): boolean {
     && finite(d.gain, 8) && finite(d.background_gain, 8) && finite(d.fade_in_seconds, 120) && finite(d.fade_out_seconds, 120)
     && finite(d.background_offset_seconds, 120) && (Boolean(d.background_asset_id) || d.background_offset_seconds === 0)
     && (d.duration_seconds === null || (d.fade_in_seconds + d.fade_out_seconds <= d.duration_seconds && d.background_offset_seconds < d.duration_seconds));
+}
+function validMaster(d: MasterDraft): boolean {
+  const finite = (v: unknown, low: number, high: number) => typeof v === 'number' && Number.isFinite(v) && v >= low && v <= high;
+  return Boolean(d.source_asset_id) && (d.background_asset_id === undefined || typeof d.background_asset_id === 'string')
+    && finite(d.target_lufs, -24, -8) && finite(d.true_peak_dbtp, -3, 0) && finite(d.fade_in_seconds, 0, 10)
+    && finite(d.fade_out_seconds, 0, 10) && finite(d.trim_start_seconds, 0, 3600)
+    && (d.trim_duration_seconds === null || finite(d.trim_duration_seconds, .001, 1800))
+    && finite(d.background_gain_db, -60, 12) && typeof d.pad_silence === 'boolean';
 }
 class RequestError extends Error { constructor(message: string, readonly status: number) { super(message); } }
 
@@ -44,6 +57,10 @@ function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse }:
   const completion = useRef(onComplete);
   completion.current = onComplete;
   const [task, setTask] = useState<Task | null>(null);
+  const [masterDraft, setMasterDraft] = useState<MasterDraft>({ ...masterInitial });
+  const [masterTask, setMasterTask] = useState<Task | null>(null);
+  const [masterBusy, setMasterBusy] = useState(false);
+  const [masterMessage, setMasterMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const base = `/api/projects/${encodeURIComponent(projectId)}`;
@@ -51,6 +68,7 @@ function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse }:
   const draft = saved.pending || saved.draft;
   const locked = Boolean(saved.pending);
   const result = task?.status === 'succeeded' && task.result && typeof task.result === 'object' ? task.result as { output?: string; duration_seconds?: number; report?: { peak?: number; clipped_samples?: number } } : null;
+  const masterResult = masterTask?.status === 'succeeded' && masterTask.result && typeof masterTask.result === 'object' ? masterTask.result as { output?: string; duration_seconds?: number; candidate_asset_id?: string; report?: { output_true_peak_dbtp?: number; loudness_lufs_i?: number; loudness_lra?: number; clipped_samples?: number } } : null;
   function persist(next: Saved) {
     if (!alive.current) return false;
     try { localStorage.setItem(storageKey, JSON.stringify(next)); current.current = next; setSaved(next); return true; }
@@ -92,6 +110,16 @@ function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse }:
     const timer = window.setInterval(() => { if (!task || !terminal.includes(task.status)) void poll(); }, 3000);
     return () => { active = false; window.clearInterval(timer); };
   }, [pendingKey, task?.id, task?.status, base]);
+  useEffect(() => {
+    if (!masterTask || ['succeeded', 'failed', 'stopped'].includes(masterTask.status)) return;
+    let active = true;
+    const poll = async () => {
+      try { const next = await request(`${base}/tasks/${encodeURIComponent(masterTask.id)}`); if (active) setMasterTask(next); }
+      catch (error) { if (active) setMasterMessage(error instanceof Error ? error.message : '暂时无法核对全片母版后期'); }
+    };
+    void poll(); const timer = window.setInterval(() => void poll(), 3000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [masterTask?.id, masterTask?.status, base]);
   async function act(action: 'submit' | 'check' | 'reconcile' | 'stop' | 'resume') {
     if (working.current) return;
     working.current = true; setBusy(true);
@@ -118,12 +146,53 @@ function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse }:
     } finally { working.current = false; if (alive.current) setBusy(false); }
   }
   function change<K extends keyof Draft>(name: K, value: Draft[K]) { persist({ ...current.current, draft: { ...current.current.draft, [name]: value } }); }
+  function changeMaster<K extends keyof MasterDraft>(name: K, value: MasterDraft[K]) { setMasterDraft(currentMaster => ({ ...currentMaster, [name]: value })); }
+  async function submitMaster() {
+    if (masterBusy || !validMaster(masterDraft) || !audioAssets.some(asset => asset.id === masterDraft.source_asset_id)) return;
+    setMasterBusy(true); setMasterMessage('');
+    try {
+      const key = `audio-master-${crypto.randomUUID()}`;
+      const next = await request(`${base}/audio-master-tasks`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...masterDraft, idempotency_key: key }) });
+      setMasterTask(next);
+      if (next.status === 'succeeded') completion.current();
+    } catch (error) { setMasterMessage(error instanceof Error ? error.message : '全片母版后期提交失败'); }
+    finally { setMasterBusy(false); }
+  }
+  async function chooseMaster() {
+    if (!masterResult?.candidate_asset_id || masterBusy) return;
+    setMasterBusy(true); setMasterMessage('');
+    try {
+      const edit = await apiRequest<{ revision: number }>(`${base}/assembly/edit`);
+      await apiRequest(`${base}/assembly/sound`, { init: { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expected_revision: edit.revision, policy: 'complete_master', audio_asset_id: masterResult.candidate_asset_id }) } });
+      setMasterMessage('已选择为装配完整母版，请继续进行装配预检。'); completion.current();
+    } catch (error) { setMasterMessage(error instanceof Error ? error.message : '选择完整母版失败，请刷新后重试'); }
+    finally { setMasterBusy(false); }
+  }
   const numberInput = (name: Exclude<keyof Draft, 'source_asset_id' | 'background_asset_id' | 'pad_silence'>, label: string, max: number) =>
     <div key={name}><label htmlFor={`${prefix}-${name}`}>{label}</label><input id={`${prefix}-${name}`} type="number" min={0} max={max} step="any" disabled={locked} value={draft[name] ?? ''}
       placeholder={name === 'duration_seconds' ? '留空：到结尾' : undefined}
       onChange={event => change(name, event.target.value === '' && name === 'duration_seconds' ? null : Number(event.target.value))} /></div>;
   return <details className="director-operation-panel" aria-label="编辑音频">
     <summary>编辑音频 {task && `· ${labels[task.status] || '处理中'}`}</summary>
+    <section aria-label="全片母版后期"><h3>全片母版后期（最长30分钟）</h3>
+      <p>对当前作品已登记的完整母版做 CPU 响度归一化、真峰值限制、淡入淡出和可选背景混音。输出为新候选，不会自动替换音轨。</p>
+      <div className="director-creation-grid">
+        <div><label htmlFor={`${prefix}-master-source`}>完整母版</label><select id={`${prefix}-master-source`} value={masterDraft.source_asset_id} disabled={Boolean(masterTask)} onChange={event => changeMaster('source_asset_id', event.target.value)}>
+          <option value="">选择音频</option>{audioAssets.map(asset => <option key={asset.id} value={asset.id}>{asset.title}</option>)}</select></div>
+        <div><label htmlFor={`${prefix}-master-background`}>背景音（可选）</label><select id={`${prefix}-master-background`} value={masterDraft.background_asset_id || ''} disabled={Boolean(masterTask)} onChange={event => changeMaster('background_asset_id', event.target.value || undefined)}>
+          <option value="">不混入背景音</option>{audioAssets.map(asset => <option key={asset.id} value={asset.id}>{asset.title}</option>)}</select></div>
+        <label><input type="checkbox" checked={masterDraft.pad_silence} disabled={Boolean(masterTask)} onChange={event => changeMaster('pad_silence', event.target.checked)} />明确允许源或背景尾部补静音</label>
+        <label>目标响度（LUFS-I）<input type="number" min={-24} max={-8} step="any" disabled={Boolean(masterTask)} value={masterDraft.target_lufs} onChange={event => changeMaster('target_lufs', Number(event.target.value))} /></label>
+        <label>真峰值（dBTP）<input type="number" min={-3} max={0} step="any" disabled={Boolean(masterTask)} value={masterDraft.true_peak_dbtp} onChange={event => changeMaster('true_peak_dbtp', Number(event.target.value))} /></label>
+        <label>裁切起点（秒）<input type="number" min={0} max={3600} step="any" disabled={Boolean(masterTask)} value={masterDraft.trim_start_seconds} onChange={event => changeMaster('trim_start_seconds', Number(event.target.value))} /></label>
+        <label>裁切时长（秒）<input type="number" min={0.001} max={1800} step="any" placeholder="留空：到结尾" disabled={Boolean(masterTask)} value={masterDraft.trim_duration_seconds ?? ''} onChange={event => changeMaster('trim_duration_seconds', event.target.value === '' ? null : Number(event.target.value))} /></label>
+      </div>
+      {masterMessage && <p role="status" aria-live="polite">{masterMessage}</p>}{masterTask?.error && <p role="alert">{masterTask.error}</p>}
+      {masterResult?.output && <div><audio controls preload="metadata" aria-label="全片母版后期候选试听" src={mediaUrl(masterResult.output)} /><small>实测 {masterResult.duration_seconds} 秒 · {masterResult.report?.loudness_lufs_i} LUFS-I · {masterResult.report?.output_true_peak_dbtp} dBTP · LRA {masterResult.report?.loudness_lra} · 削波样本 {masterResult.report?.clipped_samples}</small></div>}
+      <div className="director-form-actions"><button className="button primary compact" type="button" disabled={masterBusy || Boolean(masterTask) || !validMaster(masterDraft)} onClick={() => void submitMaster()}>提交全片后期</button>
+        {masterResult?.candidate_asset_id && <button className="button secondary compact" type="button" disabled={masterBusy} onClick={() => void chooseMaster()}>选择为完整母版</button>}
+        {masterTask && <span role="status" aria-live="polite">{labels[masterTask.status] || '处理中'}</span>}</div>
+    </section>
     <p>最长120秒；PCM16 WAV或MP3，MP3转为48kHz双声道。增益和淡变产生新候选，不自动替换母版或采用。短源默认拒绝，可明确补静音；长源用取片时长裁切。完整母版应包含需要保留的对白和音效。</p>
     <div className="director-creation-grid">
       <div><label htmlFor={`${prefix}-source`}>原音频</label><select id={`${prefix}-source`} value={draft.source_asset_id} disabled={locked} onChange={event => change('source_asset_id', event.target.value)}>

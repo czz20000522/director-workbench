@@ -28,7 +28,7 @@ def gpu_idle_reason() -> str | None:
     placeholders = ",".join("?" for _ in release_statuses)
     with backend.DB_LOCK, backend.db() as connection:
         rows = connection.execute(f"SELECT payload FROM tasks WHERE status IN ({placeholders})", release_statuses).fetchall()
-    if any(json.loads(row['payload']).get('kind') not in {'audio_edit', 'media_operation'} for row in rows):
+    if any(json.loads(row['payload']).get('kind') not in {'audio_edit', 'audio_master', 'media_operation'} for row in rows):
         return "工作台 GPU 任务仍在执行或待核对"
     with background_jobs.LOCK:
         jobs = background_jobs.records(backend.analysis_job_root())

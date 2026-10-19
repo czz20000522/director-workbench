@@ -43,11 +43,13 @@
 !/backend/routers/queue_scheduler.py
 !/backend/routers/events_media.py
 !/backend/assembly_continuity.py
+!/backend/audio_master_tasks.py
 !/contracts/
 /contracts/*
 !/docs/
 /docs/*
 !/docs/assembly-continuity.md
+!/docs/audio-edit-integration.md
 !/mcp_server/
 /mcp_server/*
 !/public/
@@ -71,6 +73,7 @@
 !/tests/test_secure_files.py
 !/tests/conftest.py
 !/tests/support.py
+!/tests/test_audio_master.py
 !/tools/
 /tools/*
 !/tools/qwen_image_t2i.py
