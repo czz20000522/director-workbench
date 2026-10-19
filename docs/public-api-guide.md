@@ -77,7 +77,7 @@
 | 工作台与 ComfyUI 状态 | `/api/health`、`/api/status`；状态响应不返回服务器运行目录等机器路径 |
 | 剧本与场次，独立 revision | `/api/projects/{project_id}/script` |
 | 图片/声音/媒体工具缺项 | `/api/keyframe-capability`、`/api/speech-capability`、`/api/media-capability` |
-| 图片、声音、音频编辑、媒体处理任务 | `/api/projects/{project_id}/keyframe-tasks`、`speech-tasks`、`audio-edit-tasks`、`media-tasks` |
+| 图片、声音、音频编辑、全片母版后期、媒体处理任务 | `/api/projects/{project_id}/keyframe-tasks`、`speech-tasks`、`audio-edit-tasks`、`audio-master-tasks`、`media-tasks` |
 | 批次任务 | `/api/projects/{project_id}/batches` |
 | 审核与显式采用 | `/api/projects/{project_id}/reviews`、`adoptions` |
 | 参考分析与校订 | `/api/projects/{project_id}/reverse-analyses` |

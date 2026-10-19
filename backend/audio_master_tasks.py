@@ -206,7 +206,7 @@ def _ffmpeg_version() -> str:
         result = subprocess.run([str(media_operations.FFMPEG), '-version'], capture_output=True, text=True,
                                 timeout=10, check=False, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         return (result.stdout.splitlines()[0] if result.stdout else '').strip() or 'unavailable'
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, AttributeError, subprocess.SubprocessError):
         return 'unavailable (deterministic PCM engine)'
 
 

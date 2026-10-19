@@ -36,6 +36,28 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
             **({'pad_silence': True} if pad_silence else {}),
         })
 
+    @server.tool(annotations=write_record)
+    async def submit_audio_master(project_id: str, source_asset_id: str, idempotency_key: str,
+                                  background_asset_id: str | None = None, target_lufs: float = -16,
+                                  true_peak_dbtp: float = -1, fade_in_seconds: float = 0,
+                                  fade_out_seconds: float = 0, trim_start_seconds: float = 0,
+                                  trim_duration_seconds: float | None = None, background_gain_db: float = -12,
+                                  ducking: dict[str, float] | None = None, pad_silence: bool = False) -> dict[str, Any]:
+        """对当前作品已登记的完整母版做最长30分钟CPU后期，产生待试听候选。
+        使用确定性的响度/峰值归一化；背景必须是当前作品登记音频且格式相同。
+        不创建自由多轨、不自动重采样，也不会自动选择为装配完整母版。未知响应先核对原请求键。
+        """
+        if not source_asset_id.strip() or not idempotency_key.strip():
+            raise ValueError('必须提供完整母版素材 ID 与请求标识')
+        return await request('POST', project_path(project_id) + '/audio-master-tasks', json={
+            'source_asset_id': source_asset_id, 'background_asset_id': background_asset_id,
+            'idempotency_key': idempotency_key, 'target_lufs': target_lufs,
+            'true_peak_dbtp': true_peak_dbtp, 'fade_in_seconds': fade_in_seconds,
+            'fade_out_seconds': fade_out_seconds, 'trim_start_seconds': trim_start_seconds,
+            'trim_duration_seconds': trim_duration_seconds, 'background_gain_db': background_gain_db,
+            'ducking': ducking, **({'pad_silence': True} if pad_silence else {}),
+        })
+
     @server.tool(annotations=read_only)
     async def get_media_capability() -> dict[str, Any]:
         """读取静音、视频抽帧/技术检查、台词转写及无声导出能力与缺失资源。"""

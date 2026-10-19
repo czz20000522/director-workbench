@@ -53,6 +53,26 @@ def test_edit_source_scope_parameters_and_no_comfy(preset_client, monkeypatch):
     assert Path(task['payload']['request']['source']).read_bytes() == source.read_bytes()
 
 
+def test_audio_master_registers_long_candidate_and_reports_loudness(preset_client):
+    client, project = preset_client
+    register_audio(project)
+    response = client.post('/api/projects/preset-test/audio-master-tasks', json={
+        'source_asset_id': 'voice', 'idempotency_key': 'master-once',
+        'target_lufs': -18, 'true_peak_dbtp': -1, 'fade_in_seconds': .1,
+    })
+    assert response.status_code == 202, response.text
+    task = response.json()
+    assert task['payload']['kind'] == 'audio_master'
+    backend.run_audio_master_task(task['id'], task['payload'])
+    done = client.get(f"/api/projects/preset-test/tasks/{task['id']}").json()
+    assert done['status'] == 'succeeded'
+    assert done['result']['candidate_asset_id'].startswith('audio-master-')
+    report = done['result']['report']
+    assert report['sample_rate'] == 8000
+    assert 'loudness_lufs_i' in report and 'output_true_peak_dbtp' in report
+    assert any(asset['id'] == done['result']['candidate_asset_id'] for asset in backend.require_project_manifest('preset-test')['assets'])
+
+
 def test_edit_idempotency_precedes_admission_and_source_lookup(preset_client):
     client, project = preset_client
     source = register_audio(project)

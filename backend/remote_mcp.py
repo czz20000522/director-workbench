@@ -36,7 +36,7 @@ REMOTE_TOOLS = (
     'submit_speech', 'get_submission_receipt', 'reconcile_generation',
     'stop_generation',
     # CPU media capability and project-owned candidate tasks.
-    'submit_audio_edit', 'get_media_capability', 'create_silence', 'inspect_video',
+    'submit_audio_edit', 'submit_audio_master', 'get_media_capability', 'create_silence', 'inspect_video',
     'transcribe_audio', 'export_silent_video',
 )
 
