@@ -76,6 +76,9 @@ def test_join_review_is_version_bound_and_sound_is_project_registered(edit_clien
     client, root, workspace, plan_path = edit_client
     edit = client.get(root + '/assembly/edit').json()
     assert edit['continuity']['advisory'] is True
+    assert edit['continuity_check']['read_only'] is True
+    assert edit['sound']['selected'] is False  # an untouched project has no explicit sound choice
+    assert 'sound_policy_required' in {item['code'] for item in edit['continuity_check']['blockers']}
     assert edit['continuity']['joins'][0]['key'] == 'S01>S02'
     assert edit['joins'][0]['status'] == 'pending'
     assert edit['joins'][0]['cut_seconds'] == 5
@@ -106,6 +109,8 @@ def test_join_review_is_version_bound_and_sound_is_project_registered(edit_clien
     assert chosen.status_code == 200, chosen.text
     assert chosen.json()['sound']['duration_seconds'] == 11
     assert chosen.json()['sound']['audio_asset_id'] == master_id
+    assert chosen.json()['sound']['selected'] is True
+    assert chosen.json()['continuity_check']['inputs']['sound']['selection_source'] == 'assembly_edit'
     manifest = backend.load_project_manifest('edit-test')
     snapshot = backend.build_assembly_snapshot(manifest)
     graph = json.loads(snapshot.read_text(encoding='utf-8'))
@@ -241,7 +246,7 @@ def test_mcp_assembly_edit_matches_http_contract(edit_client):
         async with Client(create_server('http://localhost:4100', httpx.ASGITransport(app=backend.app))) as agent:
             tools = {tool.name for tool in (await agent.list_tools()).tools}
             assert {'read_assembly_edit', 'review_assembly_join', 'set_assembly_sound',
-                    'preflight_assembly_edit'} <= tools
+                    'preflight_assembly_edit', 'check_assembly_continuity'} <= tools
             edit = (await agent.call_tool('read_assembly_edit', {'project_id': 'edit-test'})).structured_content
             assert edit['ok']
             revision = edit['data']['revision']
@@ -261,5 +266,9 @@ def test_mcp_assembly_edit_matches_http_contract(edit_client):
             assert preflight['data']['ready'] is False
             assert any(item['code'] == 'adoption_required' for item in preflight['data']['blockers'])
             assert preflight['data']['sound']['audio_asset_id'] == master_id
+            checked = (await agent.call_tool('check_assembly_continuity', {
+                'project_id': 'edit-test'})).structured_content
+            assert checked['ok'] and checked['data']['read_only'] is True
+            assert any(item['code'] == 'adoption_required' for item in checked['data']['blockers'])
 
     asyncio.run(verify())
