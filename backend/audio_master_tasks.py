@@ -24,6 +24,7 @@ MAX_SECONDS = 30 * 60
 MAX_BYTES = 2 * 1024 ** 3
 CHUNK_FRAMES = 65536
 EXECUTION_TIMEOUT_SECONDS = MAX_SECONDS
+SUPPORTED_INPUT_SUFFIXES = frozenset({'.wav', '.mp3', '.m4a', '.flac'})
 
 DEFAULTS = {
     'target_lufs': -16.0,
@@ -98,7 +99,11 @@ def _check_input(path: Path, *, label: str) -> tuple[int, int, int, float]:
         raise ValueError(f'{label} must be a file')
     if path.stat().st_size > MAX_BYTES:
         raise ValueError(f'{label} exceeds the 2 GiB input limit')
-    if path.suffix.lower() != '.wav':
+    suffix = path.suffix.lower()
+    if suffix not in SUPPORTED_INPUT_SUFFIXES:
+        allowed = ', '.join(sorted(SUPPORTED_INPUT_SUFFIXES))
+        raise ValueError(f'{label} format {suffix or "(none)"} is unsupported; allowed formats: {allowed}')
+    if suffix != '.wav':
         facts = creative_inspection.probe(path)
         duration = facts.get('duration_seconds')
         if not facts.get('audio_streams') or duration is None:
@@ -210,7 +215,7 @@ def frozen_request(payload: dict) -> tuple[dict, Path]:
         if key == 'background' and request[key] is None:
             continue
         path = Path(request[key])
-        if path.suffix.lower() not in {'.wav', '.mp3', '.m4a', '.flac'} or path.resolve() != directory / (key + path.suffix.lower()):
+        if path.suffix.lower() not in SUPPORTED_INPUT_SUFFIXES or path.resolve() != directory / (key + path.suffix.lower()):
             raise ValueError('Input is outside the frozen task directory')
         _, identity = secure_files.checked_file(path)
         if _identity_dict(identity) != request['frozen_' + key + '_identity']:
@@ -230,13 +235,17 @@ def _check_active(deadline: float, cancelled) -> None:
         raise AudioMasterTimedOut('Audio master processing exceeded the 30 minute execution deadline; partial output was retained')
 
 
-def _run_ffmpeg(args: list[str], *, deadline: float, cancelled, label: str) -> subprocess.CompletedProcess:
+def _run_process(args: list[str], *, deadline: float, cancelled, label: str,
+                 capture_stdout: bool = False) -> subprocess.CompletedProcess:
     _check_active(deadline, cancelled)
+    stdout_file = tempfile.TemporaryFile() if capture_stdout else None
     try:
         stderr_file = tempfile.TemporaryFile()
-        process = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=stderr_file,
+        process = subprocess.Popen(args, stdout=stdout_file or subprocess.DEVNULL, stderr=stderr_file,
                                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except OSError as exc:
+        if stdout_file:
+            stdout_file.close()
         raise ValueError(f'FFmpeg {label} unavailable') from exc
     while process.poll() is None:
         try:
@@ -248,6 +257,8 @@ def _run_ffmpeg(args: list[str], *, deadline: float, cancelled, label: str) -> s
             except subprocess.TimeoutExpired:
                 process.kill(); process.wait()
             stderr_file.close()
+            if stdout_file:
+                stdout_file.close()
             raise
         time.sleep(min(.05, max(.005, _remaining(deadline) / 20)))
     process.wait()
@@ -255,10 +266,18 @@ def _run_ffmpeg(args: list[str], *, deadline: float, cancelled, label: str) -> s
     stderr = stderr_file.read().decode('utf-8', errors='replace')
     stderr_file.close()
     stdout = ''
+    if stdout_file:
+        stdout_file.seek(0)
+        stdout = stdout_file.read().decode('utf-8', errors='replace')
+        stdout_file.close()
     if process.returncode:
         detail = (stderr or stdout or '').strip()[-1000:]
         raise RuntimeError(f'FFmpeg {label} failed: {detail}')
     return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+
+
+def _run_ffmpeg(args: list[str], *, deadline: float, cancelled, label: str) -> subprocess.CompletedProcess:
+    return _run_process(args, deadline=deadline, cancelled=cancelled, label=label)
 
 
 def _pcm_source(source: str | Path, *, decode: bool, deadline: float, cancelled) -> Path:
@@ -287,41 +306,62 @@ def _iter_segment(stream, start: int, count: int):
         remaining -= frames
 
 
-def _parse_metric(value, *, default=-120.0) -> float:
+def _parse_metric(value, *, name: str) -> float:
     if isinstance(value, (int, float)):
-        return float(value) if math.isfinite(float(value)) else default
+        result = float(value)
+        if math.isfinite(result):
+            return result
+        raise ValueError(f'FFmpeg loudnorm field {name} is non-finite')
     if not isinstance(value, str):
-        return default
-    value = value.strip()
-    if value in {'-inf', 'inf', '+inf', 'Infinity', '-Infinity'}:
-        return default
+        raise ValueError(f'FFmpeg loudnorm field {name} is missing or invalid')
+    normalized = value.strip().lower()
+    if normalized in {'-inf', '-infinity'}:
+        return -120.0
     try:
         result = float(value)
-    except ValueError:
-        return default
-    return result if math.isfinite(result) else default
+    except ValueError as exc:
+        raise ValueError(f'FFmpeg loudnorm field {name} is missing or invalid') from exc
+    if not math.isfinite(result):
+        raise ValueError(f'FFmpeg loudnorm field {name} is non-finite')
+    return result
+
+
+def _metric_is_explicit_silence(value) -> bool:
+    return isinstance(value, str) and value.strip().lower() in {'-inf', '-infinity'}
 
 
 def _loudnorm_json(stderr: str) -> dict:
-    matches = list(re.finditer(r'\{\s*"input_i".*?\}', stderr, flags=re.DOTALL))
-    if not matches:
-        raise RuntimeError('FFmpeg loudnorm did not return a JSON measurement')
-    try:
-        return json.loads(matches[-1].group(0))
-    except json.JSONDecodeError as exc:
-        raise RuntimeError('FFmpeg loudnorm returned invalid JSON') from exc
+    matches = list(re.finditer(r'\{[^{}]*\}', stderr, flags=re.DOTALL))
+    for match in reversed(matches):
+        try:
+            value = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict) and any(key in value for key in ('input_i', 'input_lra', 'input_tp', 'output_i', 'output_tp')):
+            return value
+    if matches or '{' in stderr:
+        raise RuntimeError('FFmpeg loudnorm returned invalid JSON')
+    raise RuntimeError('FFmpeg loudnorm did not return a JSON measurement')
 
 
-def _measure_loudness(path: Path, *, deadline: float, cancelled) -> dict[str, float]:
+def _measure_loudness(path: Path, *, deadline: float, cancelled) -> dict[str, object]:
     result = _run_ffmpeg([str(media_operations.FFMPEG), '-nostdin', '-hide_banner', '-v', 'info', '-i', str(path),
                           '-af', 'loudnorm=I=-16:TP=-1:LRA=11:print_format=json', '-f', 'null', '-'],
                          deadline=deadline, cancelled=cancelled, label='loudness measurement')
     measured = _loudnorm_json(result.stderr)
-    return {'loudness_lufs_i': _parse_metric(measured.get('input_i')),
-            'loudness_lra': max(0.0, _parse_metric(measured.get('input_lra'))),
-            'true_peak_dbtp': _parse_metric(measured.get('input_tp')),
-            'normalization_output_lufs_i': _parse_metric(measured.get('output_i')),
-            'normalization_output_true_peak_dbtp': _parse_metric(measured.get('output_tp'))}
+    fields = {
+        'input_i': 'loudness_lufs_i', 'input_lra': 'loudness_lra', 'input_tp': 'true_peak_dbtp',
+        'output_i': 'normalization_output_lufs_i', 'output_tp': 'normalization_output_true_peak_dbtp',
+    }
+    values = {name: _parse_metric(measured.get(name), name=name) for name in fields}
+    return {
+        'loudness_lufs_i': values['input_i'],
+        'loudness_lra': max(0.0, values['input_lra']),
+        'true_peak_dbtp': values['input_tp'],
+        'normalization_output_lufs_i': values['output_i'],
+        'normalization_output_true_peak_dbtp': values['output_tp'],
+        'silence_metrics': [name for name in fields if _metric_is_explicit_silence(measured.get(name))],
+    }
 
 
 def _duck_background(source_chunk: np.ndarray, background_chunk: np.ndarray, *, rate: int,
@@ -427,6 +467,8 @@ def execute(payload: dict, cancelled=lambda: False, *, timeout_seconds: float = 
                 deadline=deadline, cancelled=cancelled, label='loudness normalization')
     final_measurement = _measure_loudness(output, deadline=deadline, cancelled=cancelled)
     output_peak = final_measurement['true_peak_dbtp']
+    _check_active(deadline, cancelled)
+    ffmpeg_version = _ffmpeg_version(deadline=deadline, cancelled=cancelled)
     report = {
         'output': str(output), 'sample_rate': rate, 'channels': channels, 'frames': frames,
         'duration_seconds': frames / rate, 'encoding': 'PCM_16', 'input_peak': source_peak,
@@ -435,19 +477,25 @@ def execute(payload: dict, cancelled=lambda: False, *, timeout_seconds: float = 
         'loudness_lufs_i': final_measurement['loudness_lufs_i'],
         'loudness_lra': final_measurement['loudness_lra'],
         'clipped_samples': clipped, 'gain_db_applied': final_measurement['loudness_lufs_i'] - mixed_measurement['loudness_lufs_i'],
-        'parameters': params, 'ffmpeg_version': _ffmpeg_version(),
+        'parameters': params, 'ffmpeg_version': ffmpeg_version,
         'input_normalization': '48kHz stereo PCM16 via FFmpeg' if Path(request['source']).suffix.lower() != '.wav' else 'source PCM16 WAV preserved',
+        'loudness_silence_metrics': sorted(set(mixed_measurement['silence_metrics'] + final_measurement['silence_metrics'])),
         'true_peak_target_dbtp': true_peak,
-        'true_peak_limit_met': output_peak <= true_peak + 0.1,
-        'normalization_warning': None if output_peak <= true_peak + 0.1 else 'Measured output true peak exceeds target; review before adoption',
+        'true_peak_limit_met': output_peak <= true_peak,
+        'normalization_warning': None if output_peak <= true_peak else 'Measured output true peak exceeds target; review before adoption',
     }
     receipt = {**request, 'status': 'succeeded', 'output': str(output), 'sample_rate': rate,
                'channels': channels, 'frames': frames, 'duration_seconds': frames / rate,
                'encoding': 'PCM_16', 'report': report}
     temporary = output_dir / 'receipt.tmp'
+    _check_active(deadline, cancelled)
     temporary.write_text(json.dumps(receipt, ensure_ascii=False, allow_nan=False, indent=2), encoding='utf-8')
+    _check_active(deadline, cancelled)
     temporary.replace(output_dir / 'receipt.json')
-    return read_receipt(payload)
+    _check_active(deadline, cancelled)
+    result = read_receipt(payload)
+    _check_active(deadline, cancelled)
+    return result
 
 
 def _finite_number(value, *, low=None, high=None) -> bool:
@@ -456,17 +504,14 @@ def _finite_number(value, *, low=None, high=None) -> bool:
     return (low is None or value >= low) and (high is None or value <= high)
 
 
-def _ffmpeg_version() -> str:
+def _ffmpeg_version(*, deadline: float, cancelled) -> str:
     try:
-        with tempfile.TemporaryFile() as output:
-            process = subprocess.Popen([str(media_operations.FFMPEG), '-version'], stdout=output, stderr=subprocess.DEVNULL,
-                                       creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-            process.wait(timeout=10)
-            output.seek(0)
-            version = output.read().decode('utf-8', errors='replace')
-        return (version.splitlines()[0] if version else '').strip() or 'unavailable'
-    except (OSError, AttributeError, subprocess.SubprocessError):
+        process = _run_process([str(media_operations.FFMPEG), '-version'], deadline=deadline, cancelled=cancelled,
+                               label='version query', capture_stdout=True)
+    except (OSError, AttributeError, ValueError):
         return 'unavailable'
+    version = process.stdout or ''
+    return (version.splitlines()[0] if version else '').strip() or 'unavailable'
 
 
 def _read_info(path: Path):
@@ -505,7 +550,7 @@ def read_receipt(payload: dict) -> dict:
     required = {'output', 'sample_rate', 'channels', 'frames', 'duration_seconds', 'input_peak',
                 'input_peak_dbtp', 'output_true_peak_dbtp', 'loudness_lufs_i', 'loudness_lra',
                 'clipped_samples', 'parameters', 'ffmpeg_version', 'true_peak_target_dbtp',
-                'true_peak_limit_met', 'normalization_warning'}
+                'true_peak_limit_met', 'normalization_warning', 'loudness_silence_metrics'}
     if not isinstance(report, dict) or not required <= set(report):
         raise ValueError('Audio master report is incomplete')
     if any(report.get(key) != receipt[key] for key in ('output', 'sample_rate', 'channels', 'frames', 'duration_seconds')):
@@ -522,4 +567,12 @@ def read_receipt(payload: dict) -> dict:
         raise ValueError('Audio master report parameters mismatch')
     if type(report['true_peak_limit_met']) is not bool or (report['normalization_warning'] is not None and not isinstance(report['normalization_warning'], str)):
         raise ValueError('Audio master true peak report is invalid')
+    if report['true_peak_limit_met'] != (report['output_true_peak_dbtp'] <= report['true_peak_target_dbtp']):
+        raise ValueError('Audio master true peak report contradicts measured output')
+    if (report['true_peak_limit_met'] and report['normalization_warning'] is not None) or (not report['true_peak_limit_met'] and not report['normalization_warning']):
+        raise ValueError('Audio master true peak warning is inconsistent')
+    if (not isinstance(report['loudness_silence_metrics'], list)
+            or any(not isinstance(item, str) or item not in {'input_i', 'input_lra', 'input_tp', 'output_i', 'output_tp'}
+                   for item in report['loudness_silence_metrics'])):
+        raise ValueError('Audio master loudness silence metadata is invalid')
     return receipt

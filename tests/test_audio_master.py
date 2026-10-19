@@ -1,6 +1,8 @@
 import wave
 from pathlib import Path
 import json
+import subprocess
+import sys
 
 import numpy as np
 import pytest
@@ -107,3 +109,67 @@ def test_master_rejects_changed_frozen_copy_before_execution(tmp_path):
     frozen.write_bytes(frozen.read_bytes() + b'changed')
     with pytest.raises(ValueError, match='Frozen input changed'):
         audio_master_tasks.execute(payload)
+
+
+def _loudnorm_stderr(**overrides: str) -> str:
+    values = {
+        'input_i': '-16.0', 'input_lra': '4.0', 'input_tp': '-1.2',
+        'output_i': '-16.0', 'output_tp': '-1.0',
+    }
+    values.update(overrides)
+    return 'prefix\n' + json.dumps(values) + '\n'
+
+
+def _loudnorm_stderr_from_values(values: dict[str, str]) -> str:
+    return 'prefix\n' + json.dumps(values) + '\n'
+
+
+@pytest.mark.parametrize('field,value', [('input_i', None), ('input_lra', 'invalid'), ('input_tp', 'NaN'), ('output_i', None)])
+def test_loudnorm_missing_or_invalid_input_metrics_fail(monkeypatch, tmp_path, field, value):
+    metric = dict(input_i='-16.0', input_lra='4.0', input_tp='-1.2', output_i='-16.0', output_tp='-1.0')
+    if value is None:
+        metric.pop(field)
+    else:
+        metric[field] = value
+    monkeypatch.setattr(audio_master_tasks, '_run_ffmpeg', lambda *args, **kwargs: subprocess.CompletedProcess(
+        args, 0, '', _loudnorm_stderr_from_values(metric)))
+    with pytest.raises(ValueError):
+        audio_master_tasks._measure_loudness(tmp_path / 'mix.wav', deadline=float('inf'), cancelled=lambda: False)
+
+
+def test_loudnorm_explicit_negative_infinity_is_audited_as_silence(monkeypatch, tmp_path):
+    monkeypatch.setattr(audio_master_tasks, '_run_ffmpeg', lambda *args, **kwargs: subprocess.CompletedProcess(
+        args, 0, '', _loudnorm_stderr(input_i='-inf', input_lra='-inf', input_tp='-inf')))
+    measured = audio_master_tasks._measure_loudness(tmp_path / 'mix.wav', deadline=float('inf'), cancelled=lambda: False)
+    assert measured['loudness_lufs_i'] == -120.0
+    assert measured['loudness_lra'] == 0.0
+    assert measured['silence_metrics'] == ['input_i', 'input_lra', 'input_tp']
+
+
+def test_loudnorm_invalid_json_fails_explicitly(monkeypatch, tmp_path):
+    monkeypatch.setattr(audio_master_tasks, '_run_ffmpeg', lambda *args, **kwargs: subprocess.CompletedProcess(
+        args, 0, '', 'loudnorm: {"input_i": "oops"'))
+    with pytest.raises(RuntimeError, match='invalid JSON'):
+        audio_master_tasks._measure_loudness(tmp_path / 'mix.wav', deadline=float('inf'), cancelled=lambda: False)
+
+
+def test_ffmpeg_nonzero_exit_preserves_diagnostic():
+    with pytest.raises(RuntimeError, match='boom'):
+        audio_master_tasks._run_process(
+            [sys.executable, '-c', "import sys; sys.stderr.write('boom'); sys.exit(3)"],
+            deadline=audio_master_tasks.time.monotonic() + 5, cancelled=lambda: False, label='mock')
+
+
+def test_ffmpeg_version_uses_deadline_runner(monkeypatch):
+    def timed_out(*args, **kwargs):
+        raise audio_master_tasks.AudioMasterTimedOut('deadline')
+    monkeypatch.setattr(audio_master_tasks, '_run_process', timed_out)
+    with pytest.raises(audio_master_tasks.AudioMasterTimedOut):
+        audio_master_tasks._ffmpeg_version(deadline=audio_master_tasks.time.monotonic() + 1, cancelled=lambda: False)
+
+
+def test_master_rejects_unsupported_input_format(tmp_path):
+    source = tmp_path / 'master.ogg'
+    source.write_bytes(b'not an allowed audio input')
+    with pytest.raises(ValueError, match='unsupported'):
+        audio_master_tasks.prepare('unsupported', source, tmp_path / 'tasks', parameters={})
