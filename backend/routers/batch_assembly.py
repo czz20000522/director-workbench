@@ -48,7 +48,6 @@ def submit_project_batch(request: BatchRequest, manifest: dict[str, Any] | None 
                 rows = connection.execute('SELECT id FROM tasks WHERE batch_id=? ORDER BY sequence', (existing['batch_id'],)).fetchall()
             return {'batch_id': existing['batch_id'], 'task_ids': [row['id'] for row in rows], 'status': 'accepted'}
     plan_path = backend.resolve_registered_path(str(project['plan_path'])) if manifest is not None else backend.PLAN_PATH
-    default_workflow = (project.get('production_preset') or {}).get('workflow')
     backend.require_submission_capacity()
     try:
         plan_document = json.loads(plan_path.read_text(encoding="utf-8-sig"))
@@ -56,9 +55,7 @@ def submit_project_batch(request: BatchRequest, manifest: dict[str, Any] | None 
         raise HTTPException(500, f"无法读取分段计划: {exc}") from exc
     backend.check_plan_revision(plan_document, request.expected_revision)
     plan_segments = {str(item.get("id")): item for item in plan_document.get("segments", []) if isinstance(item, dict) and item.get("id")}
-    requested_ids = request.asset_ids or [asset_id for asset_id, segment in plan_segments.items() if segment.get("workflow") or default_workflow]
-    if not requested_ids:
-        raise HTTPException(400, "当前项目计划没有可提交的片段工作流")
+    requested_ids = list(request.asset_ids)
     if len(requested_ids) != len(set(requested_ids)):
         raise HTTPException(422, "批次不能重复包含同一个分镜")
     unsupported = sorted(set(requested_ids) - set(plan_segments))
@@ -88,9 +85,19 @@ def submit_project_batch(request: BatchRequest, manifest: dict[str, Any] | None 
                 _, resolved_stage = backend.select_preset_execution(project, segment.get('workflow'), None)
                 if request.pipeline_stage_id not in (None, 'auto', resolved_stage):
                     raise HTTPException(422, '自动分镜需按已保存输入生成；更换技术步骤前请切换高级模式。')
-            workflow = segment.get("workflow") or default_workflow
+            workflow = segment.get("workflow")
+            if not workflow and request.pipeline_stage_id not in (None, 'auto'):
+                workflow, _ = backend.select_preset_execution(project, None, request.pipeline_stage_id)
             if not workflow:
-                raise HTTPException(400, f"{asset_id} 尚未登记可提交的 ComfyUI 工作流")
+                raise HTTPException(422, {
+                    'code': 'workflow_required',
+                    'message': f'{asset_id} 尚未明确绑定可执行工作流或制作方案；批次未创建。',
+                    'blockers': [{
+                        'code': 'workflow_required', 'object': {'kind': 'segment', 'id': asset_id},
+                        'action': {'id': 'choose_workflow', 'label': '选择制作方案', 'method': 'PATCH',
+                                   'path': f'/api/projects/{project_id}/plan/segments/{asset_id}'},
+                    }],
+                })
             payload = {
                 "asset_id": asset_id,
                 "workflow": str(workflow),
@@ -256,6 +263,13 @@ def submit_project_assembly(manifest: dict[str, Any] | None = None, request: Ass
     blocking = assembly_edit.blocking_joins(plan_document)
     if blocking:
         raise HTTPException(409, f"接点审核未通过或已过期: {', '.join(blocking)}")
+    adoption_blockers = backend.assembly_adoption_blockers(project, plan_document)
+    if adoption_blockers:
+        raise HTTPException(409, {
+            'code': 'assembly_adoption_required',
+            'message': '所有参与装配的分镜都必须明确采用当前候选后才能装配。',
+            'blockers': adoption_blockers,
+        })
     segment_ids = [str(item.get("id")) for item in plan_document.get("segments", []) if isinstance(item, dict) and item.get("id")]
     if not segment_ids:
         raise HTTPException(422, "装配需要至少一个分镜")
@@ -266,7 +280,8 @@ def submit_project_assembly(manifest: dict[str, Any] | None = None, request: Ass
     if missing_video:
         raise HTTPException(409, f"{len(missing_video)} 个分镜尚无当前生成视频")
     try:
-        workflow_path = backend.build_assembly_snapshot(manifest) if manifest is not None else backend.build_assembly_snapshot()
+        workflow_path = (backend.build_assembly_snapshot(manifest, bind_adoptions=True)
+                         if manifest is not None else backend.build_assembly_snapshot())
     except (OSError, ValueError, RuntimeError) as exc:
         raise HTTPException(500, f"无法根据最新分段计划生成装配工作流: {exc}") from exc
     active_statuses = tuple(task_scheduler.WAITING | task_scheduler.EXECUTING)

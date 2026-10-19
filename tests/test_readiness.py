@@ -148,7 +148,7 @@ def test_other_users_tasks_do_not_affect_this_project_and_result_does_not_alias_
 
 
 @pytest.mark.parametrize(('status', 'expected'), [
-    (None, 'pending_review'), ('pending_review', 'pending_review'), ('approved', 'adopted'),
+    (None, 'pending_review'), ('pending_review', 'pending_review'), ('approved', 'pending_adoption'),
     ('changes_requested', 'redo_required'), ('stale', 'review_stale'),
 ])
 def test_success_is_not_automatic_quality_approval(status, expected):
@@ -156,7 +156,14 @@ def test_success_is_not_automatic_quality_approval(status, expected):
     row = build(project_state=state, plan={'revision': 3, 'segments': [{'id': 'S01', 'video': {'path': 'candidate.mp4'}}]})['segments'][0]
     assert row['state'] == expected
     assert row['ready']  # generation eligibility and quality state are separate
-    assert row['next_actions'][0]['id'] in {'review', 'redo'}
+    assert row['next_actions'][0]['id'] in {'review', 'redo', 'adopt'}
+
+
+def test_only_explicit_adoption_enters_adopted_state():
+    state = {'reviews': {'S01': {'sample': {'status': 'approved', 'source': 'explicit-adoption',
+                                            'adoption_binding': {'task_id': 't1'}}}}}
+    row = build(project_state=state, plan={'revision': 3, 'segments': [{'id': 'S01', 'video': {'path': 'candidate.mp4'}}]})['segments'][0]
+    assert row['state'] == 'adopted'
 
 
 def test_assembly_collects_all_preflight_blockers_and_uses_real_routes():
@@ -184,7 +191,7 @@ def test_restart_reconciliation_and_final_review_apply_to_assembly_too():
     assert row['next_actions'][0]['path'].endswith('/tasks/master-task')
     row = build(plan={'segments': [], 'assembly': {'output': 'old.mp4'}},
                 project_state={'reviews': {'MASTER': {'final': {'status': 'approved'}}}})['assembly']
-    assert row['state'] == 'adopted'
+    assert row['state'] == 'pending_adoption'
 
 
 def test_structured_exceptions_and_invalid_callback_results_fail_closed():

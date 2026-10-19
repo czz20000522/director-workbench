@@ -27,6 +27,7 @@ type Edit = {
   sound: { policy: string; audio_asset_id?: string | null; path?: string | null; duration_seconds?: number | null; error?: string };
   audio_assets: Array<{ id: string; title: string }>; warnings?: string[];
   continuity?: { advisory: boolean; available: boolean; status?: 'ok' | 'partial' | 'unavailable'; note: string; reason?: string; joins: Continuity[] } | null;
+  adoption?: { ready: boolean; segments: Array<{ asset_id: string; adopted: boolean; blockers: Array<{ code: string; message?: string }> }> };
   target_duration_seconds: number;
   timing_summary?: { playback_seconds: number; frame_count: number; precision: string; segments: { segment_id: string; start_seconds: number; duration_seconds: number; frame_count: number; playback_seconds: number }[] } | null;
 };
@@ -117,6 +118,7 @@ export default function AssemblyEditPanel({ projectId, planRevision, assemblyPat
     <summary><strong>接点与全片声音</strong><span>{edit ? `${edit.joins.length} 个接点 · ${(edit.join_review?.remaining_joins ?? edit.blocking_joins).length} 个待处理` : '读取中'}</span></summary>
     {error && <p role="alert" className="assembly-edit-error">{error}</p>}
     {edit && <div className="assembly-edit-content"><div className="assembly-edit-row"><button type="button" className="button secondary compact" disabled={busy || loading} onClick={() => void checkPreflight()}>无 GPU 装配预检</button>{preflight && <small role="status">{preflight}</small>}</div>
+      <section aria-label="分镜采用状态"><h3>分镜采用门</h3><p>每段必须通过明确采用入口绑定当前候选、任务版本和计划 revision；生成成功或普通审核不会自动采用。</p><ul>{(edit.adoption?.segments ?? []).map(row => <li key={row.asset_id}><strong>{row.asset_id}</strong> · {row.adopted ? '已明确采用当前候选' : '尚未采用'}{row.blockers.length > 0 && <span> · {row.blockers.map(item => item.message ?? item.code).join('；')}</span>}{!row.adopted && <button type="button" className="text-button" onClick={() => onOpenShot(row.asset_id)}>打开并采用</button>}</li>)}</ul></section>
       <section><h3>全片声音</h3><p>选择已登记的完整音频母版后，装配会用它替换各段原音。母版应已包含需要保留的对白和音效。</p>
         {edit.timing_summary && <details><summary>装配取片：{edit.timing_summary.frame_count}帧／{edit.timing_summary.playback_seconds}秒</summary>
           {edit.timing_summary.segments.map(row => <p key={row.segment_id}>{row.segment_id}：从{row.start_seconds}秒取{row.duration_seconds}秒 → {row.frame_count}帧／{row.playback_seconds}秒</p>)}<p>{edit.timing_summary.precision}</p></details>}

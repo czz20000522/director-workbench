@@ -70,6 +70,7 @@
 !/tests/
 /tests/*
 !/tests/test_assembly_continuity.py
+!/tests/test_assembly_adoption_gate.py
 !/tests/test_secure_files.py
 !/tests/conftest.py
 !/tests/support.py

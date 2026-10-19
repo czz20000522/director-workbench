@@ -157,9 +157,18 @@ def _review_state(row: dict[str, Any], review: dict[str, Any], has_output: bool,
         redo = {**redo, 'id': 'redo', 'label': '修改后重做'}
     row['allowed_actions'].append(review_action)
     status = review.get('status')
-    if status == 'approved':
+    explicitly_adopted = (status == 'approved' and review.get('source') == 'explicit-adoption'
+                          and isinstance(review.get('adoption_binding'), dict))
+    if explicitly_adopted:
         row['state'] = 'adopted'
         row['next_actions'] = [review_action]
+    elif status == 'approved':
+        row['state'] = 'pending_adoption'
+        adopt = _action('adopt', '明确采用候选', 'POST', root + '/adoptions', body={'asset_id': row['asset_id']},
+                        required_fields=['stage', 'candidate_ref', 'expected_review_revision',
+                                         'expected_plan_revision', 'note', 'confirm_adoption'])
+        row['allowed_actions'].append(adopt)
+        row['next_actions'] = [adopt]
     elif status in {'changes_requested', 'stale'}:
         row['state'] = 'redo_required' if status == 'changes_requested' else 'review_stale'
         row['next_actions'] = [redo] if redo else [review_action]

@@ -17,7 +17,7 @@ from . import shot_creation
 class StartRequest(BaseModel):
     expected_revision: int | None = Field(default=None, ge=0)
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=160)
-    asset_id: str = Field(default="")
+    asset_id: str = Field(min_length=1, max_length=160)
     prompt: str | None = None
     seed: int | None = None
     pipeline_stage_id: str | None = Field(default=None, max_length=120)
@@ -38,7 +38,7 @@ class FinishRequest(BaseModel):
 class BatchRequest(BaseModel):
     expected_revision: int | None = Field(default=None, ge=0)
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=160)
-    asset_ids: list[str] = Field(default_factory=list, max_length=128)
+    asset_ids: list[str] = Field(min_length=1, max_length=128)
     prompt: str | None = None
     pipeline_stage_id: str | None = Field(default=None, max_length=120)
     pipeline_values_by_asset: dict[str, dict[str, Any]] = Field(default_factory=dict)

@@ -112,7 +112,9 @@ def test_join_review_is_version_bound_and_sound_is_project_registered(edit_clien
     renewed = client.put(root + '/assembly/joins/S01/S02', json={
         'expected_revision': stale['revision'], 'status': 'approved', 'note': '新右段已检查'})
     assert renewed.status_code == 200, renewed.text
-    assert client.get(root + '/assembly/preflight').json()['ready'] is True
+    renewed_preflight = client.get(root + '/assembly/preflight').json()
+    assert renewed_preflight['ready'] is False
+    assert any(item['code'] == 'adoption_required' for item in renewed_preflight['blockers'])
 
 
 def test_continuity_is_read_only_and_degrades_when_ffmpeg_unavailable(edit_client, monkeypatch):
@@ -239,7 +241,8 @@ def test_mcp_assembly_edit_matches_http_contract(edit_client):
             preflight = (await agent.call_tool('preflight_assembly_edit', {
                 'project_id': 'edit-test',
             })).structured_content
-            assert preflight['data']['ready'] is True
+            assert preflight['data']['ready'] is False
+            assert any(item['code'] == 'adoption_required' for item in preflight['data']['blockers'])
             assert preflight['data']['sound']['audio_asset_id'] == master_id
 
     asyncio.run(verify())
