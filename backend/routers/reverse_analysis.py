@@ -88,7 +88,7 @@ def reverse_model_status() -> dict[str, Any]:
             "id": "qwen3.8-27b-uncensored-q4-k-m",
             "label": "Qwen3.8-27B Uncensored Q4_K_M",
             "architecture": "native_multimodal_dense",
-            "role": "vision_story_analysis_prompt_writing",
+            "role": "observation_candidates",
             "model_ready": backend.PRIMARY_MODEL.is_file(),
             "projector_ready": backend.PRIMARY_MMPROJ.is_file(),
             "ready": backend.PRIMARY_MODEL.is_file() and backend.PRIMARY_MMPROJ.is_file(),

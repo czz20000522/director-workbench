@@ -39,7 +39,7 @@
 
    `POST /api/projects/{project_id}/production-presets/{preset_id}`
 
-   安装只写项目 manifest 和该方案的执行图，不生成，也不会因为创建分镜自动发生。安装后从 `GET /api/projects/{project_id}/pipeline` 读取实际 `stage_id` 和 workflow。未安装或未选择方案时，保存分镜返回 `422` 的结构化 `creation_plan_required`／`preset_not_installed` 和可选项，不写计划。
+   安装只写项目 manifest 和该方案的执行图，不生成，也不会因为创建分镜自动发生。`GET /api/projects/{project_id}/reusable-templates` 只返回 `available_templates` 事实清单（`id`、`kind`、`title`、`description`、`installed`、`preset`），不含 `recommended` 或默认选择；是否采用由调用方明确决定。安装后从 `GET /api/projects/{project_id}/pipeline` 读取实际 `stage_id` 和 workflow。未安装或未选择方案时，保存分镜返回 `422` 的结构化 `creation_plan_required`／`preset_not_installed` 和可选项，不写计划。
 
 3. 读取 `GET /api/projects/{project_id}/plan`，以实际计划版本保存高层分镜。可以为每段显式传 `workflow` 或已安装的 `preset_id`；两者都不传时使用作品已明确安装的方案，作品没有方案时返回阻塞。工作台不会按画幅、素材或创作分区代选配方，也不会静默 fallback。
 
@@ -62,6 +62,8 @@
    ```
 
    读取 `valid`、实际时长/帧数与 `readiness` 中的 blockers、allowed_actions、next_actions 和 revision。预检不生成，不以读取或预检方式改写计划。缺失模型、素材或未支持组合先明确处理。
+
+   准备度不会替调用方选择配方：分镜没有显式方案/工作流时返回 `stage_required`；已登记 workflow 或 stage 无法解析到本作品已安装方案时返回 `recipe_unresolved`。两种 blocker 都带 `options`（`installed_pipeline_stages`、`available_presets` 等事实）和 `GET .../pipeline` 的显式选择入口，不会按第一个可执行 stage、单一默认 stage 或顺序兜底继续预检。工作台不会把选择写回计划；调用方需显式保存方案后重新读取准备度。
 
 6. 用户授权一次生成后，先保留唯一请求键和完整参数，再向 `POST /api/projects/{project_id}/tasks` 提交一次。
 
@@ -91,7 +93,8 @@
 
 | 能力 | HTTP 入口 |
 | --- | --- |
-| 完整作品状态与准备度 | `/api/projects/{project_id}/state` |
+| 完整作品状态与准备度 | `/api/projects/{project_id}/state`；无显式方案时 readiness 返回 `stage_required`/`recipe_unresolved` 及显式方案事实 |
+| 可用模板（事实清单） | `/api/projects/{project_id}/reusable-templates`；返回 `available_templates`，不含推荐或默认选择 |
 | 工作台与 ComfyUI 状态 | `/api/health`、`/api/status`；状态响应不返回服务器运行目录等机器路径 |
 | 剧本与场次，独立 revision | `/api/projects/{project_id}/script` |
 | 图片/声音/媒体工具缺项 | `/api/keyframe-capability`、`/api/speech-capability`、`/api/media-capability` |
@@ -107,7 +110,7 @@
 - `POST .../observations/audio`：提交明确音频范围；
 - `POST .../observations/asr`：显式运行 ASR，结果标为 `model_inference` / `candidate_needs_review`。
 
-`POST .../semantic-jobs` 也要求先存在至少一帧显式观察。模型输出只能写入 `model_candidate`，保留 `provenance` 和 `user_status`，不会自动覆盖人工校订或制作字段。
+`POST .../semantic-jobs` 也要求先存在至少一帧显式观察。模型输出只能写入 `observations`／`model_candidate`（展示层称“模型候选”“制作草案种子候选”），保留 `provenance` 和 `user_status`，不会自动覆盖人工校订或制作字段。UI/文档不得把候选描述成平台已经理解、判断或完成了创作；是否采用由用户或 Agent 显式校订后再决定。
 
 转制作使用 `POST .../convert` 时，必须提交非空 `shots` 列表；每项包含显式参考时间段和至少一个明确制作字段。空列表、采样观察或模型候选不会自动创建 `Rxx` 分镜或写入制作计划。
 
@@ -127,7 +130,7 @@
 
 这些工具仍通过现有 Bearer 认证和 HTTP 业务路由执行；远程端不提供账户或管理操作、删除/清理、任意服务器路径导入或导出、脚本执行、全局设置修改、历史版本恢复、任务恢复/强制收尾等能力。完整适配工具可通过本机 stdio 使用，其他业务使用认证 HTTP。没有 OAuth 登录发现；只能 OAuth 且不能配置现有 Bearer 的宿主尚未支持。
 
-远程 MCP 与 HTTP 使用同一显式创作合同：`create_project` 必须传 `creation_mode:"advanced"`；`preflight` 必须传实际 `stage_id`；`create_shot`／`update_shot` 可传 `workflow` 或已安装的 `preset_id`。自动方案、`stage_id:"auto"` 和 `generation.mode` 已移除，缺省时返回结构化阻塞和可选项，不写计划。
+远程 MCP 与 HTTP 使用同一显式创作合同：`create_project` 必须传 `creation_mode:"advanced"`；`preflight` 必须传实际 `stage_id`；`create_shot`／`update_shot` 可传 `workflow` 或已安装的 `preset_id`。`read_project` 的 `section:'state'` 返回同一准备度结构（含 `stage_required`/`recipe_unresolved` 与 `options`），`section:'reusable-templates'` 返回不含推荐的 `available_templates` 事实清单。自动方案、`stage_id:"auto"` 和 `generation.mode` 已移除，缺省时返回结构化阻塞和可选项，不写计划。
 
 MCP 默认保留官方 SDK 的 loopback Host/Origin 限制和 DNS rebinding 防护。公网入口必须在工作台或反向代理启动前配置精确允许列表，不能由客户端请求或 `Forwarded`/`X-Forwarded-Host` 决定：
 

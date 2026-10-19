@@ -305,8 +305,8 @@ def build_analysis(project_id: str, analysis_id: str, source: Path, output: Path
         "scenes": pending_artifact("场景设计", "归纳空间、时间、光线、道具和连续性约束"),
         "actions": pending_artifact("动作与表演", "拆分姿态、表情、手势、口型和节拍动作"),
         "mechanisms": pending_artifact("传播机制假设", "提出钩子、留存、反转、循环和评论触发假设；必须附证据与置信度"),
-        "adaptation": pending_artifact("可迁移机制", "区分可复用结构、风格参考与不可直接复刻的具体内容"),
-        "production_seed": pending_artifact("正向制作种子", "人工校订后生成角色、场景、声音和分镜草案"),
+        "adaptation": pending_artifact("可迁移机制候选", "模型候选：区分可复用结构、风格参考与不可直接复刻的具体内容；需人工校订"),
+        "production_seed": pending_artifact("制作草案种子候选", "模型候选：人工校订后可作为角色、场景、声音和分镜草案的参考"),
     }
     stages = [
         {"id": "import", "label": "参考素材导入", "status": "done", "executor": "script"},
@@ -330,7 +330,7 @@ def build_analysis(project_id: str, analysis_id: str, source: Path, output: Path
         "artifacts": artifacts,
         "model_route": {
             "deterministic": "PyAV + ffmpeg + Whisper Base candidate ASR",
-            "primary_multimodal_analysis_and_prompt_writing": "Qwen3.8-27B-Uncensored-Q4_K_M",
+            "primary_multimodal_observations": "Qwen3.8-27B-Uncensored-Q4_K_M",
             "optional_fast_visual_prepass": "Qwen3-VL-8B-Instruct-Q4_K_M",
             "audio_support_note": "当前 llama.cpp projector 不支持把音频直接交给 27B；ASR 是独立候选证据",
         },

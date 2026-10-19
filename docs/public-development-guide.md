@@ -22,6 +22,19 @@
 
 UI、HTTP 和 MCP 共用后端授权与任务记录。任务先冻结输入和归属，再进入执行器；产物登记为候选，审核和采用需显式操作。技术报告、任务成功或页面播放回执均不能替代人的内容验收。
 
+## 平台边界：确定性工具
+
+工作台是确定性工具，不是智能体。理解、判断、选择、改编、审核、采用与验收属于用户或其 Agent；工作台只存储、校验、渲染、对照、装配和记录。维护代码时遵守：
+
+- **不代选、不兜底**：缺少显式制作方案、workflow 或参考范围时返回结构化阻塞。准备度在无法把明确 workflow 解析到已安装方案时返回 `recipe_unresolved`；没有任何显式选择时返回 `stage_required`，并把 `installed_pipeline_stages`、`available_presets` 等事实写入 blocker 的 `options`，不按第一个可执行 stage 或默认配方继续。
+- **模型只产出候选**：模型结果命名为 `observations`、`model_candidates`、`draft_seed` 等，必须带 `provenance`、`user_status` 和待校订状态；不得自动写入 performance/prompt/计划，也不得自动审核或采用。
+- **事实而非推荐**：模板目录返回 `available_templates` 及 `installed`/`missing_models` 等事实，不返回 `recommended`、默认项或无依据排序。
+- **不宣称理解**：UI、API、MCP、文档和提示词只描述可观测事实与显式动作，不写“平台已理解/已分析/已改编/已推荐”。
+- **入口一致**：能由 HTTP/MCP 完成的能力必须有对应入口和回归测试，不能只留 UI。UI 是可选的人工接管层。
+- **保留显式路径**：调用方给出明确选择后，工作台仍完成生成、对照、装配和记录。
+
+新增或修改相关行为时，按 [HTTP API 指南](public-api-guide.md)与 MCP 说明同步更新合同，并补充边界回归（缺显式选择时不写计划、不建任务、不产生业务写入）。
+
 路由拆分只改变代码组织，不改变公开接口、幂等键、`needs_reconcile`、`operationId`、任务冻结或路由注册顺序。新增领域接口应在对应 `backend/routers/` 模块中实现，并通过 `app.py` 的既有注册位置接入；需要被旧测试或其他模块 monkeypatch 的名称继续由 `backend.app` 重新导出。
 
 `tools` 中也保留早期开发辅助脚本；部分默认工作流不随仓库分发，须先检查参数并提供实际输入，不能将无参数脚本当作新设备制作入口。正式创作由 UI/API/MCP 负责登记与执行。

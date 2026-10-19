@@ -76,8 +76,8 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
             **({'project_id':project_id} if project_id is not None else {}), 'select': False})
 
     @server.tool(annotations=read_only)
-    async def read_project(project_id: str, section: Literal['manifest', 'plan', 'state', 'pipeline', 'reusable-materials', 'creative-template'] = 'manifest') -> dict[str, Any]:
-        """读取作品档案、分镜、审核、制作步骤、素材；creative-template 返回可沿用的系列设定及来源版本，不修改作品。"""
+    async def read_project(project_id: str, section: Literal['manifest', 'plan', 'state', 'pipeline', 'reusable-templates', 'reusable-materials', 'creative-template'] = 'manifest') -> dict[str, Any]:
+        """读取作品档案、分镜、审核、制作步骤、素材与可用模板；reusable-templates 返回事实清单和是否已配置，不含推荐或默认选择。creative-template 返回可沿用的系列设定及来源版本，不修改作品。"""
         return await request('GET', project_path(project_id) + ('' if section == 'manifest' else '/' + section))
 
     @server.tool(annotations=read_only)
