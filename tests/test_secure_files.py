@@ -66,7 +66,13 @@ async def _messages(response: VerifiedFileResponse, method: str = 'GET', range_h
         messages.append(message)
 
     headers = [] if range_header is None else [(b'range', range_header.encode())]
-    scope = {'type': 'http', 'method': method, 'headers': headers, 'extensions': {}}
+    # Starlette 1.x streams FileResponse in a collapsed task group and watches
+    # ``receive()`` for ``http.disconnect`` only when the scope does not announce
+    # ASGI response-send/2.4.  This fake server has no connection lifecycle, so a
+    # 2.0 scope leaves it busy-looping on the request forever; announcing 2.4
+    # takes the direct send path this test is actually about.
+    scope = {'type': 'http', 'method': method, 'headers': headers, 'extensions': {},
+             'asgi': {'version': '3.0', 'spec_version': '2.4'}}
     await response(scope, receive, send)
     return messages
 
