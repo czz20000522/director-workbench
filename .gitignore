@@ -60,6 +60,7 @@
 !/src/app/types.ts
 !/src/app/helpers.ts
 !/src/app/hooks.ts
+!/src/app/useDialogFocusTrap.ts
 !/tests/
 /tests/*
 !/tests/conftest.py
@@ -75,6 +76,8 @@
 !/src/components/WorkbenchSidebar.tsx
 !/src/components/WorkbenchTopbar.tsx
 !/src/components/WorkbenchOverlays.tsx
+!/src/components/ProjectActionsPopover.tsx
+!/src/components/ResourceStatusPanel.tsx
 !/.agents/skills/director-workbench/
 /.agents/skills/director-workbench/*
 !/.agents/skills/aigc-video-production/assets/workflows/minimax-h3-current-api.json
