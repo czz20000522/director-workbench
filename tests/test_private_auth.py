@@ -1,4 +1,7 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import logging
+import sqlite3
 
 import pytest
 from fastapi import FastAPI
@@ -173,3 +176,52 @@ def test_starlette_stream_generator_closes_on_session_revocation(private_client)
     response = client.get('/api/events', headers={'Authorization': 'Bearer ' + token})
     assert response.content == b'data: first\n\n'
     assert closed == [True]
+
+
+def _persistent_auth(tmp_path):
+    accounts = AccountStore(tmp_path / 'accounts.json', permitted_root=tmp_path)
+    if 'user001' not in accounts._read()['users']:
+        accounts.create_account('user001', 'test-one')
+    sessions = SessionManager(accounts)
+    return PrivateAuth(FastAPI(), sessions=sessions, origins=('http://testserver',),
+                       authorize=lambda request, principal: None,
+                       database_path=tmp_path / 'tasks.sqlite3')
+
+
+def test_login_failures_survive_auth_restart_and_isolate_sources(tmp_path, monkeypatch):
+    monkeypatch.setattr('backend.private_auth.LOGIN_FAILURE_LIMIT', 2)
+    first = _persistent_auth(tmp_path)
+    first.record_login_failure('user001', '10.0.0.1')
+    first.record_login_failure('user001', '10.0.0.1')
+
+    restarted = _persistent_auth(tmp_path)
+    assert not restarted.login_allowed('user001', '10.0.0.1')
+    assert restarted.login_allowed('user001', '10.0.0.2')
+    with sqlite3.connect(tmp_path / 'tasks.sqlite3') as connection:
+        assert connection.execute('SELECT COUNT(*) FROM login_failure_events').fetchone()[0] == 2
+
+
+def test_login_failure_expiry_and_concurrent_recording_are_bounded(tmp_path, monkeypatch):
+    monkeypatch.setattr('backend.private_auth.LOGIN_FAILURE_LIMIT', 5)
+    monkeypatch.setattr('backend.private_auth.LOGIN_FAILURE_WINDOW_SECONDS', 60)
+    clock = {'now': 1000.0}
+    monkeypatch.setattr('backend.private_auth.time', type('Clock', (), {
+        'time': staticmethod(lambda: clock['now']),
+        'monotonic': staticmethod(lambda: clock['now']),
+    }))
+    auth = _persistent_auth(tmp_path)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda _: auth.record_login_failure('user001', '10.0.0.1'), range(32)))
+    assert not auth.login_allowed('user001', '10.0.0.1')
+    clock['now'] += 61
+    assert auth.login_allowed('user001', '10.0.0.1')
+    with sqlite3.connect(tmp_path / 'tasks.sqlite3') as connection:
+        assert connection.execute('SELECT COUNT(*) FROM login_failure_events').fetchone()[0] == 0
+
+
+def test_login_failure_logs_do_not_include_password(tmp_path, caplog):
+    auth = _persistent_auth(tmp_path)
+    caplog.set_level(logging.WARNING)
+    auth.database_path = tmp_path / 'missing' / 'read-only.sqlite3'
+    auth.record_login_failure('user001', '10.0.0.1')
+    assert 'test-one' not in caplog.text
