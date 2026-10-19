@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   ArrowRight, Check, CheckCircle2, ChevronLeft, ChevronRight, Clapperboard, Download,
@@ -66,38 +66,25 @@ function TopBar({ onHome }: { onHome: () => void }) {
 function Home({ onStart, onQuick, onOpen }: { onStart: () => void; onQuick: (tool: QuickTool) => void; onOpen: (title: string) => void }) {
   return (
     <main className="sf-page sf-home">
-      <section className="sf-hero">
+      <section className="sf-home-head">
         <div>
-          <p className="sf-eyebrow">从愿望到成片</p>
-          <h1>今天想拍一部<br /><em>什么片？</em></h1>
-          <p className="sf-lede">先讲清楚你想表达什么，再一步步选方案、看候选、装配成片。工作台只做确定性的事，创作决定始终在你手里。</p>
-          <div className="sf-hero-actions">
-            <button className="sf-primary sf-large" onClick={onStart}>新建一部影片 <ArrowRight size={17} /></button>
-            <button className="sf-secondary" onClick={() => onOpen('雨停之前')}>继续上次 <ChevronRight size={15} /></button>
-          </div>
+          <h1>继续上次</h1>
+          <p className="sf-lede">打开就能接着上次的分镜、候选或装配继续。</p>
         </div>
-        <div className="sf-hero-art" aria-hidden="true">
-          <div className="sf-hero-frame sf-hero-frame-a"><Thumb tone="amber" label="S01" /></div>
-          <div className="sf-hero-frame sf-hero-frame-b"><Thumb tone="blue" label="S02" /></div>
-          <div className="sf-hero-frame sf-hero-frame-c"><Thumb tone="rain" label="S03" /></div>
-          <div className="sf-hero-caption"><span>正在创作的镜头</span><strong>雨停之前 · S03</strong></div>
-        </div>
+        <button className="sf-secondary sf-large" onClick={onStart}><Plus size={17} /> 新建影片</button>
       </section>
 
-      <section className="sf-section sf-continue">
-        <div className="sf-section-head"><h2>继续上次</h2><span>最近编辑</span></div>
-        <button className="sf-continue-card" onClick={() => onOpen('雨停之前')}>
-          <Thumb tone="rain" label="雨停之前" film />
-          <div className="sf-continue-copy">
-            <span className="sf-chip sf-chip-live">草稿 · ③ 分镜</span>
-            <h3>雨停之前</h3>
-            <p>三个镜头已准备好，下一步：逐段生成候选。</p>
-            <div className="sf-progress"><span style={{ width: '42%' }} /></div>
-            <small>已完成 3 / 6 步</small>
-          </div>
-          <span className="sf-round-arrow"><ArrowRight size={18} /></span>
-        </button>
-      </section>
+      <button className="sf-continue-hero" onClick={() => onOpen('雨停之前')}>
+        <Thumb tone="rain" label="雨停之前" film />
+        <div className="sf-continue-main">
+          <div className="sf-continue-meta"><span className="sf-chip sf-chip-live">草稿 · ③ 分镜</span><span>3 个镜头 · 15 秒 · 16:9</span></div>
+          <h2>雨停之前</h2>
+          <p>三个镜头已准备好，下一步：逐段生成候选，再装配成片。</p>
+          <div className="sf-progress"><span style={{ width: '50%' }} /></div>
+          <small>已完成 3 / 6 步 · 刚刚保存</small>
+        </div>
+        <span className="sf-continue-cta"><span className="sf-primary">继续创作 <ArrowRight size={17} /></span><small>从 ③ 分镜继续</small></span>
+      </button>
 
       <section className="sf-section">
         <div className="sf-section-head"><h2>最近作品</h2><button className="sf-link">查看全部 <ChevronRight size={14} /></button></div>
@@ -115,7 +102,7 @@ function Home({ onStart, onQuick, onOpen }: { onStart: () => void; onQuick: (too
       <section className="sf-section sf-quick-section">
         <details className="sf-quick">
           <summary>
-            <span><strong>快速开始</strong><small>只做单步工具，不进入整片流程</small></span>
+            <span><strong>快速开始</strong><small>单步工具，不进入整片流程</small></span>
             <ChevronRight size={17} />
           </summary>
           <div className="sf-quick-grid">
@@ -124,7 +111,6 @@ function Home({ onStart, onQuick, onOpen }: { onStart: () => void; onQuick: (too
             <button onClick={() => onQuick('text-image')}><Image size={19} /><strong>文生图</strong><span>先生成一张素材</span></button>
             <button onClick={() => onQuick('enhance')}><Wand2 size={19} /><strong>清晰化</strong><span>处理已有图片或视频</span></button>
           </div>
-          <p className="sf-quick-note">清晰化是后期动作；其余三个也可以从「新建影片」的分镜步骤里进入。成人向创作在新建时选择分区。</p>
         </details>
       </section>
     </main>
@@ -201,8 +187,8 @@ function StepRail({ step, onStep }: { step: Step; onStep: (step: Step) => void }
 function StepOne() {
   return (
     <div className="sf-step-panel">
-      <p className="sf-eyebrow">① 愿望</p>
-      <h1>先把欲望说清楚</h1>
+      <p className="sf-step-label">① 愿望</p>
+      <h1>这部片想讲什么</h1>
       <p className="sf-lede">不需要懂模型和工作流。写下想讲什么，后面每一步都会给你明确的选择。</p>
       <div className="sf-form-grid">
         <label className="sf-field sf-wide"><span>这部片想讲什么？</span><textarea rows={4} defaultValue="雨停之前，一个在古董店等人的人，听见钟声，决定去见一个很久没见的人。" /></label>
@@ -220,7 +206,7 @@ function StepTwo() {
   const [selected, setSelected] = useState('h3-text');
   return (
     <div className="sf-step-panel">
-      <p className="sf-eyebrow">② 方案</p>
+      <p className="sf-step-label">② 方案</p>
       <h1>选择制作方案</h1>
       <p className="sf-lede">只展示事实和限制，不替你推荐。选中的方案决定后面可用的输入和输出。</p>
       <div className="sf-preset-grid">
@@ -242,8 +228,8 @@ function StepTwo() {
 function StepThree() {
   return (
     <div className="sf-step-panel">
-      <p className="sf-eyebrow">③ 分镜</p>
-      <h1>把故事拆成可拍的镜头</h1>
+      <p className="sf-step-label">③ 分镜</p>
+      <h1>准备分镜</h1>
       <p className="sf-lede">每一段都可以独立生成、审核和重做；不要一次面对整部片。</p>
       <div className="sf-shot-list">
         {shots.map((shot, index) => (
@@ -265,8 +251,8 @@ function StepFour() {
   const [picked, setPicked] = useState<'A' | 'B'>('A');
   return (
     <div className="sf-step-panel">
-      <p className="sf-eyebrow">④ 候选</p>
-      <h1>逐段做决定</h1>
+      <p className="sf-step-label">④ 候选</p>
+      <h1>比较候选</h1>
       <p className="sf-lede">这里只展示候选和事实，不自动选“最佳”。看画面、声音和动作，再决定采用或重做。</p>
       <div className="sf-candidate-row">
         <div className="sf-candidate-main">
@@ -287,8 +273,8 @@ function StepFour() {
 function StepFive() {
   return (
     <div className="sf-step-panel">
-      <p className="sf-eyebrow">⑤ 装配</p>
-      <h1>检查，然后生成成片</h1>
+      <p className="sf-step-label">⑤ 装配</p>
+      <h1>检查后生成成片</h1>
       <p className="sf-lede">装配前的决定集中在这一页，避免生成完才发现漏项。</p>
       <div className="sf-checklist">
         <div className="sf-check done"><Check size={16} /><span><strong>3 个镜头已明确采用</strong><small>候选身份与版本已绑定</small></span></div>
@@ -304,8 +290,8 @@ function StepFive() {
 function StepSix() {
   return (
     <div className="sf-step-panel sf-final">
-      <p className="sf-eyebrow">⑥ 交付</p>
-      <h1>成片在这里</h1>
+      <p className="sf-step-label">⑥ 交付</p>
+      <h1>成片</h1>
       <div className="sf-final-grid">
         <div className="sf-film"><Thumb tone="rain" label="雨停之前" film /><button className="sf-play" aria-label="播放成片"><Play size={22} /></button><span className="sf-film-duration">00:12</span></div>
         <div className="sf-final-meta">
@@ -321,25 +307,6 @@ function StepSix() {
   );
 }
 
-function ContextPanel({ step }: { step: Step }) {
-  const content = useMemo(() => {
-    if (step === 1) return { title: '本步需要你决定', body: '故事方向、时长、画幅、原创/参考。工作台不会替你补默认值。', items: ['故事一句话', '目标时长', '画幅', '起点'] };
-    if (step === 2) return { title: '本步需要你决定', body: '选择一个制作方案。方案只给事实，不推荐，也不自动安装。', items: ['已安装方案', '可用输入', '模型状态'] };
-    if (step === 3) return { title: '本步需要你决定', body: '每个镜头的文字、时长和素材。可以只先生成一个镜头。', items: ['3 个镜头', '逐段生成', '可随时保存草稿'] };
-    if (step === 4) return { title: '本步需要你决定', body: '逐段比较候选，采用或重做。没有自动“最佳候选”。', items: ['候选 A', '候选 B', '重做'] };
-    if (step === 5) return { title: '本步需要你决定', body: '音轨方式和接点审核是装配前最后的人工决定。', items: ['音轨', '接点', '连续性'] };
-    return { title: '完成', body: '成片候选需要你最终确认。通过全片审核后才算交付。', items: ['预览', '全片审核', '下载'] };
-  }, [step]);
-  return (
-    <aside className="sf-context">
-      <span className="sf-context-kicker">上下文</span>
-      <h3>{content.title}</h3>
-      <p>{content.body}</p>
-      <ul>{content.items.map(item => <li key={item}><span />{item}</li>)}</ul>
-      <div className="sf-context-note">工作台是确定性工具：不替你理解、推荐、自动改编或自动采用。</div>
-    </aside>
-  );
-}
 
 function Wizard({ step, onStep, onHome }: { step: Step; onStep: (step: Step) => void; onHome: () => void }) {
   const next = () => onStep(Math.min(6, step + 1) as Step);
@@ -350,7 +317,6 @@ function Wizard({ step, onStep, onHome }: { step: Step; onStep: (step: Step) => 
       <main className="sf-main">
         <div className="sf-workspace-top">
           <button className="sf-back" onClick={onHome}><ChevronLeft size={15} /> 全部作品</button>
-          <div className="sf-stepper">{steps.map(item => <span key={item.id} className={item.id === step ? 'active' : item.id < step ? 'done' : ''}>{item.id < step ? <Check size={11} /> : item.id}</span>)}</div>
           <span className="sf-save-state"><span className="sf-dot" /> 已保存</span>
         </div>
         {step === 1 && <StepOne />}
@@ -365,7 +331,6 @@ function Wizard({ step, onStep, onHome }: { step: Step; onStep: (step: Step) => 
           {step < 6 ? <button className="sf-primary" onClick={next}>继续 <ChevronRight size={15} /></button> : <button className="sf-primary" onClick={onHome}><Check size={15} /> 完成</button>}
         </div>
       </main>
-      <ContextPanel step={step} />
     </div>
   );
 }
@@ -384,7 +349,7 @@ export default function StudioFlowPrototype() {
       {screen === 'intent' && <Intent onClose={() => setScreen('home')} onFull={openWizard} onQuick={openQuick} />}
       {screen === 'quick' && <QuickPanel tool={quickTool} onBack={() => setScreen('home')} onFull={openWizard} />}
       {screen === 'wizard' && <Wizard step={step} onStep={setStep} onHome={() => setScreen('home')} />}
-      <span className="sf-prototype-badge">UI 原型 · 仅用于评审，不连接真实项目</span>
     </div>
   );
 }
+
