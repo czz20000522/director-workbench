@@ -378,8 +378,9 @@ def run(suite: str = 'all', check: bool = False, report_path: Path | None = None
                     missing = [key for key, value in details['modules'].items() if not value['available']]
                     if missing:
                         result['errors'].append('Missing modules: ' + ', '.join(missing))
-                    if not Path(details['base_prefix']).resolve().is_relative_to(host):
-                        result['warnings'].append('Python base_prefix is outside the Comfy-Desktop root; the environment depends on that installation.')
+                    base_prefix = Path(details['base_prefix']).resolve()
+                    if not (base_prefix.is_relative_to(host) or base_prefix.is_relative_to(paths.DATA_ROOT)):
+                        result['warnings'].append('Python base_prefix is outside the configured machine roots; the environment depends on that installation.')
             except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError) as exc:
                 result['errors'].append(f'Environment probe could not complete: {type(exc).__name__}.')
             if not check:
