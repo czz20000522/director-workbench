@@ -71,14 +71,14 @@ def generated_version(client, project, task_id, prompt, when):
     return video
 
 
-def seed_test_models(root):
-    # Empty model filenames in the isolated root test availability contracts
-    # only; neither real weights nor model loading is involved.
+def seed_test_models(shared_root):
+    # Empty model filenames in the isolated ComfyUI shared root test availability
+    # contracts only; neither real weights nor model loading is involved.
     directories = {'unet_name': 'diffusion_models', 'clip_name': 'text_encoders', 'vae_name': 'vae', 'lora_name': 'loras'}
     for node in production_presets.load_recipe().values():
         for key, directory in directories.items():
             if node['inputs'].get(key):
-                path = root / 'ComfyUI-Shared' / 'models' / directory / node['inputs'][key]
+                path = shared_root / 'models' / directory / node['inputs'][key]
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(b'isolated model-availability fixture')
 

@@ -24,6 +24,7 @@ def preset_client_factory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         (projects / 'catalog.json').write_text('{"projects": []}', encoding='utf-8')
         for name, value in {
             'ROOT': tmp_path / 'data-root', 'PROJECT': project, 'PROJECTS_ROOT': projects,
+            'SHARED_ROOT': tmp_path / 'ComfyUI-Shared',
             'PROJECT_CATALOG_PATH': projects / 'catalog.json', 'DIRECTOR_WORKSPACES_ROOT': project / 'workspaces',
             'DB_PATH': tmp_path / 'state.sqlite3', 'SNAPSHOT_ROOT': project / 'snapshots', 'INPUT_ROOT': tmp_path / 'input',
         }.items():

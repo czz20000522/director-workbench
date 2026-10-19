@@ -20,7 +20,7 @@ def isolated_model_availability(request, tmp_path):
     if fixture:
         request.getfixturevalue(fixture)
         assert backend.ROOT.is_relative_to(tmp_path)
-        seed_test_models(backend.ROOT)
+        seed_test_models(backend.SHARED_ROOT)
 
 
 def automatic(client):

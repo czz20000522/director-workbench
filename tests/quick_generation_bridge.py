@@ -24,7 +24,7 @@ root = Path(sys.argv[1]).resolve()
 root.mkdir(parents=True, exist_ok=False)
 patch = pytest.MonkeyPatch()
 owner, other, _, _ = private_workbench.__wrapped__(root, patch)
-seed_test_models(backend.ROOT)
+seed_test_models(backend.SHARED_ROOT)
 queued = []
 patch.setattr(backend, 'queue_task', queued.append)
 patch.setattr(backend, 'require_submission_capacity', lambda: {})
