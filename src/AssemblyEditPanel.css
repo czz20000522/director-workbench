@@ -26,5 +26,22 @@
 .assembly-edit-previews video, .assembly-edit-full video { display: block; width: 100%; max-height: 220px; background: #111; }
 .assembly-edit-full video { max-width: 520px; }
 .assembly-edit-error { color: #d95a5a !important; }
+.assembly-check { padding: 11px 12px; border: 1px solid var(--border, #39414c); border-radius: 9px; background: color-mix(in srgb, var(--surface, #20252d) 92%, #73839a); }
+.assembly-check-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 9px; }
+.assembly-check-summary span { font-size: 12px; }
+.assembly-check-list { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.assembly-check-item { display: grid; grid-template-columns: auto minmax(140px, auto) 1fr; gap: 4px 9px; align-items: baseline; padding: 7px 9px; border-left: 3px solid var(--border, #39414c); background: color-mix(in srgb, var(--surface, #20252d) 88%, #73839a); border-radius: 6px; font-size: 12px; }
+.assembly-check-item p { margin: 0; }
+.assembly-check-item.severity-blocker { border-left-color: #d95a5a; }
+.assembly-check-item.severity-warning { border-left-color: #d8ad73; }
+.assembly-check-item.severity-pass { border-left-color: #8dc99a; }
+.assembly-check-badge { font-size: 11px; padding: 1px 6px; border-radius: 999px; border: 1px solid currentColor; }
+.assembly-check-item.severity-blocker .assembly-check-badge { color: #d95a5a; }
+.assembly-check-item.severity-warning .assembly-check-badge { color: #d8ad73; }
+.assembly-check-item.severity-pass .assembly-check-badge { color: #8dc99a; }
+.assembly-check-meta { color: var(--muted, #aeb5bd); font-size: 11px; }
+.assembly-check-actions { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 8px; }
+.assembly-check-actions:empty { display: none; }
+@media (max-width: 780px) { .assembly-check-item { grid-template-columns: auto 1fr; } .assembly-check-actions { grid-column: 1 / -1; } }
 @media (max-width: 780px) { .assembly-edit-previews { grid-template-columns: 1fr; } }
 @media (max-width: 780px) { .assembly-continuity-row { grid-template-columns: 1fr auto; } .assembly-continuity-row small { grid-column: 1 / -1; } }

@@ -82,6 +82,11 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         """无 GPU 地核对全部相邻接点、当前视频、音轨归属与可读时长；ready 才可考虑提交装配。"""
         return await request('GET', project_path(project_id) + '/assembly/preflight')
 
+    @server.tool(annotations=read_only)
+    async def check_assembly_continuity(project_id: str) -> dict[str, Any]:
+        """只读检查显式分镜顺序、明确采用、接点审核、音轨策略与参考/当前差异，返回可解释检查项和阻断项；不自动修复、不选候选、不审核、不采用。"""
+        return await request('GET', project_path(project_id) + '/assembly/continuity-check')
+
     @server.tool(annotations=write_record)
     async def submit_keyframe(project_id: str, prompt: str, idempotency_key: str, reference_image: str | None = None,
                               seed: int = 340921, mode: Literal['reference', 'text'] = 'reference',

@@ -46,6 +46,7 @@
 !/backend/routers/queue_scheduler.py
 !/backend/routers/events_media.py
 !/backend/assembly_continuity.py
+!/backend/assembly_continuity_check.py
 !/backend/audio_master_tasks.py
 !/contracts/
 /contracts/*
@@ -73,6 +74,7 @@
 !/tests/
 /tests/*
 !/tests/test_assembly_continuity.py
+!/tests/test_assembly_continuity_check.py
 !/tests/test_assembly_adoption_gate.py
 !/tests/test_secure_files.py
 !/tests/conftest.py
@@ -323,6 +325,7 @@
 !/tools/validate_exact_ui_workflow.py
 !/tsconfig.json
 !/vite.config.ts
+!/ISSUE1_REPORT.md
 !/README.md
 !/SECURITY.md
 !/docs/public-development-guide.md

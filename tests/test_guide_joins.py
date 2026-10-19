@@ -94,7 +94,11 @@ def test_join_guide_uses_version_bound_review_service_http_mcp(
         assert refused.status_code == 422
     if case == 'pending':
         assert edit['blocking_joins'] == []  # Preserve old unconfigured assembly compatibility.
-        assert edit['ready'] is True  # Assembly eligibility does not prove reviewed joins.
+        # The untouched project has no explicit sound policy yet, so the read-only
+        # cross-shot check blocks assembly instead of silently keeping native audio.
+        assert edit['ready'] is False
+        assert any(item['code'] == 'sound_policy_required'
+                   for item in edit['continuity_check']['blockers'])
         assert step['completed'] is False
 
     async def verify():

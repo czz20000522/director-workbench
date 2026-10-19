@@ -28,6 +28,10 @@ def test_submission_freezes_previous_assembly_identity(preset_client, monkeypatc
         'source': 'explicit-adoption',
     })
     assert adopted.status_code == 200, adopted.text
+    plan_revision = client.get('/api/projects/preset-test/plan').json()['revision']
+    sound = client.put('/api/projects/preset-test/assembly/sound', json={
+        'expected_revision': plan_revision, 'policy': 'segment_native'})
+    assert sound.status_code == 200, sound.text
     graph = project / 'empty-assembly.json'
     graph.write_text('{}', encoding='utf-8')
     builder = backend.assembly_builder_path(manifest)

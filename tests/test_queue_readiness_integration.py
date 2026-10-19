@@ -202,6 +202,10 @@ def test_missing_assembly_builder_blocks_public_preflight_state_and_submission(p
         'source': 'explicit-adoption',
     })
     assert adopted.status_code == 200, adopted.text
+    current_plan = client.get(root + '/plan').json()
+    sound = client.put(root + '/assembly/sound', json={
+        'expected_revision': current_plan['revision'], 'policy': 'segment_native'})
+    assert sound.status_code == 200, sound.text
     manifest = backend.load_project_manifest('preset-test')
     manifest['assembly']['builder'] = 'tools/missing-assembly-builder.py'
     backend.save_project_manifest(manifest)

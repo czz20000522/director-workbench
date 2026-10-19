@@ -38,7 +38,7 @@ EXPECTED_REMOTE_TOOLS = (
     'correct_reference_classification', 'convert_reference_to_shots',
     'submit_shot', 'submit_batch', 'get_keyframe_capability', 'submit_assembly',
     'read_assembly_edit', 'review_assembly_join', 'set_assembly_sound',
-    'preflight_assembly_edit', 'submit_keyframe', 'get_speech_capability',
+    'preflight_assembly_edit', 'check_assembly_continuity', 'submit_keyframe', 'get_speech_capability',
     'submit_speech', 'get_submission_receipt', 'reconcile_generation',
     'stop_generation', 'submit_audio_edit', 'submit_audio_master', 'get_media_capability',
     'create_silence', 'inspect_video', 'transcribe_audio', 'export_silent_video',

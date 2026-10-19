@@ -59,7 +59,7 @@ stdio 供服务器本机客户端或主动诊断使用，需要项目 Python 环
 | 图片、声音与音频编辑 | `get_keyframe_capability`、`submit_keyframe`、`get_speech_capability`、`submit_speech`、`submit_audio_edit`、`submit_audio_master` |
 | 参考素材登记与显式观察 | `import_reference`、`read_reference`、`extract_reference_range`、`extract_reference_audio`、`sample_reference_frames`、`transcribe_reference` |
 | 参考分析与人工校订 | `start_reference_analysis`、`correct_reference_artifact`、`correct_reference_classification`、`convert_reference_to_shots` |
-| 装配接点、声音和成片 | `read_assembly_edit`、`review_assembly_join`、`set_assembly_sound`、`preflight_assembly_edit`、`submit_assembly` |
+| 装配接点、声音和成片 | `read_assembly_edit`、`check_assembly_continuity`、`review_assembly_join`、`set_assembly_sound`、`preflight_assembly_edit`、`submit_assembly` |
 | 媒体加工和检查 | `get_media_capability`、`create_silence`、`inspect_video`、`transcribe_audio`、`export_silent_video` |
 
 `import_reference` 读取 stdio 进程所在机器的绝对音视频路径，再 multipart 上传；不是读取远程客户机的文件。创作、媒体加工和审核应通过工作台入口完成，客户端不临时直跑 FFmpeg/Whisper 代替产品能力。
