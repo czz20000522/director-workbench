@@ -8,6 +8,7 @@ monkeypatch（setattr(backend, "X", ...)）语义完全不变。
 from __future__ import annotations
 
 import json
+import filecmp
 from pathlib import Path, PurePosixPath
 import shutil
 import time
@@ -17,7 +18,8 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from ..schemas import MaterialRegisterRequest, MaterialReuseRequest
 from .. import app as backend
-from ..secure_files import VerifiedFileResponse, checked_file
+from ..secure_files import VerifiedFileResponse, checked_file, copy_checked, verify_identity
+from ..user_context import AccessDenied
 
 
 ROUTER = APIRouter()
@@ -163,8 +165,14 @@ def register_server_materials(project_id: str, request: MaterialRegisterRequest)
     registered: list[dict[str, Any]] = []
     for requested in request.items:
         source_label, _, target, import_mode = backend.resolve_material_path(project_id, requested.source_id, requested.relative_path)
+        try:
+            target, source_identity = checked_file(target)
+        except AccessDenied as exc:
+            raise HTTPException(409, "素材在登记期间发生变化，请刷新后重试") from exc
+        except (FileNotFoundError, ValueError, OSError) as exc:
+            raise HTTPException(422, f"只能登记图片、音频或视频素材: {requested.relative_path}") from exc
         kind = backend.material_kind(target)
-        if not target.is_file() or kind not in {"video", "audio", "image"}:
+        if kind not in {"video", "audio", "image"}:
             raise HTTPException(422, f"只能登记图片、音频或视频素材: {requested.relative_path}")
         registered_target = target
         if import_mode == "copy":
@@ -172,13 +180,34 @@ def register_server_materials(project_id: str, request: MaterialRegisterRequest)
             destination_dir.mkdir(parents=True, exist_ok=True)
             registered_target = destination_dir / target.name
             counter = 2
-            while registered_target.exists() and registered_target.stat().st_size != target.stat().st_size:
+            while registered_target.exists():
+                try:
+                    same_content = filecmp.cmp(target, registered_target, shallow=False)
+                except OSError:
+                    same_content = False
+                if same_content:
+                    break
                 registered_target = destination_dir / f"{target.stem}-{counter}{target.suffix}"
                 counter += 1
-            if not registered_target.exists():
-                shutil.copy2(target, registered_target)
-            if registered_target.stat().st_size != target.stat().st_size:
+            try:
+                # Even an apparently identical destination is replaced through
+                # copy_checked so a same-size source replacement cannot leave
+                # stale bytes registered under a new source identity.
+                copy_checked(target, registered_target, source_identity)
+            except (AccessDenied, FileNotFoundError, OSError) as exc:
+                raise HTTPException(409, "素材复制期间发生变化，请刷新后重试") from exc
+            try:
+                verify_identity(target, source_identity)
+                registered_size = registered_target.stat().st_size
+            except (AccessDenied, FileNotFoundError, OSError) as exc:
+                raise HTTPException(409, "素材在登记期间发生变化，请刷新后重试") from exc
+            if registered_size != source_identity.size:
                 raise HTTPException(500, f"素材导入校验失败: {requested.relative_path}")
+        else:
+            try:
+                verify_identity(target, source_identity)
+            except (AccessDenied, FileNotFoundError, OSError) as exc:
+                raise HTTPException(409, "素材在登记期间发生变化，请刷新后重试") from exc
         root_relative = backend.root_relative_path(registered_target)
         existing = next(
             (item for item in assets if isinstance(item, dict) and root_relative in backend.asset_record_paths(item)),

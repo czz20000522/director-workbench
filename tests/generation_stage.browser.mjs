@@ -64,6 +64,12 @@ try {
       return route.fulfill({ contentType: 'text/html', body: `<div id="root"></div><script>${bundle.outputFiles[0].text}</script>` });
     });
     await page.goto('http://localhost:4199/');
+    const skipLink = page.getByRole('link', { name: '跳到主内容', exact: true });
+    await skipLink.focus();
+    assert.equal(await page.evaluate(() => document.activeElement?.className), 'skip-link');
+    await skipLink.press('Enter');
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'director-main-content');
+    assert.notEqual(await page.locator('#director-main-content').evaluate(element => getComputedStyle(element).outlineStyle), 'none');
     await page.getByRole('button', { name: '作品、片段与更多功能' }).click();
     await page.getByRole('button', { name: '分镜制作' }).click();
     const generate = page.getByRole('button', { name: '保存并重新生成' });

@@ -11,6 +11,9 @@ import math
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Callable
 
@@ -19,9 +22,56 @@ from . import media_operations
 
 FRAME_SIZE = (32, 32)
 AUDIO_WINDOW_SECONDS = 0.25
-COMMAND_TIMEOUT_SECONDS = 20
+COMMAND_TIMEOUT_SECONDS = 4
+ANALYSIS_DEADLINE_SECONDS = 12
+MAX_JOINS = 12
+CACHE_TTL_SECONDS = 30.0
+CACHE_MAX_ENTRIES = 128
 SILENCE_RMS = 0.01
 CLIPPING_PEAK = 0.98
+
+
+class _AnalysisBudgetExceeded(RuntimeError):
+    """Raised internally when a bounded continuity analysis has no time left."""
+
+
+_CACHE_LOCK = threading.RLock()
+_MEDIA_CACHE: OrderedDict[tuple[Any, ...], tuple[float, Any]] = OrderedDict()
+
+
+def _remaining_timeout(deadline: float | None) -> float:
+    remaining = COMMAND_TIMEOUT_SECONDS if deadline is None else min(
+        COMMAND_TIMEOUT_SECONDS, deadline - time.monotonic())
+    if remaining <= 0:
+        raise _AnalysisBudgetExceeded('连续性分析总时间预算已用尽')
+    return max(0.01, remaining)
+
+
+def _file_identity(path: Path) -> tuple[Any, ...]:
+    """Return a cache identity that changes whenever the media file changes."""
+    stat = path.stat()
+    return (str(path.resolve()), stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+
+
+def _cache_get(key: tuple[Any, ...]) -> Any | None:
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        entry = _MEDIA_CACHE.pop(key, None)
+        if entry is None:
+            return None
+        expires_at, value = entry
+        if expires_at <= now:
+            return None
+        _MEDIA_CACHE[key] = (expires_at, value)
+        return value
+
+
+def _cache_put(key: tuple[Any, ...], value: Any) -> None:
+    with _CACHE_LOCK:
+        _MEDIA_CACHE.pop(key, None)
+        _MEDIA_CACHE[key] = (time.monotonic() + CACHE_TTL_SECONDS, value)
+        while len(_MEDIA_CACHE) > CACHE_MAX_ENTRIES:
+            _MEDIA_CACHE.popitem(last=False)
 
 
 def _tool_path(value: str | Path | None, name: str) -> Path | None:
@@ -80,10 +130,14 @@ def _rotation(stream: dict[str, Any]) -> float:
     return 0.0
 
 
-def _probe_media(path: Path, ffprobe: Path) -> dict[str, Any]:
+def _probe_media(path: Path, ffprobe: Path, *, deadline: float | None = None) -> dict[str, Any]:
+    key = (*_file_identity(path), 'probe', str(ffprobe))
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
     result = subprocess.run(
         [str(ffprobe), '-v', 'error', '-print_format', 'json', '-show_streams', '-show_format', str(path)],
-        capture_output=True, text=True, timeout=COMMAND_TIMEOUT_SECONDS, check=False,
+        capture_output=True, text=True, timeout=_remaining_timeout(deadline), check=False,
     )
     if result.returncode != 0:
         raise RuntimeError((result.stderr or 'ffprobe failed').strip()[:500])
@@ -95,7 +149,7 @@ def _probe_media(path: Path, ffprobe: Path) -> dict[str, Any]:
     if video is None:
         raise RuntimeError('未找到视频轨')
     duration = _number(video.get('duration')) or _number(fmt.get('duration'))
-    return {
+    value = {
         'video': {
             'width': video.get('width'),
             'height': video.get('height'),
@@ -111,24 +165,25 @@ def _probe_media(path: Path, ffprobe: Path) -> dict[str, Any]:
             'present': audio is not None,
         },
     }
+    _cache_put(key, value)
+    return value
 
 
-def _extract_raw_frame(ffmpeg: Path, source: Path, output: Path, *, last: bool) -> None:
+def _extract_raw_frame(ffmpeg: Path, source: Path, output: Path, *, last: bool,
+                       deadline: float | None = None) -> None:
     position = ['-sseof', '-0.05'] if last else ['-ss', '0']
     result = subprocess.run(
         [str(ffmpeg), '-nostdin', '-v', 'error', *position, '-i', str(source),
          '-frames:v', '1', '-vf', 'scale=32:32:force_original_aspect_ratio=decrease,'
          'pad=32:32:(ow-iw)/2:(oh-ih)/2:color=black,format=rgb24',
          '-f', 'rawvideo', '-y', str(output)],
-        capture_output=True, text=True, timeout=COMMAND_TIMEOUT_SECONDS, check=False,
+         capture_output=True, text=True, timeout=_remaining_timeout(deadline), check=False,
     )
     if result.returncode != 0 or not output.is_file():
         raise RuntimeError((result.stderr or '无法抽取边界画面').strip()[:500])
 
 
-def _frame_metrics(left: Path, right: Path) -> dict[str, Any]:
-    left_data = left.read_bytes()
-    right_data = right.read_bytes()
+def _frame_metrics_bytes(left_data: bytes, right_data: bytes) -> dict[str, Any]:
     size = min(len(left_data), len(right_data))
     if size < 3:
         raise RuntimeError('边界画面为空')
@@ -155,13 +210,18 @@ def _frame_metrics(left: Path, right: Path) -> dict[str, Any]:
     }
 
 
-def _extract_audio_window(ffmpeg: Path, source: Path, output: Path, *, last: bool) -> None:
+def _frame_metrics(left: Path, right: Path) -> dict[str, Any]:
+    return _frame_metrics_bytes(left.read_bytes(), right.read_bytes())
+
+
+def _extract_audio_window(ffmpeg: Path, source: Path, output: Path, *, last: bool,
+                          deadline: float | None = None) -> None:
     position = ['-sseof', f'-{AUDIO_WINDOW_SECONDS}'] if last else ['-ss', '0']
     duration = ['-t', str(AUDIO_WINDOW_SECONDS)] if not last else []
     result = subprocess.run(
         [str(ffmpeg), '-nostdin', '-v', 'error', *position, '-i', str(source), '-vn',
          *duration, '-ac', '1', '-ar', '8000', '-f', 'f32le', '-y', str(output)],
-        capture_output=True, text=True, timeout=COMMAND_TIMEOUT_SECONDS, check=False,
+         capture_output=True, text=True, timeout=_remaining_timeout(deadline), check=False,
     )
     if result.returncode != 0 or not output.is_file():
         raise RuntimeError((result.stderr or '无法测量边界音频').strip()[:500])
@@ -204,10 +264,42 @@ def _compare_specs(left: dict[str, Any], right: dict[str, Any]) -> tuple[dict[st
     return {'video': video, 'audio': audio}, warnings
 
 
+def _media_endpoint(path: Path, ffmpeg: Path, ffprobe: Path, *, last: bool,
+                    has_audio: bool, deadline: float | None = None,
+                    temp_root: str | Path | None = None) -> dict[str, Any]:
+    identity = _file_identity(path)
+    key = (*identity, 'endpoint', 'last' if last else 'first', str(ffmpeg), str(ffprobe))
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+    with tempfile.TemporaryDirectory(prefix='assembly-continuity-', dir=str(temp_root) if temp_root else None) as folder:
+        root = Path(folder)
+        frame_path = root / 'frame.rgb'
+        _extract_raw_frame(ffmpeg, path, frame_path, last=last, deadline=deadline)
+        value: dict[str, Any] = {'frame': frame_path.read_bytes()}
+        if has_audio:
+            audio_path = root / 'audio.f32'
+            _extract_audio_window(ffmpeg, path, audio_path, last=last, deadline=deadline)
+            value['audio'] = _audio_metrics(audio_path)
+    _cache_put(key, value)
+    return value
+
+
+def _unavailable_join(left: dict[str, Any], right: dict[str, Any], reason: str) -> dict[str, Any]:
+    return {
+        'advisory': True, 'available': False, 'status': 'unavailable', 'warnings': [],
+        'video': {}, 'frames': {}, 'audio': {},
+        'note': '启发式、非艺术判断；不会自动通过或阻止装配', 'reason': reason,
+        'key': f"{left.get('id')}>{right.get('id')}", 'left_id': left.get('id'), 'right_id': right.get('id'),
+    }
+
+
 def analyze_join(left: dict[str, Any], right: dict[str, Any], *, resolve_path: Callable[[str], Path] | None = None,
                  ffmpeg: str | Path | None = None, ffprobe: str | Path | None = None,
-                 temp_root: str | Path | None = None) -> dict[str, Any]:
+                 temp_root: str | Path | None = None, _deadline: float | None = None) -> dict[str, Any]:
     """Return one stable, JSON-serializable advisory row without raising media errors."""
+    if _deadline is None:
+        _deadline = time.monotonic() + ANALYSIS_DEADLINE_SECONDS
     ffmpeg_path = _tool_path(ffmpeg, 'ffmpeg') if ffmpeg is not None else _ffmpeg_path()
     ffprobe_path = _tool_path(ffprobe, 'ffprobe') if ffprobe is not None else _ffprobe_path(ffmpeg_path)
     base = {'advisory': True, 'available': False, 'status': 'unavailable', 'warnings': [],
@@ -233,42 +325,56 @@ def analyze_join(left: dict[str, Any], right: dict[str, Any], *, resolve_path: C
             return base
 
     try:
-        specs = [_probe_media(path, ffprobe_path) for path in paths]
+        specs = [_probe_media(path, ffprobe_path, deadline=_deadline) for path in paths]
         comparison, warnings = _compare_specs(*specs)
-        base.update(available=True, status='ok', video=comparison['video'], audio=comparison['audio'], warnings=warnings)
-        with tempfile.TemporaryDirectory(prefix='assembly-continuity-', dir=str(temp_root) if temp_root else None) as folder:
-            root = Path(folder)
-            left_frame, right_frame = root / 'left.rgb', root / 'right.rgb'
-            _extract_raw_frame(ffmpeg_path, paths[0], left_frame, last=True)
-            _extract_raw_frame(ffmpeg_path, paths[1], right_frame, last=False)
-            base['frames'] = _frame_metrics(left_frame, right_frame)
-            left_audio, right_audio = root / 'left.f32', root / 'right.f32'
-            if specs[0]['audio']['present'] and specs[1]['audio']['present']:
-                _extract_audio_window(ffmpeg_path, paths[0], left_audio, last=True)
-                _extract_audio_window(ffmpeg_path, paths[1], right_audio, last=False)
-                measurements = {'left': _audio_metrics(left_audio), 'right': _audio_metrics(right_audio)}
-                base['audio']['boundary'] = measurements
-                if measurements['left']['silent'] or measurements['right']['silent']:
-                    base['warnings'].append('接点附近可能存在静音')
-                if measurements['left']['clipping'] or measurements['right']['clipping']:
-                    base['warnings'].append('接点附近可能存在爆音/削波')
-            else:
-                base['audio']['boundary'] = {'available': False, 'reason': '两侧均需有音频轨才能测量边界'}
+        base.update(video=comparison['video'], audio=comparison['audio'], warnings=warnings)
+        left_endpoint = _media_endpoint(paths[0], ffmpeg_path, ffprobe_path, last=True,
+                                        has_audio=specs[0]['audio']['present'], deadline=_deadline,
+                                        temp_root=temp_root)
+        right_endpoint = _media_endpoint(paths[1], ffmpeg_path, ffprobe_path, last=False,
+                                         has_audio=specs[1]['audio']['present'], deadline=_deadline,
+                                         temp_root=temp_root)
+        base['frames'] = _frame_metrics_bytes(left_endpoint['frame'], right_endpoint['frame'])
+        if specs[0]['audio']['present'] and specs[1]['audio']['present']:
+            measurements = {'left': left_endpoint['audio'], 'right': right_endpoint['audio']}
+            base['audio']['boundary'] = measurements
+            if measurements['left']['silent'] or measurements['right']['silent']:
+                base['warnings'].append('接点附近可能存在静音')
+            if measurements['left']['clipping'] or measurements['right']['clipping']:
+                base['warnings'].append('接点附近可能存在爆音/削波')
+        else:
+            base['audio']['boundary'] = {'available': False, 'reason': '两侧均需有音频轨才能测量边界'}
+            base.update(status='partial', reason='两侧均需有音频轨才能完成边界音频测量')
+        if base.get('status') != 'partial':
+            base.update(available=True, status='ok')
         return base
-    except (OSError, RuntimeError, ValueError, json.JSONDecodeError, subprocess.SubprocessError) as exc:
+    except _AnalysisBudgetExceeded as exc:
+        base['status'] = 'partial' if base.get('video') else 'unavailable'
+        base['reason'] = str(exc)
+        return base
+    except (AttributeError, KeyError, OSError, OverflowError, RuntimeError, TypeError, ValueError,
+            json.JSONDecodeError, subprocess.SubprocessError) as exc:
+        base['status'] = 'partial' if base.get('video') else 'unavailable'
         base['reason'] = str(exc)[:500] or '媒体测量失败'
         return base
 
 
 def analyze_joins(segments: list[dict[str, Any]], *, resolve_path: Callable[[str], Path] | None = None,
                   ffmpeg: str | Path | None = None, ffprobe: str | Path | None = None,
-                  temp_root: str | Path | None = None) -> list[dict[str, Any]]:
+                  temp_root: str | Path | None = None, max_joins: int = MAX_JOINS,
+                  analysis_deadline_seconds: float = ANALYSIS_DEADLINE_SECONDS) -> list[dict[str, Any]]:
     """Analyze all adjacent segment pairs while preserving their stable join keys."""
     rows = []
     clean = [item for item in segments if isinstance(item, dict)]
-    for left, right in zip(clean, clean[1:]):
-        row = analyze_join(left, right, resolve_path=resolve_path, ffmpeg=ffmpeg,
-                           ffprobe=ffprobe, temp_root=temp_root)
+    deadline = time.monotonic() + max(0.0, analysis_deadline_seconds)
+    for index, (left, right) in enumerate(zip(clean, clean[1:])):
+        if index >= max_joins:
+            row = _unavailable_join(left, right, f'接点数量超过分析上限 {max_joins}')
+        elif time.monotonic() >= deadline:
+            row = _unavailable_join(left, right, '连续性分析总时间预算已用尽')
+        else:
+            row = analyze_join(left, right, resolve_path=resolve_path, ffmpeg=ffmpeg,
+                               ffprobe=ffprobe, temp_root=temp_root, _deadline=deadline)
         row.update(key=f"{left.get('id')}>{right.get('id')}", left_id=left.get('id'), right_id=right.get('id'))
         rows.append(row)
     return rows
@@ -276,9 +382,12 @@ def analyze_joins(segments: list[dict[str, Any]], *, resolve_path: Callable[[str
 
 def analyze_document(document: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     rows = analyze_joins(document.get('segments') or [], **kwargs)
+    statuses = {row.get('status') for row in rows}
+    status = 'ok' if not rows or statuses == {'ok'} else ('unavailable' if statuses == {'unavailable'} else 'partial')
     return {
         'advisory': True,
-        'available': all(row.get('available') for row in rows) if rows else True,
+        'available': bool(rows) and status == 'ok' if rows else True,
+        'status': status,
         'method': 'CPU FFmpeg/ffprobe heuristics',
         'note': '启发式、非艺术判断；人工审核仍是装配的权威，不自动通过或阻止装配',
         'joins': rows,

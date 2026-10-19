@@ -3231,20 +3231,33 @@ def assembly_continuity_view(manifest: dict[str, Any], document: dict[str, Any])
     return result
 
 
-def assembly_edit_view(manifest: dict[str, Any], document: dict[str, Any]) -> dict[str, Any]:
+def assembly_edit_view(manifest: dict[str, Any], document: dict[str, Any], *, include_continuity: bool = True,
+                       sound_override: dict[str, Any] | None = None,
+                       readiness_complete: bool | None = None) -> dict[str, Any]:
+    if readiness_complete is None:
+        readiness_complete = include_continuity
     video_blockers = assembly_video_blockers(document)
     missing_videos = [item['dependency'] for item in video_blockers if item['code'] == 'video_required']
     join_rows = assembly_edit.joins(document, missing_videos=[item['dependency'] for item in video_blockers])
-    try:
-        sound = assembly_sound_selection(manifest, document)
-    except ValueError as exc:
+    if sound_override is not None:
+        sound = sound_override
+    elif include_continuity:
+        try:
+            sound = assembly_sound_selection(manifest, document)
+        except ValueError as exc:
+            saved = ((document.get('assembly_edit') or {}).get('sound') or {})
+            sound = {'policy': saved.get('policy', 'legacy_master'),
+                     'audio_asset_id': saved.get('audio_asset_id'), 'path': None,
+                     'duration_seconds': None, 'error': str(exc)}
+    else:
         saved = ((document.get('assembly_edit') or {}).get('sound') or {})
-        sound = {'policy': saved.get('policy', 'legacy_master'),
+        legacy = (manifest.get('assembly') or {}).get('audio')
+        sound = {'policy': saved.get('policy', 'legacy_master' if legacy else 'segment_native'),
                  'audio_asset_id': saved.get('audio_asset_id'), 'path': None,
-                 'duration_seconds': None, 'error': str(exc)}
+                 'duration_seconds': None}
     warnings = ['非 WAV 完整母版的时长尚未验证，成片后须核对尾部声音'] if (
         sound.get('policy') == 'complete_master' and sound.get('duration_seconds') is None and not sound.get('error')) else []
-    continuity = assembly_continuity_view(manifest, document)
+    continuity = assembly_continuity_view(manifest, document) if include_continuity else None
     return {'project_id': manifest['id'], 'revision': int(document.get('revision', 0) or 0),
             'joins': join_rows, 'blocking_joins': assembly_edit.blocking_joins(document),
             'join_review': assembly_edit.review_readiness(join_rows),
@@ -3252,6 +3265,7 @@ def assembly_edit_view(manifest: dict[str, Any], document: dict[str, Any]) -> di
             'missing_videos': missing_videos, 'blockers': video_blockers,
             'sound': sound, 'warnings': warnings, 'target_duration_seconds': round(sum(float(item.get('duration_seconds') or 0)
                        for item in document.get('segments', []) if isinstance(item, dict)), 3),
+            'readiness_complete': readiness_complete,
             'timing_summary': assembly_trim_summary(manifest, document),
             'sound_processing': {'task_path': f"/api/projects/{manifest['id']}/audio-edit-tasks",
                                  'max_seconds': 120, 'gain_range': [0, 8], 'short_audio': 'reject_or_explicit_pad_in_cpu_task',
@@ -3260,7 +3274,7 @@ def assembly_edit_view(manifest: dict[str, Any], document: dict[str, Any]) -> di
             'audio_assets': [{'id': item['id'], 'title': item.get('title', item['id'])}
                              for item in manifest.get('assets', []) if isinstance(item, dict)
                              and item.get('kind') == 'audio' and item.get('id')],
-            'ready': bool(document.get('segments')) and not video_blockers and
+            'ready': readiness_complete and bool(document.get('segments')) and not video_blockers and
                      not assembly_edit.blocking_joins(document) and not sound.get('error')}
 
 
