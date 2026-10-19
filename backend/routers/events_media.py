@@ -88,7 +88,7 @@ def workflow_file(path: str) -> FileResponse:
     try:
         candidate = candidate.resolve()
         workflow_roots = [backend.PROJECT.resolve(), backend.DIRECTOR_WORKSPACES_ROOT.resolve()]
-        workflow_roots.extend(destination for source, destination in backend.legacy_mappings(backend.ROOT) if source == backend.ROOT / 'ComfyUI-Workspace/projects/director-workbench/workspaces')
+        workflow_roots.extend(destination for source, destination in backend.legacy_mappings(backend.ROOT) if source == backend.COMFY_ROOT / 'ComfyUI-Workspace/projects/director-workbench/workspaces')
         if not any(candidate.is_relative_to(root) for root in workflow_roots):
             raise ValueError('Workflow outside configured project roots')
     except ValueError as exc:

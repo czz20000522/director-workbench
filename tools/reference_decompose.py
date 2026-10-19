@@ -14,7 +14,7 @@ import av
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import paths
 
-ROOT = paths.DESKTOP_ROOT
+ROOT = paths.DATA_ROOT
 DEFAULT_FFMPEG = paths.SHARED_ROOT / "tools" / "index-tts" / "ffmpeg.exe"
 ASR_PYTHON = paths.SHARED_ROOT / "tools" / "index-tts" / ".venv" / "Scripts" / "python.exe"
 ASR_SCRIPT = Path(__file__).resolve().with_name("reference_audio.py")

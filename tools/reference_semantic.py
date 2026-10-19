@@ -12,7 +12,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import paths
 
-ROOT = paths.DESKTOP_ROOT
+ROOT = paths.DATA_ROOT
 LLAMA_MTMD = paths.LLAMA_ROOT / "llama-mtmd-cli.exe"
 LLAMA_CLI = paths.LLAMA_ROOT / "llama-completion.exe"
 MODEL_ROOT = paths.SHARED_ROOT / "models" / "LLM" / "Qwen3.8-27B-Uncensored"

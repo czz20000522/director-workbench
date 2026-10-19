@@ -1,7 +1,9 @@
 """Trusted machine storage configuration shared by production and workbench.
 
-Runtime, environments and models remain under the checkout. Only explicitly
-configured asset roots are relocated; client requests cannot select roots.
+``root`` is the workbench data root; ``shared_root`` is the external ComfyUI
+shared media root. Runtime, environments and models remain under the checkout
+or the ComfyUI root. Only explicitly configured asset roots are relocated;
+client requests cannot select roots.
 """
 import json
 from functools import lru_cache
@@ -23,14 +25,15 @@ def checked_root(value):
     return path.resolve()
 
 
-def storage_roots(root):
+def storage_roots(root, shared_root=None):
     root = Path(root).resolve()
-    config = root / 'ComfyUI-Workspace/config/storage.json'
+    shared = Path(shared_root).resolve() if shared_root is not None else root
+    config = root / 'config/storage.json'
     defaults = {
-        'input': root / 'ComfyUI-Shared/input',
-        'output': root / 'ComfyUI-Shared/output',
-        'workspaces': root / 'ComfyUI-Workspace/projects/director-workbench/workspaces',
-        'private': root / 'ComfyUI-Workspace/private-workspaces',
+        'input': shared / 'input',
+        'output': shared / 'output',
+        'workspaces': root / 'projects/director-workbench/workspaces',
+        'private': root / 'private-workspaces',
     }
     if not config.exists():
         return defaults  # Existing test fixtures and unconfigured checkouts.
@@ -47,16 +50,17 @@ def storage_roots(root):
     return roots
 
 
-def relocate_asset(path, root, roots=None):
+def relocate_asset(path, root, roots=None, shared_root=None):
     """Translate old asset references without changing historical receipts."""
     root = Path(root).resolve()
-    roots = roots or storage_roots(root)
+    shared = Path(shared_root).resolve() if shared_root is not None else root
+    roots = roots or storage_roots(root, shared_root=shared)
     path = Path(path)
     mappings = (*legacy_mappings(root),
-        (root / 'ComfyUI-Shared/input', roots['input']),
-        (root / 'ComfyUI-Shared/output', roots['output']),
-        (root / 'ComfyUI-Workspace/projects/director-workbench/workspaces', roots['workspaces']),
-        (root / 'ComfyUI-Workspace/private-workspaces', roots['private']),
+        (shared / 'input', roots['input']),
+        (shared / 'output', roots['output']),
+        (root / 'projects/director-workbench/workspaces', roots['workspaces']),
+        (root / 'private-workspaces', roots['private']),
     )
     # Reject traversal before resolve() can erase it.
     if '..' in path.parts:
@@ -68,7 +72,7 @@ def relocate_asset(path, root, roots=None):
 
 
 def legacy_mappings(root):
-    config = Path(root) / 'ComfyUI-Workspace/config/storage.json'
+    config = Path(root) / 'config/storage.json'
     if not config.exists():
         return ()
     return _legacy_mappings(config, config.stat().st_mtime_ns)

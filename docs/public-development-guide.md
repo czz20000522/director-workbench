@@ -38,7 +38,7 @@ UI、HTTP 和 MCP 共用后端授权与任务记录。任务先冻结输入和�
 - Node.js/npm；前端按 [package-lock.json](../package-lock.json)安装。
 - ComfyUI 桌面安装及相应模型、节点、媒体工具；检查当前能力接口返回的缺项，不根据代码存在推定模型可用。
 
-`ComfyUI-Workspace/config/storage.json` 和根 `.config/director-workbench/local-storage-policy.md` 是不公开提交的本机配置。以下是符合维护环境分层的脱敏示例；根须为绝对真实目录、不重叠，共享兼容作品根在管理员 `series` 下的结构例外由存储模块校验：
+工作台数据根的 `config/storage.json` 和 `.config/director-workbench/local-storage-policy.md` 是不公开提交的本机配置（默认数据根 `D:/software/JetBrains/python_workspace/director-workbench-data`）。以下是符合维护环境分层的脱敏示例；根须为绝对真实目录、不重叠，共享兼容作品根在管理员 `series` 下的结构例外由存储模块校验：
 
 ```json
 {
@@ -73,7 +73,7 @@ npm run build
 
 `python` 应由维护者选择已安装的基础 Python；既有 `.venv` 不需要重建。前端构建执行 TypeScript 检查并输出 `dist`，不代表后端或 GPU 生成通过。Python 依赖已包含 MCP；[requirements-mcp.txt](../requirements-mcp.txt)提供同一依赖入口。`requirements-dev.txt` 只装 lint 工具，不进入生产环境。
 
-完整离线回归用 `run_tests.ps1 -Check`、`run_tests.ps1`。统一入口调用 [run_project_tests.py](../tools/run_project_tests.py)：`all`、`core`、`auk`、`browser` 是可选 suite；核心组在工作台 `.venv` 执行 pytest，AuK 组在 `ComfyUI-Shared/tools/AuK/.venv` 执行声音执行器 unittest。缺少 AuK 环境时完整检查失败，不能把核心组通过报告为完整通过，也不向 API 或 ComfyUI 基础环境安装模型依赖。报告和临时文件保存在隔离的 `ComfyUI-Workspace/runtime` 下，不提交。
+完整离线回归用 `run_tests.ps1 -Check`、`run_tests.ps1`。统一入口调用 [run_project_tests.py](../tools/run_project_tests.py)：`all`、`core`、`auk`、`browser` 是可选 suite；核心组在工作台 `.venv` 执行 pytest，AuK 组在 `ComfyUI-Shared/tools/AuK/.venv` 执行声音执行器 unittest。缺少 AuK 环境时完整检查失败，不能把核心组通过报告为完整通过，也不向 API 或 ComfyUI 基础环境安装模型依赖。报告和临时文件保存在工作台数据根的 `runtime` 下（默认 `D:/software/JetBrains/python_workspace/director-workbench-data/runtime`），不提交。
 
 本地没有单独名为 `fast` 的 PowerShell suite；fast core 是 CI 使用的 pytest 标记过滤。需要快速复现公开后端层时可直接运行：
 
@@ -123,7 +123,7 @@ CI 不安装 ComfyUI、模型或宿主媒体工具，也不运行 AuK 与浏览�
 .\start_private_workbench.ps1 -AdminUsers user001
 ```
 
-账号工具不回显密码；账号摘要留在本机 `ComfyUI-Workspace/runtime/director-private`。`start_private_workbench.ps1`、`start_backend.ps1` 和 `start_workbench.ps1` 使用 `backend.private_app:app`、单 worker，默认监听 `0.0.0.0:4100` 并服务已构建的页面；启动时自动生成 loopback、局域网、Tailscale IPv4 和主机名的精确 Origin 白名单。只需本机访问时显式传 `-HostAddress 127.0.0.1`。不要以不带认证的 `backend.app:app` 对外提供服务。
+账号工具不回显密码；账号摘要留在工作台数据根的 `runtime/director-private`（默认 `D:/software/JetBrains/python_workspace/director-workbench-data/runtime/director-private`）。`start_private_workbench.ps1`、`start_backend.ps1` 和 `start_workbench.ps1` 使用 `backend.private_app:app`、单 worker，默认监听 `0.0.0.0:4100` 并服务已构建的页面；启动时自动生成 loopback、局域网、Tailscale IPv4 和主机名的精确 Origin 白名单。只需本机访问时显式传 `-HostAddress 127.0.0.1`。不要以不带认证的 `backend.app:app` 对外提供服务。
 
 首次启动允许没有 `projects/catalog.json` 或默认作品：服务以空作品状态启动，不在导入时创建示例作品、计划或私人 manifest；本人作品列表为空，通过 UI/API 创建实际作品后才登记数据。仍须先安装依赖、构建页面、创建账号、指定管理员并配置资产根，不能从已有生产环境复制私人目录作为部署模板。
 

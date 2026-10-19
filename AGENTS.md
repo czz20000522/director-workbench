@@ -2,8 +2,8 @@
 
 ## 磁盘与环境
 
-- 本机存在 `.config/director-workbench/local-storage-policy.md` 时，先阅读其磁盘、环境和资产存储约定；此文件是本机有效配置，不公开提交。
-- 按用户 2026-10-03 确认：D 盘用于 ComfyUI 运行、工作台开发和热缓存；输入、输出与现有/未来作品在 E 盘，按账号隔离。ComfyUI-Shared 保持 D 盘真实目录。有效资产根由服务器 storage.json 配置；不得仅凭文档改动搬迁或覆盖配置。
+- 本机存在工作台数据根下的 `.config/director-workbench/local-storage-policy.md` 时，先阅读其磁盘、环境和资产存储约定（默认 `D:/software/JetBrains/python_workspace/director-workbench-data/.config/director-workbench/local-storage-policy.md`）；此文件是本机有效配置，不公开提交。
+- 按用户 2026-10-03 / 2026-10-19 确认：ComfyUI 是外部服务，程序与数据根只在 `D:/software/Comfy Desktop` 和 `D:/Comfy-Desktop`；工作台代码在独立仓库，工作台数据根在 `D:/software/JetBrains/python_workspace/director-workbench-data`，不得再写回 ComfyUI 目录。D 盘用于运行、开发和热缓存；输入、输出与现有/未来作品在 E 盘，按账号隔离。ComfyUI-Shared 保持 D 盘真实目录。有效资产根由 `storage.json` 配置；不得仅凭文档改动搬迁或覆盖配置。
 
 ## 开发维护入口
 
