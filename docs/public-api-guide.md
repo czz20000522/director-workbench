@@ -27,29 +27,35 @@
 
 先读当前服务的对应 OpenAPI schema。下列 JSON 是无真实账号、路径或素材的示例；作品/分镜 ID 和 revision 必须使用实际返回值。创建、上传、添加分镜都改变业务数据，示例不会自动授权生成。
 
-1. 创建空白作品，`select:false` 保留用户当前选择。使用返回的 `project.id`，不要用标题推测 ID。
+1. 创建空白作品，必须显式传 `creation_mode:"advanced"`；`auto` 已移除，缺省或旧值返回 `422`。`select:false` 保留用户当前选择。使用返回的 `project.id`，不要用标题推测 ID。
 
    `POST /api/projects/create`
 
    ```json
-   {"series":"示例系列","title":"示例作品","creation_mode":"auto","select":false}
+   {"series":"示例系列","title":"示例作品","creation_mode":"advanced","select":false}
    ```
 
-2. 读取 `GET /api/projects/{project_id}/plan`，以实际计划版本保存高层分镜。
+2. 显式选择制作方案。先读取 `GET /api/production-presets` 的候选，再用独立写入入口安装：
+
+   `POST /api/projects/{project_id}/production-presets/{preset_id}`
+
+   安装只写项目 manifest 和该方案的执行图，不生成，也不会因为创建分镜自动发生。安装后从 `GET /api/projects/{project_id}/pipeline` 读取实际 `stage_id` 和 workflow。未安装或未选择方案时，保存分镜返回 `422` 的结构化 `creation_plan_required`／`preset_not_installed` 和可选项，不写计划。
+
+3. 读取 `GET /api/projects/{project_id}/plan`，以实际计划版本保存高层分镜。可以为每段显式传 `workflow` 或已安装的 `preset_id`；两者都不传时使用作品已明确安装的方案，作品没有方案时返回阻塞。工作台不会按画幅、素材或创作分区代选配方，也不会静默 fallback。
 
    `POST /api/projects/{project_id}/plan/segments`
 
    ```json
-   {"prompt":"用户的分镜描述","duration_seconds":5,"workflow":"workflows/已登记方案.json","generation":{"mode":"auto","aspect_ratio":"16:9","seed":42},"expected_revision":0}
+   {"prompt":"用户的分镜描述","duration_seconds":5,"workflow":"workflows/已登记方案.json","generation":{"aspect_ratio":"16:9","seed":42},"expected_revision":0}
    ```
 
-   这里的 `0` 只表示尚未修改的初始计划示例。H3 单段支持 4–15 秒，画幅 `16:9`、`1:1`、`9:16`；实际输出规格以预检为准。已有分镜用 `PATCH /api/projects/{project_id}/plan/segments/{segment_id}` 修改，传最新 `expected_revision`，保留用户输入。不要求普通用户安装 preset 或猜测技术 stage ID。
+   这里的 `0` 只表示尚未修改的初始计划示例。H3 单段支持 4–15 秒，画幅 `16:9`、`1:1`、`9:16`；显式方案与画幅/首尾帧/声音/创作分区不匹配时返回 `422`，不会换用其他配方。已有分镜用 `PATCH /api/projects/{project_id}/plan/segments/{segment_id}` 修改，传最新 `expected_revision`，保留用户输入。普通用户无需猜技术 stage ID，但必须由人或 Agent 明确选择已安装方案。
 
-3. 图片/声音通过 `POST /api/projects/{project_id}/upload` 的 multipart `files` 上传，使用登记回执中实际素材引用。素材存在于库中不等于已绑定为首帧；角色参考、首尾帧、表演声音和完整母版应按对应字段分别指定。远程客户端不能把自身磁盘路径传给服务器路径导入接口。
+4. 图片/声音通过 `POST /api/projects/{project_id}/upload` 的 multipart `files` 上传，使用登记回执中实际素材引用。素材存在于库中不等于已绑定为首帧；角色参考、首尾帧、表演声音和完整母版应按对应字段分别指定。远程客户端不能把自身磁盘路径传给服务器路径导入接口。
 
    上传有服务端上限：单文件默认 2 GiB、单次默认 200 个文件、单请求默认 4 GiB（部署方可用 `DIRECTOR_MAX_UPLOAD_BYTES`、`DIRECTOR_MAX_UPLOAD_FILES`、`DIRECTOR_MAX_UPLOAD_REQUEST_BYTES` 收紧或调整）。超限返回 `413`，不登记素材；客户端应据此拆分批次或压缩素材，而不是重试同一请求。请求体上限会在 multipart 解析前检查，单文件写入使用分块和临时文件，失败时清理半成品。
 
-4. 无生成预检：`POST /api/projects/{project_id}/pipeline/auto/validate`。
+5. 无生成预检：`POST /api/projects/{project_id}/pipeline/{stage_id}/validate`。`stage_id` 必须来自该作品已安装的 pipeline，`auto` 已移除并返回 `422 explicit_stage_required`。
 
    ```json
    {"asset_id":"实际分镜ID","values":{}}
@@ -57,17 +63,17 @@
 
    读取 `valid`、实际时长/帧数与 `readiness` 中的 blockers、allowed_actions、next_actions 和 revision。预检不生成，不以读取或预检方式改写计划。缺失模型、素材或未支持组合先明确处理。
 
-5. 用户授权一次生成后，先保留唯一请求键和完整参数，再向 `POST /api/projects/{project_id}/tasks` 提交一次。
+6. 用户授权一次生成后，先保留唯一请求键和完整参数，再向 `POST /api/projects/{project_id}/tasks` 提交一次。
 
    ```json
-   {"asset_id":"实际分镜ID","pipeline_stage_id":"auto","expected_revision":1,"idempotency_key":"客户端为本次操作保存的唯一键"}
+   {"asset_id":"实际分镜ID","pipeline_stage_id":"实际stage_id","expected_revision":1,"idempotency_key":"客户端为本次操作保存的唯一键"}
    ```
 
    `expected_revision` 使用刚才预检的实际版本。相同作品、请求键和参数返回原任务，键相同但参数不同会冲突。未知响应使用 `GET /api/projects/{project_id}/submission-receipt?key=原键` 核对；等待时不换键重发。
 
-   `asset_id` 是必填的单段对象标识；服务端不会从项目默认分镜补值。分镜必须在计划中绑定明确的 `workflow` 或提交明确的 `pipeline_stage_id`，缺失时返回 `422` 的 `workflow_required` blocker，不会使用项目默认 workflow。
+   `asset_id` 是必填的单段对象标识；服务端不会从项目默认分镜补值。分镜必须在计划中绑定明确的 `workflow` 或提交明确的 `pipeline_stage_id`，缺失时返回 `422` 的 `workflow_required` blocker，不会使用项目默认 workflow。`pipeline_stage_id:"auto"` 已移除并返回明确阻塞。
 
-6. 批次提交必须显式列出非空 `asset_ids`，例如：
+7. 批次提交必须显式列出非空 `asset_ids`，例如：
 
    ```json
    {"asset_ids":["S01","S03"],"idempotency_key":"客户端为本次批次保存的唯一键"}
@@ -75,7 +81,7 @@
 
    空列表、缺少字段或未绑定 workflow 的分镜会在创建任务前返回结构化 `422` blocker；服务端不会把所有可执行分镜隐式加入批次。
 
-7. 用 `GET /api/queue` 和 `GET /api/projects/{project_id}/tasks/{task_id}` 查询原任务。候选通过任务返回的授权媒体入口访问；`GET /api/projects/{project_id}/segments/{segment_id}/versions` 读取历史。`stop_requested` 是停止请求，仍需等实际结束；`needs_reconcile` 需核对原执行。任务成功不表示审核、采用或交付通过。
+8. 用 `GET /api/queue` 和 `GET /api/projects/{project_id}/tasks/{task_id}` 查询原任务。候选通过任务返回的授权媒体入口访问；`GET /api/projects/{project_id}/segments/{segment_id}/versions` 读取历史。`stop_requested` 是停止请求，仍需等实际结束；`needs_reconcile` 需核对原执行。任务成功不表示审核、采用或交付通过。
 
 创建/上传/新增分镜没有统一幂等回执，未知结果先读取本人作品、计划或素材确认。不要给这些操作套用生成任务的同键保证。
 
@@ -109,6 +115,8 @@
 | 装配 | 装配编辑与预检读取、接点/音轨记录、装配提交 |
 
 这些工具仍通过现有 Bearer 认证和 HTTP 业务路由执行；远程端不提供账户或管理操作、删除/清理、任意服务器路径导入或导出、脚本执行、全局设置修改、历史版本恢复、任务恢复/强制收尾等能力。完整适配工具可通过本机 stdio 使用，其他业务使用认证 HTTP。没有 OAuth 登录发现；只能 OAuth 且不能配置现有 Bearer 的宿主尚未支持。
+
+远程 MCP 与 HTTP 使用同一显式创作合同：`create_project` 必须传 `creation_mode:"advanced"`；`preflight` 必须传实际 `stage_id`；`create_shot`／`update_shot` 可传 `workflow` 或已安装的 `preset_id`。自动方案、`stage_id:"auto"` 和 `generation.mode` 已移除，缺省时返回结构化阻塞和可选项，不写计划。
 
 MCP 默认保留官方 SDK 的 loopback Host/Origin 限制和 DNS rebinding 防护。公网入口必须在工作台或反向代理启动前配置精确允许列表，不能由客户端请求或 `Forwarded`/`X-Forwarded-Host` 决定：
 
