@@ -1,5 +1,6 @@
 # Source allowlist. New public files must be reviewed and added explicitly.
 /*
+!/CODEX_REPORT.md
 !/start-director-services.ps1
 !/start-director-services.cmd
 !/stop-director-services.cmd
