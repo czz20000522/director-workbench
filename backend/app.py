@@ -35,7 +35,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictInt, field_validator, model_validator
-from . import production_presets, background_jobs, speech, keyframes, audio_edit_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, assembly_continuity, guide, readiness, task_scheduler, creative_inspection, shot_creation
+from . import production_presets, background_jobs, speech, keyframes, audio_edit_tasks, audio_master_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, assembly_continuity, guide, readiness, task_scheduler, creative_inspection, shot_creation
 from . import output_resolution, enhancement, task_store
 import av
 import paths
@@ -276,7 +276,7 @@ def ensure_no_release_blocking_tasks(action: str, *, gpu_only: bool = False,
 
     def blocks(row) -> bool:
         payload = json.loads(row['payload'])
-        if gpu_only and payload.get('kind') in {'audio_edit', 'media_operation'}:
+        if gpu_only and payload.get('kind') in {'audio_edit', 'audio_master', 'media_operation'}:
             return False
         if owner is None:
             return True
@@ -708,7 +708,7 @@ def gpu_admission(function):
         task_id = kwargs.get('task_id')
         if task_id is None and function.__name__ in {'resume', 'resume_project_task', 'reconcile_project_task', 'resolve_missing_execution'}:
             task_id = args[0 if function.__name__ == 'resume' else 1] if len(args) > (0 if function.__name__ == 'resume' else 1) else None
-        if task_id and (get_task(task_id) or {}).get('payload', {}).get('kind') in {'audio_edit', 'media_operation'}:
+        if task_id and (get_task(task_id) or {}).get('payload', {}).get('kind') in {'audio_edit', 'audio_master', 'media_operation'}:
             return function(*args, **kwargs)
         with GPU_ADMISSION_LOCK:
             GPU_IDLE_RELEASER.note_activity()
@@ -2447,7 +2447,7 @@ def adopt_project_candidate(project_id: str, request: AdoptionRequest) -> dict[s
             asset = next((item for item in manifest.get('assets', []) if item.get('id') == request.asset_id), None)
             if not asset or request.stage != 'sample' or not asset.get('ready'):
                 raise HTTPException(409, '此素材或阶段没有可采用的当前候选')
-            for field, kind in (('keyframe_task_id', 'keyframe'), ('speech_task_id', 'speech'), ('audio_edit_task_id', 'audio_edit'), ('media_task_id', 'media_operation')):
+            for field, kind in (('keyframe_task_id', 'keyframe'), ('speech_task_id', 'speech'), ('audio_edit_task_id', 'audio_edit'), ('audio_master_task_id', 'audio_master'), ('media_task_id', 'media_operation')):
                 if asset.get(field):
                     task_id, material_kind_expected = asset[field], kind
                     break
@@ -3550,7 +3550,9 @@ app.include_router(_task_media_router)
 # app.py、private_mode.py 与既有测试都以 backend.<名称> 取用它们。
 from .routers.task_media import (
     audio_edit_owner_alive,
+    audio_master_owner_alive,
     audio_edit_source,
+    complete_audio_master_task,
     complete_audio_edit_task,
     complete_keyframe_task,
     complete_media_operation_task,
@@ -3559,10 +3561,12 @@ from .routers.task_media import (
     media_capability,
     media_operation_source,
     run_audio_edit_task,
+    run_audio_master_task,
     run_media_operation_task,
     run_speech_task,
     speech_capability,
     start_audio_edit_task,
+    start_audio_master_task,
     start_keyframe_task,
     start_media_operation,
     start_speech_task,

@@ -91,7 +91,7 @@ def mark_orphans() -> None:
         connection.execute("UPDATE tasks SET status = 'needs_reconcile', error = '服务重启后需与 ComfyUI 历史核对', updated_at = ? WHERE status IN ('submitting','queued','running','stopping')", (time.time(),))
         rows = connection.execute("SELECT id,payload FROM tasks WHERE status IN ('preparing','submitting','queued','running','stopping','stop_requested','needs_reconcile')").fetchall()
         for row in rows:
-            if json.loads(row['payload']).get('kind') in {'audio_edit', 'media_operation'}:
+            if json.loads(row['payload']).get('kind') in {'audio_edit', 'audio_master', 'media_operation'}:
                 connection.execute("UPDATE tasks SET status='needs_reconcile',error='服务重启后需核对CPU媒体处理回执；不会自动重执行',updated_at=? WHERE id=?", (time.time(), row['id']))
         connection.commit()
 

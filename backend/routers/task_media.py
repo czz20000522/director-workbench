@@ -16,8 +16,8 @@ from fastapi import APIRouter, HTTPException
 import os
 import psutil
 from urllib.error import HTTPError, URLError
-from .. import audio_edit_tasks, keyframes, media_operations, output_resolution, speech
-from ..schemas import AudioEditRequest, KeyframeRequest, MediaOperationRequest, SpeechRequest
+from .. import audio_edit_tasks, audio_master_tasks, keyframes, media_operations, output_resolution, speech
+from ..schemas import AudioEditRequest, AudioMasterRequest, KeyframeRequest, MediaOperationRequest, SpeechRequest
 from .. import app as backend
 
 
@@ -297,6 +297,10 @@ def audio_edit_owner_alive(payload: dict[str, Any]) -> bool:
         raise HTTPException(409, '无法核对CPU执行进程身份，保留待核对状态') from exc
 
 
+def audio_master_owner_alive(payload: dict[str, Any]) -> bool:
+    return audio_edit_owner_alive(payload)
+
+
 def audio_edit_source(manifest: dict[str, Any], asset_id: str) -> tuple[Path, dict[str, Any]]:
     asset = next((item for item in manifest.get('assets', []) if isinstance(item, dict) and item.get('id') == asset_id and item.get('kind') == 'audio'), None)
     value = (asset.get('sources') or {}).get('A') if asset else None
@@ -395,6 +399,93 @@ def run_audio_edit_task(task_id: str, payload: dict[str, Any]) -> None:
         backend.complete_audio_edit_task(backend.get_task(task_id), receipt)
     except Exception as exc:
         backend.set_task(task_id, status='needs_reconcile', error=f'CPU音频候选登记待核对: {exc}')
+
+
+@ROUTER.post('/api/projects/{project_id}/audio-master-tasks', status_code=202)
+def start_audio_master_task(project_id: str, request: AudioMasterRequest) -> dict[str, Any]:
+    """Create a long complete-master candidate from project-owned audio assets."""
+    with backend.AUDIO_EDIT_LOCK:
+        manifest = backend.require_project_manifest(project_id)
+        submission = {'kind': 'audio_master', **request.model_dump(exclude={'idempotency_key'})}
+        if not request.idempotency_key.strip():
+            raise HTTPException(422, '请求标识不能为空')
+        existing = backend.find_submission_task(project_id, request.idempotency_key)
+        if existing:
+            if existing['payload']['submission_receipt']['request'] != submission:
+                raise HTTPException(409, '请求标识已用于不同参数')
+            return existing
+        backend.require_submission_capacity()
+        source, source_record = backend.audio_edit_source(manifest, request.source_asset_id)
+        background, background_record = (None, None) if request.background_asset_id is None else backend.audio_edit_source(manifest, request.background_asset_id)
+        task_id = str(uuid.uuid4())
+        try:
+            workspace = backend.resolve_registered_path(str(manifest['workspace_root']))
+            payload = audio_master_tasks.prepare(task_id, source, workspace / 'audio-master-tasks',
+                parameters={key: submission.get(key, default) for key, default in audio_master_tasks.DEFAULTS.items()}, background=background)
+            owner = {'pid': os.getpid(), 'created_at': psutil.Process().create_time()}
+        except (OSError, ValueError, psutil.Error) as exc:
+            raise HTTPException(422, str(exc)) from exc
+        payload.update(project_id=project_id, source_asset=source_record, background_asset=background_record,
+                       execution_owner=owner, submission_receipt={'key': request.idempotency_key, 'request': submission})
+        if backend.PRIVATE_WORKSPACES is not None:
+            payload['owner_user'] = backend.PRIVATE_WORKSPACES.read()['projects'].get(project_id)
+        now = time.time()
+        with backend.DB_LOCK, backend.db() as connection:
+            backend.check_queue_limits(connection, backend.settings_owner())
+            connection.execute('INSERT INTO tasks (id,asset_id,status,created_at,updated_at,payload,project_id) VALUES (?,?,?,?,?,?,?)',
+                (task_id, f'audio-master-{task_id}', 'scheduler_waiting', now, now, json.dumps(payload, ensure_ascii=False), project_id))
+            connection.commit()
+        backend.queue_task(task_id)
+        return backend.get_task(task_id)
+
+
+def complete_audio_master_task(task: dict[str, Any], receipt: dict[str, Any]) -> dict[str, Any]:
+    with backend.AUDIO_EDIT_LOCK:
+        task = backend.get_task(task['id']) or task
+        if task.get('stop_requested') or task['status'] == 'stopped':
+            backend.set_task(task['id'], status='stopped', result=json.dumps(receipt, ensure_ascii=False), error='CPU处理已结束；已按停止请求保留结果但不登记候选')
+            return backend.get_task(task['id'])
+        asset_id = f'audio-master-{task["id"]}'
+        with backend.MATERIAL_REUSE_LOCK:
+            manifest = backend.require_project_manifest(task['project_id'])
+            assets = list(manifest.get('assets') or [])
+            if not any(asset.get('id') == asset_id for asset in assets if isinstance(asset, dict)):
+                assets.append({'id': asset_id, 'kind': 'audio', 'title': '全片母版后期候选', 'ready': True,
+                    'subtitle': '全片母版后期 · 待试听', 'origin': 'CPU全片音频后期',
+                    'sources': {'A': backend.root_relative_path(Path(receipt['output']))}, 'start': 0,
+                    'end': receipt['duration_seconds'], 'audio_master_task_id': task['id'],
+                    'source_asset': task['payload']['source_asset'], 'background_asset': task['payload'].get('background_asset'),
+                    'master_report': receipt.get('report'), 'edit_parameters': task['payload']['request']['parameters']})
+                manifest['assets'] = assets
+                backend.save_project_manifest(manifest)
+                if task['project_id'] == backend.CURRENT_PROJECT_ID:
+                    backend.apply_project_manifest(manifest)
+        result = {**receipt, 'candidate_asset_id': asset_id}
+        backend.set_task(task['id'], status='succeeded', stop_requested=0, error=None, result=json.dumps(result, ensure_ascii=False))
+        return backend.get_task(task['id'])
+
+
+def run_audio_master_task(task_id: str, payload: dict[str, Any]) -> None:
+    try:
+        if backend.PRIVATE_WORKSPACES is not None:
+            backend.PRIVATE_WORKSPACES.verify_task({'project_id': payload.get('project_id'), 'payload': payload})
+        receipt = audio_master_tasks.execute(payload, lambda: bool((backend.get_task(task_id) or {}).get('stop_requested')))
+    except audio_master_tasks.AudioMasterStoppedBeforeStart as exc:
+        backend.set_task(task_id, status='stopped', error=str(exc))
+        return
+    except ValueError as exc:
+        backend.set_task(task_id, status='failed', error=f'CPU全片音频后期校验失败: {exc}')
+        return
+    except Exception as exc:
+        backend.set_task(task_id, status='needs_reconcile', error=f'CPU全片音频后期结果待核对: {exc}')
+        return
+    finally:
+        payload = {**payload, 'execution_finished_at': time.time()}
+        backend.set_task(task_id, payload=json.dumps(payload, ensure_ascii=False))
+    try:
+        complete_audio_master_task(backend.get_task(task_id), receipt)
+    except Exception as exc:
+        backend.set_task(task_id, status='needs_reconcile', error=f'CPU全片音频后期候选登记待核对: {exc}')
 
 
 def complete_speech_task(task: dict[str, Any], receipt: dict[str, Any]) -> dict[str, Any]:

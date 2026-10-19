@@ -88,6 +88,8 @@ def execute_scheduled_task(task):
         return backend.run_speech_task(task['id'], payload)
     if kind == 'audio_edit':
         return backend.run_audio_edit_task(task['id'], payload)
+    if kind == 'audio_master':
+        return backend.run_audio_master_task(task['id'], payload)
     if kind == 'media_operation':
         return backend.run_media_operation_task(task['id'], payload)
     if kind == 'reference_semantic':

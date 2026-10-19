@@ -14,7 +14,7 @@ from typing import Any
 import uuid
 from fastapi import APIRouter, HTTPException
 from urllib.error import HTTPError, URLError
-from .. import audio_edit_tasks, background_jobs, keyframes, media_operations, speech, task_scheduler
+from .. import audio_edit_tasks, audio_master_tasks, background_jobs, keyframes, media_operations, speech, task_scheduler
 from ..schemas import MissingExecutionResolution
 from .. import app as backend
 
@@ -81,11 +81,11 @@ def request_task_stop(task: dict[str, Any]) -> dict[str, Any]:
                 backend.set_task(task['id'], status='stop_requested', stop_requested=1,
                          error='正在请求停止媒体处理子进程，完成后才标记停止')
             return backend.get_task(task['id']) or task
-    if task['payload'].get('kind') == 'audio_edit':
+    if task['payload'].get('kind') in {'audio_edit', 'audio_master'}:
         with backend.AUDIO_EDIT_LOCK:
             task = backend.get_task(task['id']) or task
             if task['status'] == 'needs_reconcile':
-                raise HTTPException(409, '请先核对CPU音频编辑回执，不能把未知执行标记为已停止')
+                raise HTTPException(409, '请先核对CPU音频回执，不能把未知执行标记为已停止')
             if task['status'] not in {'succeeded', 'failed', 'stopped'}:
                 backend.set_task(task['id'], status='stop_requested', stop_requested=1,
                          error='已请求停止；CPU处理无法中途取消，结束后不登记候选')
@@ -137,15 +137,16 @@ def resolve_missing_execution(project_id: str, task_id: str, request: MissingExe
             backend.set_task(task_id, status='failed', stop_requested=0, result=json.dumps(result, ensure_ascii=False),
                      error='原媒体执行已结束且无可恢复回执；已确认，未重新执行')
             return backend.get_task(task_id)
-    if task['payload'].get('kind') == 'audio_edit':
+    if task['payload'].get('kind') in {'audio_edit', 'audio_master'}:
         with backend.AUDIO_EDIT_LOCK:
             task = backend.project_task_detail(project_id, task_id)
             if task['status'] != 'needs_reconcile':
                 raise HTTPException(409, '仅支持待核对CPU音频编辑任务')
-            if backend.audio_edit_owner_alive(task['payload']):
+            owner_alive = backend.audio_master_owner_alive(task['payload']) if task['payload'].get('kind') == 'audio_master' else backend.audio_edit_owner_alive(task['payload'])
+            if owner_alive:
                 raise HTTPException(409, '原CPU执行服务仍存活，不能确认旧执行结束')
             try:
-                audio_edit_tasks.read_receipt(task['payload'])
+                (audio_master_tasks if task['payload'].get('kind') == 'audio_master' else audio_edit_tasks).read_receipt(task['payload'])
             except (OSError, ValueError):
                 pass
             else:
@@ -153,7 +154,7 @@ def resolve_missing_execution(project_id: str, task_id: str, request: MissingExe
             result = dict(task.get('result') or {})
             result['missing_execution_resolution'] = {'confirmed_at': time.time(), 'note': note,
                 'execution_owner': task['payload'].get('execution_owner'), 'execution_verified_ended': True,
-                'source': 'operator_confirmation', 'kind': 'audio_edit'}
+                'source': 'operator_confirmation', 'kind': task['payload'].get('kind')}
             backend.set_task(task_id, status='failed', stop_requested=0, result=json.dumps(result, ensure_ascii=False),
                      error='CPU执行已结束且无可恢复回执；已人工确认，未重新执行')
             return backend.get_task(task_id)
@@ -235,6 +236,14 @@ def reconcile_task(task: dict[str, Any]) -> dict[str, Any]:
         except (OSError, ValueError) as exc:
             raise HTTPException(409, f'CPU音频编辑回执尚未核实，不会重新执行: {exc}') from exc
         return backend.complete_audio_edit_task(task, receipt)
+    if task['payload'].get('kind') == 'audio_master':
+        if task['status'] == 'stopped':
+            return task
+        try:
+            receipt = audio_master_tasks.read_receipt(task['payload'])
+        except (OSError, ValueError) as exc:
+            raise HTTPException(409, f'CPU全片音频后期回执尚未核实，不会重新执行: {exc}') from exc
+        return backend.complete_audio_master_task(task, receipt)
     if task['payload'].get('kind') == 'speech':
         try:
             receipt = speech.read_receipt(task['payload'])
@@ -352,7 +361,7 @@ def task_in_project_context(task: dict[str, Any], manifest: dict[str, Any]) -> d
 def resume_saved_task(task: dict[str, Any] | None) -> dict[str, Any]:
     if not task or task["status"] not in {"stopped", "failed", "needs_reconcile"}:
         raise HTTPException(409, "只有已停止、失败或待核对任务可以恢复")
-    if task['payload'].get('kind') in {'speech', 'keyframe', 'audio_edit', 'media_operation',
+    if task['payload'].get('kind') in {'speech', 'keyframe', 'audio_edit', 'audio_master', 'media_operation',
                                       'reference_decomposition', 'reference_semantic'}:
         return backend.reconcile_task(task)
     if task["status"] == "needs_reconcile" or task.get("prompt_id"):
