@@ -68,10 +68,11 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         return await request('POST', project_path(project_id) + '/production-presets/' + quote(preset_id, safe=''))
 
     @server.tool(annotations=write_record)
-    async def create_project(series: str, title: str, project_id: str | None = None) -> dict[str, Any]:
-        """创建空白作品，不切换人的当前作品。使用返回的实际 project.id；同名可能自动加后缀。请求结果不确定时先 list_projects 核对，不自动重发。创建后用 save_creative_draft 保存设定。"""
+    async def create_project(series: str, title: str, creation_mode: Literal['advanced'], project_id: str | None = None) -> dict[str, Any]:
+        """创建空白作品，不切换人的当前作品。必须显式提供 creation_mode='advanced'；auto 已移除，缺省会被拒绝。使用返回的实际 project.id；同名可能自动加后缀。请求结果不确定时先 list_projects 核对，不自动重发。创建后显式选择制作方案（configure_production_preset）再保存分镜。"""
         if project_id is not None: project_path(project_id)
         return await request('POST', '/api/projects/create', json={'series': series, 'title': title,
+            'creation_mode': creation_mode,
             **({'project_id':project_id} if project_id is not None else {}), 'select': False})
 
     @server.tool(annotations=read_only)
@@ -134,10 +135,12 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         return await request('POST', path, json={'expected_plan_revision': expected_plan_revision})
 
     @server.tool(annotations=read_only)
-    async def preflight(project_id: str, asset_id: str, stage_id: str = 'auto', values: dict[str, Any] | None = None) -> dict[str, Any]:
-        """预检已保存分镜，不生成；默认由服务端按分镜输入选择实际方式，无需安装方案或猜步骤。高级请求可指定stage_id。"""
+    async def preflight(project_id: str, asset_id: str, stage_id: str, values: dict[str, Any] | None = None) -> dict[str, Any]:
+        """预检已保存分镜，不生成。必须显式提供 stage_id（来自 read_project 的 pipeline 或已安装方案）；自动方案已移除，缺省会被拒绝。"""
         if not stage_id or '/' in stage_id or '\\' in stage_id or stage_id in {'.', '..'}:
             raise ValueError('必须提供有效步骤 ID')
+        if stage_id == 'auto':
+            raise ValueError('自动制作方案已移除；请显式选择制作步骤')
         return await request('POST', project_path(project_id) + '/pipeline/' + quote(stage_id, safe='') + '/validate', json={'asset_id': asset_id, 'values': values or {}})
 
     @server.tool(annotations=write_record)
@@ -185,7 +188,7 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
 
     @server.tool(annotations=write_record)
     async def update_shot(project_id: str, asset_id: str, expected_revision: int, changes: ShotChanges) -> dict[str, Any]:
-        """修改已有分镜。版本来自 read_project(section='plan').revision；只提交需要修改的字段。素材路径使用作品返回的登记引用，不猜测路径。关联场次在 changes 传 script_scene_id 和 read_script 的 expected_script_revision；空串解除关联。不提交生成。"""
+        """修改已有分镜。版本来自 read_project(section='plan').revision；只提交需要修改的字段。workflow/preset_id 必须显式选择已安装方案；generation 只接受参数（mode 已移除）。素材路径使用作品返回的登记引用，不猜测路径。关联场次在 changes 传 script_scene_id 和 read_script 的 expected_script_revision；空串解除关联。不提交生成。"""
         if not asset_id or asset_id in {'.', '..'} or '/' in asset_id or '\\' in asset_id:
             raise ValueError('必须提供有效分镜 ID')
         patch = changes.model_dump(exclude_unset=True, exclude_none=True)
@@ -210,13 +213,19 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
     async def create_shot(project_id: str, segment_id: str, expected_revision: int, duration_seconds: float, prompt: str = '', performance: str = '', materials: ShotMaterials | None = None,
                           script_scene_id: Annotated[str | None, Field(max_length=160)] = None,
                           expected_script_revision: Annotated[int | None, Field(strict=True, ge=0)] = None,
-                          generation: GenerationSettings | None = None) -> dict[str, Any]:
-        """在作品末尾添加分镜草案，不生成媒体。先读取 plan.revision；使用返回的实际 segment.id 接续。旧版本冲突时先核对分镜，不能换最新版本盲目重试；首尾帧等可随后 update_shot。关联场次需 script_scene_id 和 read_script 的 expected_script_revision；duration_seconds 单独指定镜头时长，不复制整场时长。"""
+                          generation: GenerationSettings | None = None,
+                          workflow: Annotated[str | None, Field(max_length=500)] = None,
+                          preset_id: Annotated[str | None, Field(max_length=120)] = None) -> dict[str, Any]:
+        """在作品末尾添加分镜草案，不生成媒体。必须显式选择已安装的 workflow 或 preset_id；未指定时使用作品已明确安装的制作方案，作品没有方案时返回结构化阻塞和可选项，不写计划。先读取 plan.revision；使用返回的实际 segment.id 接续。旧版本冲突时先核对分镜，不能换最新版本盲目重试；首尾帧等可随后 update_shot。关联场次需 script_scene_id 和 read_script 的 expected_script_revision；duration_seconds 单独指定镜头时长，不复制整场时长。"""
         if script_scene_id is not None and expected_script_revision is None:
             raise ValueError('关联场次需要 expected_script_revision，请先 read_script')
         references = materials.model_dump(exclude_unset=True, exclude_none=True) if materials else {}
         if generation is not None:
-            references['generation'] = generation.model_dump()
+            references['generation'] = generation.model_dump(exclude_unset=True)
+        if workflow is not None:
+            references['workflow'] = workflow
+        if preset_id is not None:
+            references['preset_id'] = preset_id
         if script_scene_id is not None:
             references.update(script_scene_id=script_scene_id, expected_script_revision=expected_script_revision)
         return await request('POST', project_path(project_id) + '/plan/segments', json={'segment_id': segment_id, 'expected_revision': expected_revision, 'duration_seconds': duration_seconds, 'prompt': prompt, 'performance': performance, **references})
