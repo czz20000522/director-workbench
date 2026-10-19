@@ -3563,7 +3563,6 @@ app.include_router(_batch_assembly_router)
 # app.py、private_mode.py 与既有测试都以 backend.<名称> 取用它们。
 from .routers.batch_assembly import (
     assembly_video_blockers,
-    get_project_assembly_continuity,
     get_project_assembly_edit,
     preflight_project_assembly,
     resume_batch,

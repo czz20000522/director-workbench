@@ -115,17 +115,17 @@ def test_join_review_is_version_bound_and_sound_is_project_registered(edit_clien
     assert client.get(root + '/assembly/preflight').json()['ready'] is True
 
 
-def test_continuity_endpoint_is_read_only_and_degrades_when_ffmpeg_unavailable(edit_client, monkeypatch):
+def test_continuity_is_read_only_and_degrades_when_ffmpeg_unavailable(edit_client, monkeypatch):
     client, root, _, _ = edit_client
     before = client.get(root + '/plan').json()
     monkeypatch.setattr(backend.media_operations, 'FFMPEG', Path('missing-ffmpeg.exe'))
-    response = client.get(root + '/assembly/continuity')
+    response = client.get(root + '/assembly/edit')
     assert response.status_code == 200, response.text
     data = response.json()
-    assert data['advisory'] is True
-    assert data['revision'] == before['revision']
-    assert data['joins'][0]['status'] == 'unavailable'
-    assert 'FFmpeg' in data['joins'][0]['reason']
+    assert data['continuity']['advisory'] is True
+    assert data['continuity']['revision'] == before['revision']
+    assert data['continuity']['joins'][0]['status'] == 'unavailable'
+    assert 'FFmpeg' in data['continuity']['joins'][0]['reason']
     assert client.get(root + '/plan').json() == before
 
 
