@@ -32,6 +32,9 @@ button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .48; }
 button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, a:focus-visible { outline: 2px solid #929497; outline-offset: 2px; }
 img, video { display: block; max-width: 100%; }
+.skip-link { position: fixed; z-index: 200; top: 8px; left: 8px; transform: translateY(-180%); padding: 9px 12px; border-radius: 4px; color: #fff; background: var(--accent-dark); font-size: 13px; text-decoration: none; }
+.skip-link:focus { transform: translateY(0); outline: 3px solid #fff; outline-offset: 2px; }
+.director-main:focus { outline: none; }
 
 .director-workbench { min-height: 100vh; display: grid; grid-template-columns: 232px minmax(0, 1fr); background: var(--paper); }
 .director-sidebar { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; padding: 25px 16px 18px; overflow-y: auto; color: var(--nav-text); background: var(--nav); }
@@ -398,6 +401,11 @@ img, video { display: block; max-width: 100%; }
 .reverse-notice.error { border-color: var(--danger); color: var(--danger); background: #f7e9e6; }
 .spin { animation: director-spin 1s linear infinite; }
 @keyframes director-spin { to { transform: rotate(360deg); } }
+@media (pointer: coarse) {
+  .button { min-height: 44px; }
+  .icon-button { width: 44px; height: 44px; }
+  .director-topnav button, .director-resource-link, .material-kind-filter button, .material-breadcrumbs button { min-height: 44px; }
+}
 
 .material-bridge-backdrop { position: fixed; z-index: 60; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(18, 20, 26, .68); }
 .material-bridge { width: min(900px, 100%); max-height: min(820px, calc(100vh - 40px)); display: flex; flex-direction: column; overflow: hidden; border: 1px solid #606265; background: var(--paper-strong); box-shadow: 0 24px 70px rgba(13, 16, 23, .3); }

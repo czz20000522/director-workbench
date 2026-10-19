@@ -92,12 +92,12 @@ export default function ProjectMaterialLibrary({ projectId, onRegistered }: {
     <p className="project-material-hint">复制到当前作品独立保存，保留来源信息；审核结果需重新确认。每次最多128个。</p>
     {error && <div className="material-notice error" role="alert">{error} <button className="text-button" disabled={busy} onClick={() => setRefresh(value => value + 1)}>重试</button></div>}
     <div className="project-material-grid" aria-busy={loading || projectsLoading}>
-      {loading || projectsLoading ? <div className="material-empty" role="status"><LoaderCircle size={22} className="spin" />正在读取作品素材</div> : error ? null : !visible.length ? <div className="material-empty"><FolderOpen size={24} />{!projects.length ? '还没有其他作品可供复用' : !materials.length ? '此作品暂无可复用素材' : '没有匹配素材，请调整搜索或类型'}</div> : visible.map(item => <article key={item.id} className={selected.has(item.id) ? 'selected' : ''}>
+      {loading || projectsLoading ? <div className="material-empty" role="status" aria-live="polite"><LoaderCircle size={22} className="spin" />正在读取作品素材</div> : error ? null : !visible.length ? <div className="material-empty"><FolderOpen size={24} />{!projects.length ? '还没有其他作品可供复用' : !materials.length ? '此作品暂无可复用素材' : '没有匹配素材，请调整搜索或类型'}</div> : visible.map(item => <article key={item.id} className={selected.has(item.id) ? 'selected' : ''}>
         <div className="project-material-preview">{item.kind === 'image' ? <img src={mediaUrl(item.path)} alt={item.title} loading="lazy" /> : item.kind === 'audio' ? <audio aria-label={`试听 ${item.title}`} src={mediaUrl(item.path)} controls preload="none" /> : <Film size={32} />}</div>
         <label className="project-material-choice"><input type="checkbox" checked={selected.has(item.id)} disabled={busy} onChange={() => setSelected(previous => { const next = new Set(previous); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })} /><span><strong>{item.title}</strong><small>{kinds.find(([id]) => id === item.kind)?.[1] ?? '素材'} · {(item.size_bytes / 1024 / 1024).toFixed(1)} MB</small></span></label>
       </article>)}
     </div>
-    {notice && <div className="material-notice" role="status">{notice}</div>}
+    {notice && <div className="material-notice" role="status" aria-live="polite">{notice}</div>}
     <footer className="material-bridge-foot"><span>{selected.size ? `已选择 ${selected.size} 个素材${[...selected].some(id => !visible.some(item => item.id === id)) ? '（包含筛选隐藏项）' : ''}${selected.size > 128 ? '，超过单次128个上限，请取消部分选择' : ''}` : '选择素材后复制到当前作品'}</span><button className="button primary" disabled={busy || !selected.size || selected.size > 128 || loading || !projectId} onClick={() => void copySelected()}>{busy ? <LoaderCircle className="spin" size={15} /> : <Copy size={15} />}{busy ? '正在复制…' : '复制到当前作品'}</button></footer>
   </div>;
 }

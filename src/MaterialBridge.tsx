@@ -1,6 +1,7 @@
 import ProjectMaterialLibrary from './ProjectMaterialLibrary';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDownToLine, ArrowUp, Check, ChevronRight, FileJson, Film, Folder, HardDrive, Image as ImageIcon, Laptop, LoaderCircle, Music2, Search, X } from 'lucide-react';
+import { useDialogFocusTrap } from './app/useDialogFocusTrap';
 
 type MaterialKind = 'all' | 'video' | 'audio' | 'image' | 'document';
 type MaterialEntry = { name: string; relative_path: string; entry_type: 'directory' | 'file'; kind: MaterialKind | 'directory' | 'other'; size_bytes: number; modified_at: number };
@@ -39,6 +40,10 @@ export default function MaterialBridge({ projectId, initialMode = 'server', onCl
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const deviceInputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  useDialogFocusTrap(true, dialogRef, onClose, closeButtonRef);
 
   useEffect(() => {
     if (!projectId || mode !== 'server') return;
@@ -102,8 +107,8 @@ export default function MaterialBridge({ projectId, initialMode = 'server', onCl
   }
 
   return <div className="material-bridge-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
-    <section className="material-bridge" role="dialog" aria-modal="true" aria-labelledby="material-bridge-title">
-      <header className="material-bridge-head"><div><span className="director-kicker">跨设备素材桥</span><h2 id="material-bridge-title">选择项目素材</h2></div><button className="icon-button" aria-label="关闭素材桥" onClick={onClose}><X size={18} /></button></header>
+    <section ref={dialogRef} className="material-bridge" role="dialog" aria-modal="true" aria-labelledby="material-bridge-title" tabIndex={-1}>
+      <header className="material-bridge-head"><div><span className="director-kicker">跨设备素材桥</span><h2 id="material-bridge-title">选择项目素材</h2></div><button ref={closeButtonRef} className="icon-button" aria-label="关闭素材桥" onClick={onClose}><X size={18} /></button></header>
       <div className="material-bridge-modes" role="tablist" aria-label="素材来源"><button role="tab" aria-selected={mode === 'projects'} className={mode === 'projects' ? 'active' : ''} onClick={() => setMode('projects')}><Folder size={15} />其他作品</button><button role="tab" aria-selected={mode === 'server'} className={mode === 'server' ? 'active' : ''} onClick={() => setMode('server')}><HardDrive size={15} />Windows 素材库</button><button role="tab" aria-selected={mode === 'device'} className={mode === 'device' ? 'active' : ''} onClick={() => setMode('device')}><Laptop size={15} />此设备上传</button></div>
 
       {mode === 'projects' ? <ProjectMaterialLibrary projectId={projectId} onRegistered={onRegistered} /> : mode === 'server' ? <>
@@ -114,7 +119,8 @@ export default function MaterialBridge({ projectId, initialMode = 'server', onCl
         {data?.truncated && <p className="material-limit">结果较多，仅显示前 200 项；可缩小目录或使用搜索。</p>}
         <footer className="material-bridge-foot"><span>{selectedItems.length ? `已选择 ${selectedItems.length} 个素材` : '选择 Windows 素材后登记到当前项目'}</span><button className="button primary" disabled={!selectedItems.length || submitting} onClick={() => void registerSelected()}>{submitting ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />}登记到项目</button></footer>
       </> : <div className="device-upload"><div className="device-upload-icon"><Laptop size={27} /></div><h3>从当前设备选择</h3><p>浏览器在 Mac 上打开时选择 Mac 文件，在 Windows 上打开时选择 Windows 文件。</p><input ref={deviceInputRef} type="file" multiple accept="video/*,audio/*,image/*,.json,.txt,.md,.srt,.vtt" onChange={event => setDeviceFiles(Array.from(event.target.files ?? []))} /><div className="device-file-summary">{deviceFiles.length ? <><strong>{deviceFiles.length} 个文件</strong><span>{formatBytes(deviceFiles.reduce((sum, file) => sum + file.size, 0))}</span></> : <span>尚未选择文件</span>}</div><button className="button primary" disabled={!deviceFiles.length || submitting} onClick={() => void uploadDeviceFiles()}>{submitting ? <LoaderCircle className="spin" size={15} /> : <ArrowUp size={15} />}上传并登记</button></div>}
-      {mode !== 'projects' && (notice || error) && <div className={`material-notice ${error ? 'error' : ''}`}>{error || notice}</div>}
+      {mode !== 'projects' && error && <div className="material-notice error" role="alert" aria-live="assertive">{error}</div>}
+      {mode !== 'projects' && !error && notice && <div className="material-notice" role="status" aria-live="polite" aria-atomic="true">{notice}</div>}
     </section>
   </div>;
 }
