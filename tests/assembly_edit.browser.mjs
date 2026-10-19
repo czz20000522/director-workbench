@@ -14,7 +14,8 @@ try {
     left_preview_start: 3.5, right_preview_end: 1.5, status: 'pending', constraint: '', note: '',
     signature: { left_video: 'output/S01.mp4', right_video: 'output/S02.mp4' } }],
   blocking_joins: [], sound: { policy: 'segment_native', audio_asset_id: null, path: null, duration_seconds: null },
-  audio_assets: [{ id: 'audio-master', title: '完整音轨' }], target_duration_seconds: 10 };
+  audio_assets: [{ id: 'audio-master', title: '完整音轨' }], target_duration_seconds: 10,
+  continuity: { advisory: true, available: true, note: '启发式、非艺术判断', joins: [{ key: 'S01>S02', left_id: 'S01', right_id: 'S02', advisory: true, available: true, status: 'ok', warnings: [], video: { differences: {} }, frames: { mean_absolute_rgb_difference: 0.12, brightness_delta: 2.1 }, audio: { differences: {} } }] } };
   await page.route('http://localhost:4198/**', async route => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -32,6 +33,7 @@ try {
   });
   await page.goto('http://localhost:4198/');
   await page.locator('.assembly-edit-panel > summary').click();
+  await page.getByText('自动检查（仅供参考）').waitFor();
   await page.getByRole('button', { name: /S01 → S02/ }).click();
   await page.getByLabel('连续性约束').fill('方向与雨声连续');
   await page.getByLabel('审核记录').fill('两个切点已听看');
