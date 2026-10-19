@@ -172,11 +172,11 @@ def save_project_assembly_sound(project_id: str, request: AssemblySoundRequest) 
     edit = document.setdefault('assembly_edit', {})
     edit['sound'] = {'policy': request.policy, 'audio_asset_id': request.audio_asset_id}
     try:
-        backend.assembly_sound_selection(manifest, document)
+        sound = backend.assembly_sound_selection(manifest, document)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     backend.persist_plan_edit(project_id, document, plan_path)
-    return backend.assembly_edit_view(manifest, document, include_continuity=False)
+    return backend.assembly_edit_view(manifest, document, include_continuity=False, sound_override=sound)
 
 
 @ROUTER.get('/api/projects/{project_id}/assembly/preflight')
@@ -184,9 +184,12 @@ def preflight_project_assembly(project_id: str) -> dict[str, Any]:
     manifest = backend.require_project_manifest(project_id)
     document, _ = backend.load_project_plan(project_id)
     try:
-        view = backend.assembly_edit_view(manifest, document, include_continuity=False)
+        sound = backend.assembly_sound_selection(manifest, document)
+        view = backend.assembly_edit_view(manifest, document, include_continuity=False, sound_override=sound)
     except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
+        view = backend.assembly_edit_view(manifest, document, include_continuity=False,
+                                         sound_override={'policy': 'segment_native', 'audio_asset_id': None,
+                                                         'path': None, 'duration_seconds': None, 'error': str(exc)})
     builder_blocker = backend.assembly_builder_blocker(manifest)
     if builder_blocker:
         view['blockers'].append(builder_blocker)

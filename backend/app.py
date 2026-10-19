@@ -3221,17 +3221,27 @@ def assembly_continuity_view(manifest: dict[str, Any], document: dict[str, Any])
     return result
 
 
-def assembly_edit_view(manifest: dict[str, Any], document: dict[str, Any], *, include_continuity: bool = True) -> dict[str, Any]:
+def assembly_edit_view(manifest: dict[str, Any], document: dict[str, Any], *, include_continuity: bool = True,
+                       sound_override: dict[str, Any] | None = None) -> dict[str, Any]:
     video_blockers = assembly_video_blockers(document)
     missing_videos = [item['dependency'] for item in video_blockers if item['code'] == 'video_required']
     join_rows = assembly_edit.joins(document, missing_videos=[item['dependency'] for item in video_blockers])
-    try:
-        sound = assembly_sound_selection(manifest, document)
-    except ValueError as exc:
+    if sound_override is not None:
+        sound = sound_override
+    elif include_continuity:
+        try:
+            sound = assembly_sound_selection(manifest, document)
+        except ValueError as exc:
+            saved = ((document.get('assembly_edit') or {}).get('sound') or {})
+            sound = {'policy': saved.get('policy', 'legacy_master'),
+                     'audio_asset_id': saved.get('audio_asset_id'), 'path': None,
+                     'duration_seconds': None, 'error': str(exc)}
+    else:
         saved = ((document.get('assembly_edit') or {}).get('sound') or {})
-        sound = {'policy': saved.get('policy', 'legacy_master'),
+        legacy = (manifest.get('assembly') or {}).get('audio')
+        sound = {'policy': saved.get('policy', 'legacy_master' if legacy else 'segment_native'),
                  'audio_asset_id': saved.get('audio_asset_id'), 'path': None,
-                 'duration_seconds': None, 'error': str(exc)}
+                 'duration_seconds': None}
     warnings = ['非 WAV 完整母版的时长尚未验证，成片后须核对尾部声音'] if (
         sound.get('policy') == 'complete_master' and sound.get('duration_seconds') is None and not sound.get('error')) else []
     continuity = assembly_continuity_view(manifest, document) if include_continuity else None

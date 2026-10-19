@@ -298,6 +298,8 @@ def analyze_join(left: dict[str, Any], right: dict[str, Any], *, resolve_path: C
                  ffmpeg: str | Path | None = None, ffprobe: str | Path | None = None,
                  temp_root: str | Path | None = None, _deadline: float | None = None) -> dict[str, Any]:
     """Return one stable, JSON-serializable advisory row without raising media errors."""
+    if _deadline is None:
+        _deadline = time.monotonic() + ANALYSIS_DEADLINE_SECONDS
     ffmpeg_path = _tool_path(ffmpeg, 'ffmpeg') if ffmpeg is not None else _ffmpeg_path()
     ffprobe_path = _tool_path(ffprobe, 'ffprobe') if ffprobe is not None else _ffprobe_path(ffmpeg_path)
     base = {'advisory': True, 'available': False, 'status': 'unavailable', 'warnings': [],
