@@ -11,6 +11,8 @@ type Task = { id: string; status: string; queue?: QueueReceipt['queue']; error?:
 type MasterDraft = { source_asset_id: string; background_asset_id?: string; target_lufs: number; true_peak_dbtp: number;
   fade_in_seconds: number; fade_out_seconds: number; trim_start_seconds: number; trim_duration_seconds: number | null;
   background_gain_db: number; pad_silence: boolean; ducking?: { threshold_db: number; ratio: number; attack_seconds: number; release_seconds: number } };
+type MasterSubmission = MasterDraft & { idempotency_key: string };
+type SavedMaster = { draft: MasterDraft; pending?: MasterSubmission; completedTaskId?: string };
 const masterInitial: MasterDraft = { source_asset_id: '', target_lufs: -16, true_peak_dbtp: -1, fade_in_seconds: 0, fade_out_seconds: 0,
   trim_start_seconds: 0, trim_duration_seconds: null, background_gain_db: -12, pad_silence: false };
 const initial: Draft = { source_asset_id: '', start_seconds: 0, duration_seconds: null, pad_silence: false, gain: 1, fade_in_seconds: 0,
@@ -29,11 +31,14 @@ function valid(d: Draft): boolean {
 }
 function validMaster(d: MasterDraft): boolean {
   const finite = (v: unknown, low: number, high: number) => typeof v === 'number' && Number.isFinite(v) && v >= low && v <= high;
+  const ducking = d.ducking;
   return Boolean(d.source_asset_id) && (d.background_asset_id === undefined || typeof d.background_asset_id === 'string')
     && finite(d.target_lufs, -24, -8) && finite(d.true_peak_dbtp, -3, 0) && finite(d.fade_in_seconds, 0, 10)
     && finite(d.fade_out_seconds, 0, 10) && finite(d.trim_start_seconds, 0, 3600)
     && (d.trim_duration_seconds === null || finite(d.trim_duration_seconds, .001, 1800))
-    && finite(d.background_gain_db, -60, 12) && typeof d.pad_silence === 'boolean';
+    && finite(d.background_gain_db, -60, 12) && typeof d.pad_silence === 'boolean'
+    && (!ducking || (finite(ducking.threshold_db, -60, 0) && finite(ducking.ratio, 1, 20)
+      && finite(ducking.attack_seconds, .001, 1) && finite(ducking.release_seconds, .01, 2)));
 }
 class RequestError extends Error { constructor(message: string, readonly status: number) { super(message); } }
 
@@ -57,7 +62,18 @@ function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse }:
   const completion = useRef(onComplete);
   completion.current = onComplete;
   const [task, setTask] = useState<Task | null>(null);
-  const [masterDraft, setMasterDraft] = useState<MasterDraft>({ ...masterInitial });
+  const masterStorageKey = `director-workbench:${projectId}:audio-master:v1`;
+  const [masterSaved, setMasterSaved] = useState<SavedMaster>(() => {
+    try {
+      const value = JSON.parse(localStorage.getItem(masterStorageKey) || '{}');
+      const draft = value.draft && typeof value.draft === 'object' ? { ...masterInitial, ...value.draft } : { ...masterInitial };
+      const pending = value.pending && typeof value.pending.idempotency_key === 'string' ? value.pending : undefined;
+      return { draft, pending, completedTaskId: typeof value.completedTaskId === 'string' ? value.completedTaskId : undefined };
+    } catch { return { draft: { ...masterInitial } }; }
+  });
+  const masterCurrent = useRef(masterSaved);
+  const masterDraft = masterSaved.pending || masterSaved.draft;
+  const masterPendingKey = masterSaved.pending?.idempotency_key;
   const [masterTask, setMasterTask] = useState<Task | null>(null);
   const [masterBusy, setMasterBusy] = useState(false);
   const [masterMessage, setMasterMessage] = useState('');
@@ -73,6 +89,11 @@ function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse }:
     if (!alive.current) return false;
     try { localStorage.setItem(storageKey, JSON.stringify(next)); current.current = next; setSaved(next); return true; }
     catch { setMessage('无法保存提交凭据，请恢复浏览器存储后重试。'); return false; }
+  }
+  function persistMaster(next: SavedMaster) {
+    if (!alive.current) return false;
+    try { localStorage.setItem(masterStorageKey, JSON.stringify(next)); masterCurrent.current = next; setMasterSaved(next); return true; }
+    catch { setMasterMessage('无法保存全片母版提交凭据，请恢复浏览器存储后重试。'); return false; }
   }
   function accept(next: Task, key: string) {
     if (!alive.current || current.current.pending?.idempotency_key !== key) return;
@@ -111,6 +132,28 @@ function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse }:
     return () => { active = false; window.clearInterval(timer); };
   }, [pendingKey, task?.id, task?.status, base]);
   useEffect(() => {
+    if (!masterPendingKey) return;
+    let active = true; let polling = false;
+    async function pollMaster() {
+      if (polling) return;
+      polling = true;
+      try {
+        const result = await request(`${base}/submission-receipt?key=${encodeURIComponent(masterPendingKey!)}`);
+        if (active) {
+          setMasterTask(result);
+          if (result.status === 'succeeded' && masterCurrent.current.completedTaskId !== result.id) {
+            if (persistMaster({ ...masterCurrent.current, completedTaskId: result.id })) completion.current();
+          }
+        }
+      } catch (error) {
+        if (active && !masterBusy && masterCurrent.current.pending?.idempotency_key === masterPendingKey) setMasterMessage(error instanceof Error ? error.message : '暂时无法核对全片母版');
+      } finally { polling = false; }
+    }
+    void pollMaster();
+    const timer = window.setInterval(() => { if (!masterTask || !terminal.includes(masterTask.status)) void pollMaster(); }, 3000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [masterPendingKey, masterTask?.id, masterTask?.status, base]);
+  useEffect(() => {
     if (!masterTask || ['succeeded', 'failed', 'stopped'].includes(masterTask.status)) return;
     let active = true;
     const poll = async () => {
@@ -146,16 +189,26 @@ function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse }:
     } finally { working.current = false; if (alive.current) setBusy(false); }
   }
   function change<K extends keyof Draft>(name: K, value: Draft[K]) { persist({ ...current.current, draft: { ...current.current.draft, [name]: value } }); }
-  function changeMaster<K extends keyof MasterDraft>(name: K, value: MasterDraft[K]) { setMasterDraft(currentMaster => ({ ...currentMaster, [name]: value })); }
+  function changeMaster<K extends keyof MasterDraft>(name: K, value: MasterDraft[K]) {
+    if (masterCurrent.current.pending) return;
+    persistMaster({ ...masterCurrent.current, draft: { ...masterCurrent.current.draft, [name]: value } });
+  }
   async function submitMaster() {
-    if (masterBusy || !validMaster(masterDraft) || !audioAssets.some(asset => asset.id === masterDraft.source_asset_id)) return;
+    if (masterBusy || masterCurrent.current.pending || !validMaster(masterDraft) || !audioAssets.some(asset => asset.id === masterDraft.source_asset_id)) return;
     setMasterBusy(true); setMasterMessage('');
+    const key = `audio-master-${crypto.randomUUID()}`;
+    const submission = { ...masterCurrent.current.draft, idempotency_key: key };
+    if (!persistMaster({ ...masterCurrent.current, pending: submission })) { setMasterBusy(false); return; }
     try {
-      const key = `audio-master-${crypto.randomUUID()}`;
-      const next = await request(`${base}/audio-master-tasks`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...masterDraft, idempotency_key: key }) });
+      const next = await request(`${base}/audio-master-tasks`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(submission) });
       setMasterTask(next);
-      if (next.status === 'succeeded') completion.current();
-    } catch (error) { setMasterMessage(error instanceof Error ? error.message : '全片母版后期提交失败'); }
+      if (next.status === 'succeeded' && masterCurrent.current.completedTaskId !== next.id) {
+        persistMaster({ ...masterCurrent.current, completedTaskId: next.id }); completion.current();
+      }
+    } catch (error) {
+      if (error instanceof RequestError && error.status === 422) persistMaster({ ...masterCurrent.current, pending: undefined });
+      setMasterMessage(error instanceof Error ? error.message : '全片母版后期提交失败');
+    }
     finally { setMasterBusy(false); }
   }
   async function chooseMaster() {
@@ -177,20 +230,28 @@ function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse }:
     <section aria-label="全片母版后期"><h3>全片母版后期（最长30分钟）</h3>
       <p>对当前作品已登记的完整母版做 CPU 响度归一化、真峰值限制、淡入淡出和可选背景混音。输出为新候选，不会自动替换音轨。</p>
       <div className="director-creation-grid">
-        <div><label htmlFor={`${prefix}-master-source`}>完整母版</label><select id={`${prefix}-master-source`} value={masterDraft.source_asset_id} disabled={Boolean(masterTask)} onChange={event => changeMaster('source_asset_id', event.target.value)}>
+        <div><label htmlFor={`${prefix}-master-source`}>完整母版</label><select id={`${prefix}-master-source`} value={masterDraft.source_asset_id} disabled={Boolean(masterTask) || Boolean(masterPendingKey)} onChange={event => changeMaster('source_asset_id', event.target.value)}>
           <option value="">选择音频</option>{audioAssets.map(asset => <option key={asset.id} value={asset.id}>{asset.title}</option>)}</select></div>
-        <div><label htmlFor={`${prefix}-master-background`}>背景音（可选）</label><select id={`${prefix}-master-background`} value={masterDraft.background_asset_id || ''} disabled={Boolean(masterTask)} onChange={event => changeMaster('background_asset_id', event.target.value || undefined)}>
+        <div><label htmlFor={`${prefix}-master-background`}>背景音（可选）</label><select id={`${prefix}-master-background`} value={masterDraft.background_asset_id || ''} disabled={Boolean(masterTask) || Boolean(masterPendingKey)} onChange={event => changeMaster('background_asset_id', event.target.value || undefined)}>
           <option value="">不混入背景音</option>{audioAssets.map(asset => <option key={asset.id} value={asset.id}>{asset.title}</option>)}</select></div>
-        <label><input type="checkbox" checked={masterDraft.pad_silence} disabled={Boolean(masterTask)} onChange={event => changeMaster('pad_silence', event.target.checked)} />明确允许源或背景尾部补静音</label>
-        <label>目标响度（LUFS-I）<input type="number" min={-24} max={-8} step="any" disabled={Boolean(masterTask)} value={masterDraft.target_lufs} onChange={event => changeMaster('target_lufs', Number(event.target.value))} /></label>
-        <label>真峰值（dBTP）<input type="number" min={-3} max={0} step="any" disabled={Boolean(masterTask)} value={masterDraft.true_peak_dbtp} onChange={event => changeMaster('true_peak_dbtp', Number(event.target.value))} /></label>
-        <label>裁切起点（秒）<input type="number" min={0} max={3600} step="any" disabled={Boolean(masterTask)} value={masterDraft.trim_start_seconds} onChange={event => changeMaster('trim_start_seconds', Number(event.target.value))} /></label>
-        <label>裁切时长（秒）<input type="number" min={0.001} max={1800} step="any" placeholder="留空：到结尾" disabled={Boolean(masterTask)} value={masterDraft.trim_duration_seconds ?? ''} onChange={event => changeMaster('trim_duration_seconds', event.target.value === '' ? null : Number(event.target.value))} /></label>
+        <label><input type="checkbox" checked={masterDraft.pad_silence} disabled={Boolean(masterTask) || Boolean(masterPendingKey)} onChange={event => changeMaster('pad_silence', event.target.checked)} />明确允许源或背景尾部补静音</label>
+        <label>目标响度（LUFS-I）<input type="number" min={-24} max={-8} step="any" disabled={Boolean(masterTask) || Boolean(masterPendingKey)} value={masterDraft.target_lufs} onChange={event => changeMaster('target_lufs', Number(event.target.value))} /></label>
+        <label>真峰值（dBTP）<input type="number" min={-3} max={0} step="any" disabled={Boolean(masterTask) || Boolean(masterPendingKey)} value={masterDraft.true_peak_dbtp} onChange={event => changeMaster('true_peak_dbtp', Number(event.target.value))} /></label>
+        <label>裁切起点（秒）<input type="number" min={0} max={3600} step="any" disabled={Boolean(masterTask) || Boolean(masterPendingKey)} value={masterDraft.trim_start_seconds} onChange={event => changeMaster('trim_start_seconds', Number(event.target.value))} /></label>
+        <label>裁切时长（秒）<input type="number" min={0.001} max={1800} step="any" placeholder="留空：到结尾" disabled={Boolean(masterTask) || Boolean(masterPendingKey)} value={masterDraft.trim_duration_seconds ?? ''} onChange={event => changeMaster('trim_duration_seconds', event.target.value === '' ? null : Number(event.target.value))} /></label>
+        <label><input type="checkbox" checked={Boolean(masterDraft.ducking)} disabled={Boolean(masterTask) || Boolean(masterPendingKey)} onChange={event => changeMaster('ducking', event.target.checked ? { threshold_db: -24, ratio: 4, attack_seconds: .01, release_seconds: .2 } : undefined)} />背景 ducking（带 attack/release 包络）</label>
+        {masterDraft.ducking && <>
+          <label>阈值（dB）<input type="number" min={-60} max={0} step="any" disabled={Boolean(masterTask) || Boolean(masterPendingKey)} value={masterDraft.ducking.threshold_db} onChange={event => changeMaster('ducking', { ...masterDraft.ducking!, threshold_db: Number(event.target.value) })} /></label>
+          <label>压缩比<input type="number" min={1} max={20} step="any" disabled={Boolean(masterTask) || Boolean(masterPendingKey)} value={masterDraft.ducking.ratio} onChange={event => changeMaster('ducking', { ...masterDraft.ducking!, ratio: Number(event.target.value) })} /></label>
+          <label>attack（秒）<input type="number" min={.001} max={1} step="any" disabled={Boolean(masterTask) || Boolean(masterPendingKey)} value={masterDraft.ducking.attack_seconds} onChange={event => changeMaster('ducking', { ...masterDraft.ducking!, attack_seconds: Number(event.target.value) })} /></label>
+          <label>release（秒）<input type="number" min={.01} max={2} step="any" disabled={Boolean(masterTask) || Boolean(masterPendingKey)} value={masterDraft.ducking.release_seconds} onChange={event => changeMaster('ducking', { ...masterDraft.ducking!, release_seconds: Number(event.target.value) })} /></label>
+        </>}
       </div>
       {masterMessage && <p role="status" aria-live="polite">{masterMessage}</p>}{masterTask?.error && <p role="alert">{masterTask.error}</p>}
       {masterResult?.output && <div><audio controls preload="metadata" aria-label="全片母版后期候选试听" src={mediaUrl(masterResult.output)} /><small>实测 {masterResult.duration_seconds} 秒 · {masterResult.report?.loudness_lufs_i} LUFS-I · {masterResult.report?.output_true_peak_dbtp} dBTP · LRA {masterResult.report?.loudness_lra} · 削波样本 {masterResult.report?.clipped_samples}</small></div>}
-      <div className="director-form-actions"><button className="button primary compact" type="button" disabled={masterBusy || Boolean(masterTask) || !validMaster(masterDraft)} onClick={() => void submitMaster()}>提交全片后期</button>
+      <div className="director-form-actions"><button className="button primary compact" type="button" disabled={masterBusy || Boolean(masterTask) || Boolean(masterPendingKey) || !validMaster(masterDraft)} onClick={() => void submitMaster()}>提交全片后期</button>
         {masterResult?.candidate_asset_id && <button className="button secondary compact" type="button" disabled={masterBusy} onClick={() => void chooseMaster()}>选择为完整母版</button>}
+        {masterTask && terminal.includes(masterTask.status) && <button className="button secondary compact" type="button" disabled={masterBusy} onClick={() => { if (persistMaster({ ...masterCurrent.current, pending: undefined })) setMasterTask(null); }}>继续编辑</button>}
         {masterTask && <span role="status" aria-live="polite">{labels[masterTask.status] || '处理中'}</span>}</div>
     </section>
     <p>最长120秒；PCM16 WAV或MP3，MP3转为48kHz双声道。增益和淡变产生新候选，不自动替换母版或采用。短源默认拒绝，可明确补静音；长源用取片时长裁切。完整母版应包含需要保留的对白和音效。</p>
