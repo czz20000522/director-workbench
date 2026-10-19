@@ -3222,7 +3222,10 @@ def assembly_continuity_view(manifest: dict[str, Any], document: dict[str, Any])
 
 
 def assembly_edit_view(manifest: dict[str, Any], document: dict[str, Any], *, include_continuity: bool = True,
-                       sound_override: dict[str, Any] | None = None) -> dict[str, Any]:
+                       sound_override: dict[str, Any] | None = None,
+                       readiness_complete: bool | None = None) -> dict[str, Any]:
+    if readiness_complete is None:
+        readiness_complete = include_continuity
     video_blockers = assembly_video_blockers(document)
     missing_videos = [item['dependency'] for item in video_blockers if item['code'] == 'video_required']
     join_rows = assembly_edit.joins(document, missing_videos=[item['dependency'] for item in video_blockers])
@@ -3252,6 +3255,7 @@ def assembly_edit_view(manifest: dict[str, Any], document: dict[str, Any], *, in
             'missing_videos': missing_videos, 'blockers': video_blockers,
             'sound': sound, 'warnings': warnings, 'target_duration_seconds': round(sum(float(item.get('duration_seconds') or 0)
                        for item in document.get('segments', []) if isinstance(item, dict)), 3),
+            'readiness_complete': readiness_complete,
             'timing_summary': assembly_trim_summary(manifest, document),
             'sound_processing': {'task_path': f"/api/projects/{manifest['id']}/audio-edit-tasks",
                                  'max_seconds': 120, 'gain_range': [0, 8], 'short_audio': 'reject_or_explicit_pad_in_cpu_task',
@@ -3260,7 +3264,7 @@ def assembly_edit_view(manifest: dict[str, Any], document: dict[str, Any], *, in
             'audio_assets': [{'id': item['id'], 'title': item.get('title', item['id'])}
                              for item in manifest.get('assets', []) if isinstance(item, dict)
                              and item.get('kind') == 'audio' and item.get('id')],
-            'ready': bool(document.get('segments')) and not video_blockers and
+            'ready': readiness_complete and bool(document.get('segments')) and not video_blockers and
                      not assembly_edit.blocking_joins(document) and not sound.get('error')}
 
 
