@@ -298,7 +298,7 @@ def audio_edit_owner_alive(payload: dict[str, Any]) -> bool:
 
 
 def audio_master_owner_alive(payload: dict[str, Any]) -> bool:
-    return audio_edit_owner_alive(payload)
+    return backend.audio_edit_owner_alive(payload)
 
 
 def audio_edit_source(manifest: dict[str, Any], asset_id: str) -> tuple[Path, dict[str, Any]]:
@@ -483,7 +483,7 @@ def run_audio_master_task(task_id: str, payload: dict[str, Any]) -> None:
         payload = {**payload, 'execution_finished_at': time.time()}
         backend.set_task(task_id, payload=json.dumps(payload, ensure_ascii=False))
     try:
-        complete_audio_master_task(backend.get_task(task_id), receipt)
+        backend.complete_audio_master_task(backend.get_task(task_id), receipt)
     except Exception as exc:
         backend.set_task(task_id, status='needs_reconcile', error=f'CPU全片音频后期候选登记待核对: {exc}')
 
