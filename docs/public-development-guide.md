@@ -129,7 +129,7 @@ CI 的公开边界 job 仍使用自己的标记过滤生成不依赖宿主工具
 
 ### 公开仓库的 CI 门禁
 
-[public-source.yml](../.github/workflows/public-source.yml) 在 PR 与 `main` 上执行四个 job：`public-source` 检查公开源码白名单、敏感模式、Python 语法和文档相对链接；`python-lint` 运行 `ruff` 的非侵入规则（语法错误、未定义名称、断言误用）；`frontend-build` 执行 `npm ci && npm run build`；`core-tests` 在 Windows runner 上运行 fast core。
+[public-source.yml](../.github/workflows/public-source.yml) 在 PR 与 `main` 上执行四个 job：`public-source` 检查公开源码白名单、敏感模式、Python 语法、文档相对链接，并校验测试影响映射的目标仍存在（测试删除/重命名后映射过期会失败）；`python-lint` 运行 `ruff` 的非侵入规则（语法错误、未定义名称、断言误用）；`frontend-build` 执行 `npm ci && npm run build`；`core-tests` 在 Windows runner 上运行 fast core。
 
 CI 的 `core-tests` 使用 `pytest -m "not host_tool and not slow and not windows"`，覆盖不依赖本机 FFmpeg、ASR 解释器、ComfyUI 安装或 PowerShell/junction 的用例。[pyproject.toml](../pyproject.toml) 定义 `slow`、`host_tool`、`windows` 三个标记；本地 `run_tests.ps1 -Suite core` 仍运行完整核心组，标记只用于 CI 筛选，不改变断言或跳过结果。
 
