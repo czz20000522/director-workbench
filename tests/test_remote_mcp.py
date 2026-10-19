@@ -59,7 +59,7 @@ def access(tmp_path_factory, monkeypatch, request):
     a,b,ownership,root=private_workbench.__wrapped__(tmp_path_factory.mktemp('access'),monkeypatch)
     if 'DIRECTOR_PRIVATE_ORIGINS' in environ:
         backend.app.user_middleware[0].kwargs['origins'] = tuple(environ['DIRECTOR_PRIVATE_ORIGINS'].split(','))
-    seed_test_models(backend.ROOT)
+    seed_test_models(backend.SHARED_ROOT)
     monkeypatch.setattr(backend,'queue_task',lambda *args:None)
     monkeypatch.setattr(backend,'require_submission_capacity',lambda:{})
     def fake(path,payload=None,**kwargs):
@@ -189,7 +189,7 @@ def test_remote_unknown_submission_recovers_receipt_and_expired_identity_stops(a
             response=await super().handle_async_request(request)
             if request.method=='POST' and request.url.path==f'/api/projects/{pid}/tasks':
                 await response.aread()
-                assert response.status_code==200
+                assert response.status_code==200, response.text
                 submissions.append(request)
                 raise httpx.ReadTimeout('fixture lost response after real save',request=request)
             return response

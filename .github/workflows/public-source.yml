@@ -63,9 +63,10 @@ jobs:
         run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Run the fast core layer
         env:
-          # The machine roots are overridden so a runner without a Comfy-Desktop install can
-          # still import the backend; tests that freeze the real host paths are marked windows.
-          DIRECTOR_DESKTOP_ROOT: ${{ runner.temp }}/Comfy-Desktop
+          # Both machine roots are overridden so a runner without ComfyUI or product data
+          # can still import the backend; tests that freeze real host paths stay windows-only.
+          DIRECTOR_COMFY_ROOT: ${{ runner.temp }}/Comfy-Desktop
+          DIRECTOR_DATA_ROOT: ${{ runner.temp }}/director-workbench-data
           PYTHONNOUSERSITE: "1"
           # Windows runners default to the legacy locale code page; the fixtures are UTF-8.
           PYTHONUTF8: "1"

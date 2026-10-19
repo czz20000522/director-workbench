@@ -29,7 +29,7 @@ def material_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Te
         "assets": [],
         "pipeline": [],
     }
-    monkeypatch.setattr(backend, "ROOT", tmp_path)
+    monkeypatch.setattr(backend, "ROOT", tmp_path / "data-root")
     monkeypatch.setattr(backend, "PROJECT", project_root)
     monkeypatch.setattr(backend, "DIRECTOR_WORKSPACES_ROOT", project_root / "workspaces")
     monkeypatch.setattr(backend, "INPUT_ROOT", input_root)
@@ -122,7 +122,7 @@ def test_shared_input_registration_references_original_file(
 
     assert response.status_code == 200, response.text
     assert not (workspace / "assets" / "imported-windows").exists()
-    assert list(manifest["media"].values()) == ["ComfyUI-Shared/input/frame.png"]
+    assert list(manifest["media"].values()) == [(input_root / "frame.png").resolve().as_posix()]
 
 
 def test_non_media_file_can_download_but_cannot_register(

@@ -56,7 +56,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     catalog.mkdir(parents=True)
     (catalog / "catalog.json").write_text('{"projects": []}', encoding="utf-8")
     for name, value in {
-        "ROOT": tmp_path, "PROJECT": project_root, "PROJECTS_ROOT": catalog,
+        "ROOT": tmp_path / "data-root", "PROJECT": project_root, "PROJECTS_ROOT": catalog,
         "PROJECT_CATALOG_PATH": catalog / "catalog.json", "DIRECTOR_WORKSPACES_ROOT": project_root / "workspaces",
         "DB_PATH": tmp_path / "director.sqlite3", "INPUT_ROOT": tmp_path / "input",
         "OUTPUT_ROOT": tmp_path / "output", "RUNTIME": tmp_path / "runtime", "SNAPSHOT_ROOT": tmp_path / "snapshots",
@@ -141,12 +141,12 @@ def test_project_mutations_are_blocked_while_any_task_can_still_use_comfyui(
 
     assert client.post("/api/projects/select", json={"project_id": "project-b"}).status_code == 200
 
-    monkeypatch.setattr(backend, "ROOT", tmp_path)
+    monkeypatch.setattr(backend, "ROOT", tmp_path / "data-root")
     monkeypatch.setattr(backend, "PROJECTS_ROOT", tmp_path / "projects")
     monkeypatch.setattr(backend, "DIRECTOR_WORKSPACES_ROOT", tmp_path / "workspaces")
     backend.PROJECTS_ROOT.mkdir(parents=True, exist_ok=True)
-    source = tmp_path / "import-source"
-    source.mkdir()
+    source = tmp_path / "workspaces" / "import-source"
+    source.mkdir(parents=True)
     monkeypatch.setattr(backend, "scan_import_directory", lambda directory, project_id: ({"id": project_id, "title": "导入作品"}, {"counts": {}}))
     monkeypatch.setattr(backend, "persist_project_manifest", lambda manifest, make_default=True: None)
     assert client.post("/api/projects/import", json={"path": str(source)}).status_code == 200

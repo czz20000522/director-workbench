@@ -13,7 +13,6 @@ from pathlib import Path
 
 import paths
 
-ROOT = paths.DESKTOP_ROOT
 TTS_ROOT = paths.SHARED_ROOT / 'tools/index-tts'
 ADAPTER = Path(__file__).resolve().parents[1] / 'tools/generate_speech.py'
 MODEL_ROOT = paths.SHARED_ROOT / 'models/IndexTTS-2.5'
@@ -22,7 +21,7 @@ FLASH_ADAPTER = Path(__file__).resolve().parents[1] / 'tools/generate_auk_flash.
 
 
 def capability() -> dict:
-    models = ROOT / 'ComfyUI-Shared/models/AuK/ckpts'
+    models = paths.SHARED_ROOT / 'models/AuK/ckpts'
     required = {'声音执行器': FLASH_ADAPTER, 'AuK Python 环境': FLASH_ROOT / '.venv/Scripts/python.exe',
                 'AuK 程序': FLASH_ROOT / 'src/auk/infer/infer_auk.py'}
     for name in ('AuK-Flash/config.yaml', 'AuK-Flash/auk_flash.safetensors', 'AuK-Flash/vae.safetensors',

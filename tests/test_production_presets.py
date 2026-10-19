@@ -15,7 +15,7 @@ def preset_client(tmp_path, monkeypatch):
     projects = project / 'projects'
     projects.mkdir(parents=True)
     (projects / 'catalog.json').write_text('{"projects": []}', encoding='utf-8')
-    for name, value in {'ROOT': tmp_path, 'PROJECT': project, 'PROJECTS_ROOT': projects,
+    for name, value in {'ROOT': tmp_path / 'data-root', 'PROJECT': project, 'PROJECTS_ROOT': projects,
                         'PROJECT_CATALOG_PATH': projects / 'catalog.json', 'DIRECTOR_WORKSPACES_ROOT': project / 'workspaces',
                         'DB_PATH': tmp_path / 'state.sqlite3', 'SNAPSHOT_ROOT': project / 'snapshots', 'INPUT_ROOT': tmp_path / 'input'}.items():
         monkeypatch.setattr(backend, name, value)

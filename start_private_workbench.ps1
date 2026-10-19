@@ -3,7 +3,7 @@ param(
     [string]$HostAddress = '0.0.0.0',
     [string]$AdminUsers = 'user001',
     [string]$Origins = '',
-    [string]$AccountsFile = 'D:\Comfy-Desktop\ComfyUI-Workspace\runtime\director-private\accounts-hashed.json',
+    [string]$AccountsFile = 'D:\software\JetBrains\python_workspace\director-workbench-data\runtime\director-private\accounts-hashed.json',
     [string]$WorkspaceRoot = '',
     [switch]$PrintOnly
 )
