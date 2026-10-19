@@ -1,8 +1,9 @@
-name: Public source boundaries
+name: Manual release audit
+# Personal-project default: GitHub is remote backup, PR and issue history, not a
+# required CI gate. Local core/browser/GPU/host checks are authoritative; this
+# workflow is kept for an explicit release or public-source audit only.
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:

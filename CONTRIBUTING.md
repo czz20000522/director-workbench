@@ -2,6 +2,15 @@
 
 先阅读 [AGENTS.md](AGENTS.md)与 [GitHub 协作约定](docs/github-collaboration.md)。环境、架构和测试入口见[公开开发指南](docs/public-development-guide.md)。
 
+## 本地验证优先
+
+这是个人维护项目，默认不把云端 CI 当作每次提交的门。GitHub 用于远程备份、Issue/PR 和必要的发布审计；本机具备浏览器、宿主工具和 GPU，是权威验证环境。
+
+- 日常修改：`run_tests.ps1 -Suite fast` 加受影响测试；只改 A 功能时不跑 B 的全套。
+- 推送/合并前：受影响测试、`core`、`browser`、`npm run build`、ruff、公开源与文档检查，按改动风险选择；合并前至少跑一次全量 core/browser。
+- 云端 workflow 只保留 `workflow_dispatch` 手动发布审计，不再在每次 push/PR 自动运行。
+- 公开源白名单和凭据检查仍必须在本地或手动发布审计中通过，不能因为取消自动 CI 而跳过。
+
 1. 搜索或提交脱敏 Issue，记录复现步骤、预期行为和可检查的验收条件。
 2. 使用 `codex/issue-<编号>-<说明>` 分支完成最小修复，检查实际 diff，运行与改动相关的测试。
 3. 创建关联 PR，说明原因、修改、实际验证及限制；全部验收满足才用 `Fixes #编号`，部分交付用 `Refs #编号`。
