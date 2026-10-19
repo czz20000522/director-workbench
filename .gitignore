@@ -398,3 +398,7 @@
 !/backend/routers/media_access.py
 !/tests/test_mcp_media_delivery.py
 !/tests/test_mcp_contract.py
+
+# UI flow prototype (review-only; remove or merge after approval).
+!/src/StudioFlowPrototype.tsx
+!/src/studio-flow-prototype.css
