@@ -59,7 +59,7 @@ function TopBar({ username, onHome, onLogout }: { username: string; onHome: () =
         <span className="sf-brand-mark"><Clapperboard size={18} /></span><span><strong>导演工作台</strong></span>
       </button>
       <div className="sf-topbar-center"><span className="sf-dot" /> 本机工作区 <span className="sf-sep">/</span> 新界面预览</div>
-      <div className="sf-topbar-actions"><span className="sf-account">{(username || 'U').slice(0, 1).toUpperCase()}</span><button className="sf-ghost" onClick={onLogout}>退出</button></div>
+      <div className="sf-topbar-actions"><button className="sf-ghost" onClick={() => { window.location.href = '/'; }}>完整工作台</button><span className="sf-account">{(username || 'U').slice(0, 1).toUpperCase()}</span><button className="sf-ghost" onClick={onLogout}>退出</button></div>
     </header>
   );
 }
@@ -185,16 +185,16 @@ function StepThree({ segments, planRevision, prompt, setPrompt, duration, setDur
 
 function mediaFile(path: string) { return `/media-file?path=${encodeURIComponent(path)}`; }
 
-function StepFour({ segments, shotId, setShotId, versions, busy, error, onLoad, onAdopt, onOld, onNext }: {
+function StepFour({ segments, shotId, setShotId, versions, busy, error, onLoad, onAdopt, onOld, onNext, onGenerate, generating, task }: {
   segments: Segment[]; shotId: string; setShotId: (id: string) => void; versions: Version[]; busy: boolean; error: string;
-  onLoad: (id: string) => void; onAdopt: (version: Version) => void; onOld: () => void; onNext: () => void;
+  onLoad: (id: string) => void; onAdopt: (version: Version) => void; onOld: () => void; onNext: () => void; onGenerate: (segment: Segment) => void; generating: boolean; task: { id?: string; status?: string; error?: string } | null;
 }) {
   const current = segments.find(segment => segment.id === shotId) || segments[0];
   return <div className="sf-step-panel"><p className="sf-step-label">④ 候选</p><h1>比较候选</h1><p className="sf-lede">选择一段查看已有生成结果。工作台不会自动选“最佳”，采用只影响这一段。</p>
     <div className="sf-shot-tabs">{segments.map(segment => <button key={segment.id} className={segment.id === (current?.id || '') ? 'selected' : ''} onClick={() => { setShotId(segment.id); onLoad(segment.id); }}>{segment.id}<span>{segment.video?.path ? '有候选' : '待生成'}</span></button>)}</div>
     {versions.length ? <div className="sf-version-grid">{versions.map(version => <article className="sf-version" key={version.task_id}><video src={mediaFile(version.video_path)} controls preload="metadata" /><div><strong>{version.is_current ? '当前版本' : '历史候选'}</strong><small>{version.generated_at || version.task_id.slice(0, 8)}</small><button className="sf-secondary" disabled={busy} onClick={() => onAdopt(version)}>采用这个候选</button></div></article>)}</div>
-      : <div className="sf-next-card"><Film size={22} /><div><strong>这一段还没有生成候选</strong><small>生成和重做仍使用现有工作台；先生成，再回来做逐段采用。</small></div><button className="sf-primary" onClick={onOld}>去现有工作台生成 <ArrowRight size={16} /></button></div>}
-    {error && <p className="sf-error" role="alert">{error}</p>}
+      : <div className="sf-next-card"><Film size={22} /><div><strong>这一段还没有生成候选</strong><small>生成和重做仍使用现有工作台；先生成，再回来做逐段采用。</small></div><button className="sf-primary" disabled={generating} onClick={() => current && onGenerate(current)}>{generating ? '生成中…' : '生成当前段候选'} <ArrowRight size={16} /></button><button className="sf-secondary" onClick={onOld}>现有工作台</button></div>}
+    {error && <p className="sf-error" role="alert">{error}</p>}{task && <p className="sf-task-note">生成任务：{task.status || '已提交…'}{task.error ? ` · ${task.error}` : ''}</p>}
     <div className="sf-step-actions"><span className="sf-fine">采用是显式操作；不会自动采用其他镜头。</span><button className="sf-primary" disabled={!segments.every(segment => segment.video?.path)} onClick={onNext}>下一步：装配 <ArrowRight size={16} /></button></div>
   </div>;
 }
@@ -242,7 +242,9 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [quickTool, setQuickTool] = useState<QuickTool>('text-video');
+  const [stageId, setStageId] = useState('');
   const [versions, setVersions] = useState<Version[]>([]);
+  const [generationTask, setGenerationTask] = useState<{ id?: string; status?: string; error?: string } | null>(null);
   const [versionShot, setVersionShot] = useState('');
   const [reviews, setReviews] = useState<ReviewState>({});
   const [assembly, setAssembly] = useState<AssemblyView | null>(null);
@@ -292,7 +294,7 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
     try {
       const projectPlan = await api<Plan>(`/api/projects/${id}/plan`);
       const detail = await api<{ production_preset?: { id?: string }; pipeline?: { id: string; execution?: { references?: string[] } }[] }>(`/api/projects/${id}`);
-      setProjectId(id); setPlan(projectPlan); setPresetId(detail.production_preset?.id || ''); setWorkflow(detail.pipeline?.[0]?.execution?.references?.[0] || '');
+      setProjectId(id); setPlan(projectPlan); setPresetId(detail.production_preset?.id || ''); setWorkflow(detail.pipeline?.[0]?.execution?.references?.[0] || ''); setStageId(detail.pipeline?.[0]?.id || '');
       setStep(projectPlan.assembly?.output ? 6 : projectPlan.segments.length ? 3 : 1); setScreen('wizard');
     } catch (reason) { setError(reason instanceof Error ? reason.message : '无法读取作品计划'); }
     finally { setBusy(false); }
@@ -316,7 +318,7 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
     try {
       const installed = await api<{ project: { pipeline?: { id: string; execution?: { references?: string[] } }[] } }>(`/api/projects/${projectId}/production-presets/${encodeURIComponent(presetId)}`, { method: 'POST' });
       const stage = installed.project.pipeline?.[0];
-      setWorkflow(stage?.execution?.references?.[0] || '');
+      setWorkflow(stage?.execution?.references?.[0] || ''); setStageId(stage?.id || '');
       setStep(3);
       setPlan(await api<Plan>(`/api/projects/${projectId}/plan`));
     } catch (reason) { setError(reason instanceof Error ? reason.message : '安装方案失败'); }
@@ -422,6 +424,27 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
     finally { setBusy(false); }
   };
 
+  const generateCandidate = async (segment: Segment) => {
+    if (!projectId || !stageId) { setError('当前作品没有已安装的制作方案，请先在现有工作台安装方案。'); return; }
+    setBusy(true); setError(''); setGenerationTask({ status: '预检中…' });
+    try {
+      const values = { prompt: segment.prompt || '', seed: 42, duration: segment.duration_seconds || shotDuration, 'turbo-sampling': 'enable' };
+      const validation = await api<{ valid: boolean; values?: Record<string, unknown>; revision?: number; blockers?: { message?: string }[] }>(`/api/projects/${projectId}/pipeline/${encodeURIComponent(stageId)}/validate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ asset_id: segment.id, values }) });
+      if (!validation.valid) throw new Error(validation.blockers?.map(item => item.message).filter(Boolean).join('；') || '预检未通过');
+      const task = await api<{ id: string; status?: string }>(`/api/projects/${projectId}/tasks`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ idempotency_key: crypto.randomUUID(), asset_id: segment.id, expected_revision: validation.revision, pipeline_stage_id: stageId, pipeline_values: validation.values || values }) });
+      setGenerationTask(task);
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const current = await api<{ id: string; status: string; error?: string }>(`/api/projects/${projectId}/tasks/${encodeURIComponent(task.id)}`);
+        setGenerationTask(current);
+        if (['succeeded', 'failed', 'stopped', 'needs_reconcile'].includes(current.status)) break;
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      }
+      await loadVersions(segment.id);
+      setPlan(await api<Plan>(`/api/projects/${projectId}/plan`));
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '生成失败'); }
+    finally { setBusy(false); }
+  };
+
   const startFull = () => { setTitle(''); setSeries('新作品'); setDuration(15); setPlan(null); setProjectId(''); setPresetId(''); setError(''); setStep(1); setScreen('wizard'); };
   const newProject = () => setScreen('intent');
   const quick = (tool: QuickTool) => { setQuickTool(tool); setScreen('quick'); };
@@ -436,11 +459,12 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
       {step === 1 && <StepOne title={title} setTitle={setTitle} series={series} setSeries={setSeries} duration={duration} setDuration={setDuration} busy={busy} error={error} onNext={() => void createProject()} />}
       {step === 2 && <StepTwo presets={presets} selected={presetId} setSelected={setPresetId} busy={busy} error={error} onNext={() => void installPreset()} />}
       {step === 3 && <StepThree segments={plan?.segments || []} planRevision={plan?.revision ?? 0} prompt={prompt} setPrompt={setPrompt} duration={shotDuration} setDuration={setShotDuration} onAdd={() => void addShot()} busy={busy} error={error} onNext={() => setStep(4)} />}
-      {step === 4 && <StepFour segments={plan?.segments || []} shotId={versionShot} setShotId={setVersionShot} versions={versions} busy={busy} error={error} onLoad={id => void loadVersions(id)} onAdopt={version => void adoptVersion(version)} onOld={() => void openOldWorkspace()} onNext={() => setStep(5)} />}
+      {step === 4 && <StepFour segments={plan?.segments || []} shotId={versionShot} setShotId={setVersionShot} versions={versions} busy={busy} error={error} onLoad={id => void loadVersions(id)} onAdopt={version => void adoptVersion(version)} onOld={() => void openOldWorkspace()} onNext={() => setStep(5)} onGenerate={segment => void generateCandidate(segment)} generating={busy} task={generationTask} />}
       {step === 5 && <StepFive assembly={assembly} task={assemblyTask} busy={busy} error={error} onSound={() => void setNativeSound()} onJoin={join => void approveJoin(join)} onSubmit={() => void submitAssembly()} onReload={() => void loadAssembly()} onOld={() => void openOldWorkspace()} />}
       {step === 6 && <StepSix output={assemblyOutput} assembly={assembly} busy={busy} error={error} onFinal={() => void approveFinal()} onOld={() => void openOldWorkspace()} />}
       {step > 1 && step < 4 && <div className="sf-bottom-bar"><button className="sf-secondary" onClick={() => setStep((step - 1) as Step)}><ChevronLeft size={15} /> 上一步</button><span>每一步都可以保存后离开</span></div>}
     </Wizard>}
   </div>;
 }
+
 
