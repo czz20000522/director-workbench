@@ -53,6 +53,8 @@
 
 4. 图片/声音通过 `POST /api/projects/{project_id}/upload` 的 multipart `files` 上传，使用登记回执中实际素材引用。素材存在于库中不等于已绑定为首帧；角色参考、首尾帧、表演声音和完整母版应按对应字段分别指定。远程客户端不能把自身磁盘路径传给服务器路径导入接口。
 
+   参考素材同样先上传，再用 `POST /api/projects/{project_id}/reverse-analyses/from-material`（JSON `{"asset_id":"实际素材ID"}`）登记为参考拆解；同一素材已有拆解时返回原拆解并带 `created:false`。MCP 还提供 `import_reference_content`：直接提交参考素材 base64，单文件上限 16 MiB，超限返回 `reference_too_large` 并提示使用该 multipart 入口。两条入口都只登记媒体事实，不自动拆分、抽帧、运行 ASR 或转分镜。远程 MCP 不开放服务器路径导入。
+
    上传有服务端上限：单文件默认 2 GiB、单次默认 200 个文件、单请求默认 4 GiB（部署方可用 `DIRECTOR_MAX_UPLOAD_BYTES`、`DIRECTOR_MAX_UPLOAD_FILES`、`DIRECTOR_MAX_UPLOAD_REQUEST_BYTES` 收紧或调整）。超限返回 `413`，不登记素材；客户端应据此拆分批次或压缩素材，而不是重试同一请求。请求体上限会在 multipart 解析前检查，单文件写入使用分块和临时文件，失败时清理半成品。
 
 5. 无生成预检：`POST /api/projects/{project_id}/pipeline/{stage_id}/validate`。`stage_id` 必须来自该作品已安装的 pipeline，`auto` 已移除并返回 `422 explicit_stage_required`。
@@ -101,7 +103,8 @@
 | 图片、声音、音频编辑、全片母版后期、媒体处理任务 | `/api/projects/{project_id}/keyframe-tasks`、`speech-tasks`、`audio-edit-tasks`、`audio-master-tasks`、`media-tasks` |
 | 批次任务 | `/api/projects/{project_id}/batches` |
 | 审核与显式采用 | `/api/projects/{project_id}/reviews`、`adoptions` |
-| 参考素材登记、显式范围/帧/音频观察、ASR、模型分析与校订 | `/api/projects/{project_id}/reverse-analyses` |
+| 参考素材登记、显式范围/帧/音频观察、ASR、模型分析与校订 | `/api/projects/{project_id}/reverse-analyses`；从已上传素材登记用 `/reverse-analyses/from-material` |
+| 受控媒体列表、短期 URL 与文件读取 | `/api/projects/{project_id}/media`、`/media-refs`、`/media/{token}` |
 
 参考素材上传只登记原始文件和媒体探测事实，响应中的 `timeline`、`observations` 和任务表都保持为空；不会自动拆分、抽帧或运行 ASR。需要观察时，调用方必须明确调用：
 
@@ -109,6 +112,22 @@
 - `POST .../observations/sample`：提交明确的 `times_seconds`，结果标为“等距采样/待确认范围”，不能当作镜头切点；
 - `POST .../observations/audio`：提交明确音频范围；
 - `POST .../observations/asr`：显式运行 ASR，结果标为 `model_inference` / `candidate_needs_review`。
+
+远程 MCP 的观察回执保留观察/分析/工件 ID、`provenance`、`user_status` 和待校订状态，但把服务器路径换成受控媒体引用。HTTP 业务响应仍保留本机 UI 所需的登记路径；远程响应不出现服务器路径。
+
+## 受控媒体读取与交付
+
+作品内媒体通过稳定、不含路径的 `media_ref` 和短期的受 Bearer 鉴权 URL 读取：
+
+| 入口 | 作用 |
+| --- | --- |
+| `GET /api/projects/{project_id}/media` | 分页列出素材、分镜候选、成片、审片、参考观察和任务产物；返回稳定 `media_ref`、文件事实和短期 `url`，不返回服务器路径 |
+| `POST /api/projects/{project_id}/media-refs` | 提交 `{"media_refs":[...]}`（1–100 个）重新签发短期 `url`；可按项返回不可用原因 |
+| `GET /api/projects/{project_id}/media/{token}` | 按签名 URL 返回本作品媒体文件；token 绑定作品和稳定引用，默认 15 分钟过期 |
+
+`media_ref` 形如 `asset:<素材ID>:A`、`segment:<分镜ID>:video`、`assembly`、`task:<任务ID>:video:0`、`reference:<拆解ID>:<观察ID>:frame_0`。URL 仍需本人 `Authorization: Bearer` 会话：未认证 401，其他账号的作品 404/403，过期 token 410，伪造 token 404。客户端不要把 `media_ref` 当成本地路径或直接拼接文件系统路径；URL 过期后用 `media-refs` 或 MCP `get_media_url` 重新签发。
+
+MCP 对应工具为 `list_media`、`get_media_url`、`download_media`。`download_media` 仅对小文件（默认 ≤1 MiB，可调到 4 MiB）返回 base64 内容；大文件只返回 URL，不把大文件放进 JSON。任务/候选回执保留任务、素材和版本 ID，并以受控 `media` 引用替代路径。`list_shot_versions` 的 `candidate_ref` 是稳定媒体引用，可传给 `approve_candidate`；采用门禁仍核对真实文件、任务身份和计划版本，不因引用形式改变而放宽或自动采用。
 
 `POST .../semantic-jobs` 也要求先存在至少一帧显式观察。模型输出只能写入 `observations`／`model_candidate`（展示层称“模型候选”“制作草案种子候选”），保留 `provenance` 和 `user_status`，不会自动覆盖人工校订或制作字段。UI/文档不得把候选描述成平台已经理解、判断或完成了创作；是否采用由用户或 Agent 显式校订后再决定。
 
@@ -118,14 +137,15 @@
 
 ## MCP 和验证边界
 
-远程 MCP 使用同一私人 URL 的 `/mcp/`，要求可配置 Bearer 的 Streamable HTTP 客户端。公网入口由 HTTPS 反向代理转发到本机 `/mcp/`，未认证请求返回 401；远程端固定开放一组经过业务路由授权的安全工具（当前 50 个），按能力覆盖：
+远程 MCP 使用同一私人 URL 的 `/mcp/`，要求可配置 Bearer 的 Streamable HTTP 客户端。公网入口由 HTTPS 反向代理转发到本机 `/mcp/`，未认证请求返回 401；远程端固定开放一组经过业务路由授权的安全工具（当前 59 个），按能力覆盖：
 
 | 类别 | 远程能力 |
 | --- | --- |
 | 作品与计划 | 作品/剧本/创作草稿读取与保存、分镜新增/修改/整理、素材上传与复用、审核记录、版本和预检读取 |
-| 参考与素材 | 参考拆解列表/详情、分析任务回执、时间线/分类/产物校订、转为分镜草案 |
+| 参考与素材 | 参考拆解列表/详情、从已上传素材或 base64 内容登记参考、显式范围/帧/音频观察、ASR、分析任务回执、时间线/分类/产物校订、转为分镜草案 |
 | 任务与制作 | 队列/指南/制作方案读取，单段和批次提交，任务读取、请求停止、回执和待核对状态 |
 | 关键帧、声音与媒体 | 关键帧/语音能力检查和候选提交，音频编辑、静音、视频技术检查、转写和无声审片候选 |
+| 受控媒体 | 媒体列表、短期 URL 重新签发、小文件内联读取/大文件 URL 交付；任务与候选回执以受控引用替代服务器路径 |
 | 装配 | 装配编辑与预检读取、接点/音轨记录、装配提交 |
 
 这些工具仍通过现有 Bearer 认证和 HTTP 业务路由执行；远程端不提供账户或管理操作、删除/清理、任意服务器路径导入或导出、脚本执行、全局设置修改、历史版本恢复、任务恢复/强制收尾等能力。完整适配工具可通过本机 stdio 使用，其他业务使用认证 HTTP。没有 OAuth 登录发现；只能 OAuth 且不能配置现有 Bearer 的宿主尚未支持。
@@ -146,7 +166,7 @@ MCP 默认保留官方 SDK 的 loopback Host/Origin 限制和 DNS rebinding 防�
 
 ## 审核可写值与诊断结果
 
-HTTP `/openapi.json` 为阶段和状态的参数来源：审核阶段为 `sample/finish/final`，审核状态为 `pending_review/approved/changes_requested/stale`；设定、checkpoint 与 artifact 另允许 `draft`。MCP `record_review` 的手动写入子集为 `pending_review/changes_requested`，正式采用通过 `adopt_candidate`，不要把两个入口的权限和参数混用。非法 HTTP 值返回 422，不保存记录。
+HTTP `/openapi.json` 为阶段和状态的参数来源：审核阶段为 `sample/finish/final`，审核状态为 `pending_review/approved/changes_requested/stale`；设定、checkpoint 与 artifact 另允许 `draft`。MCP `record_review` 的手动写入子集为 `pending_review/changes_requested`，正式采用通过 `approve_candidate`，不要把两个入口的权限和参数混用。非法 HTTP 值返回 422，不保存记录。
 
 `video_qc` 抽帧与联系表是任务诊断结果，保留在任务回执供查看；不登记为创作关键帧，不进入首尾帧或其他作品的可复用图片。旧诊断登记也过滤，旧分镜中的已保存诊断引用需明确改选创作素材，工作台不会擅自改写原计划。
 

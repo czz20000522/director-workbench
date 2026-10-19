@@ -305,6 +305,40 @@ def test_remote_mcp_large_media_returns_url_instead_of_base64(remote_access):
     asyncio.run(verify())
 
 
+def test_remote_project_read_never_exposes_registered_server_paths(remote_access):
+    a, _b = remote_access
+    project = create(a)
+    project_id = project['id']
+    upload_audio(a, project_id, b'manifest-media')
+
+    async def verify():
+        async with backend.app.router.lifespan_context(backend.app):
+            async with remote(a.headers['Authorization']) as client:
+                manifest = body(await client.call_tool('read_project', {'project_id': project_id}))
+                assert manifest['ok'], manifest
+                assert manifest['data']['workspace_root'] == '[server-path]'
+                assert manifest['data']['assets'][0]['sources']['A'] == '[server-path]'
+                assert_no_server_path(manifest)
+
+    asyncio.run(verify())
+
+
+def test_controlled_media_ref_is_an_explicit_candidate_reference(remote_access):
+    """Approval keeps its file/task/revision gate, but accepts a path-free stable ref."""
+    a, _b = remote_access
+    project = create(a)
+    project_id = project['id']
+    asset = upload_audio(a, project_id, b'candidate-media')
+    resolved = backend.adoption_candidate_path(f"asset:{asset['id']}:A", project_id)
+    assert resolved.is_file() and resolved.name.endswith('.wav')
+    with pytest.raises(Exception):
+        backend.adoption_candidate_path(f"asset:{asset['id']}:A", None)
+    with pytest.raises(Exception):
+        backend.adoption_candidate_path('asset:missing-asset:A', project_id)
+    with pytest.raises(Exception):
+        backend.adoption_candidate_path('task:missing-task:video:0', project_id)
+
+
 def test_mcp_reference_content_import_uses_content_not_server_path(monkeypatch):
     requests = []
 
