@@ -6,13 +6,20 @@ MCP 是工作台 HTTP 业务的薄适配。账号权限、版本检查、任务�
 
 普通设备使用维护者提供的私人工作台 URL。工作台没有匿名发现入口：先登录本人账号，再用会话访问 `/mcp/` 和 `/openapi.json`。
 
-1. 用 `POST /api/auth/login` 登录本人账号。登录响应 JSON 只含身份；从可信 HTTP 客户端的 Cookie 容器取得 `director_session`，保存在内存或安全会话容器。
-2. 用 `GET /api/auth/me` 核对身份，然后配置同一工作台 URL 下的 `/mcp/`，传输方式为 Streamable HTTP，请求头为 `Authorization: Bearer <本人的会话>`。不要把会话值写进共享配置、提示词或日志。
-3. 通过客户端工具发现读取实际 schema；先列本人作品，用实际返回的 ID 接续。会话过期、服务重启或切换账号后重新登录并更新连接身份。
+1. 非浏览器客户端优先用 `POST /api/auth/agent-token`（JSON 只含 `username`/`password`）取得 `token`、`username`、`administrator`、`expires_at`；该响应不设置 Cookie。浏览器会话也可用 `POST /api/auth/login`，再从可信 HTTP 客户端的 Cookie 容器取得 `director_session`。凭据只保存在内存或安全会话容器。
+2. 用 `GET /api/auth/me` 核对身份，然后配置同一工作台 URL 下的 `/mcp/`，传输方式为 Streamable HTTP，请求头为 `Authorization: Bearer <agent-token 或本人会话>`。不要把 token/会话值写进共享配置、提示词或日志；无效 Bearer 不会回退到 Cookie。
+3. 通过客户端工具发现读取实际 schema；先列本人作品，用实际返回的 ID 接续。会话过期、服务重启或切换账号后重新认证并更新连接身份。
 
 服务器使用已固定的 `mcp==2.2.0`，远程接口为 stateless、JSON 响应，生命周期由私人工作台进程管理。首批支持可配置 Bearer 的 Streamable HTTP 客户端；没有 OAuth 登录发现，只能 OAuth 且不能配置现有 Bearer 的宿主尚未支持。远程客户端无需 Windows Python 或 SSH 管理员凭据。服务仍使用维护者已配置的私人网络或隧道。
 
-**远程工具范围：**当前远程入口仅开放创作工具以及 `read_guide_settings`，由 [remote_mcp.py](../backend/remote_mcp.py) 的固定名单过滤。包括列/建作品、读计划、保存分镜、上传、预检、单段提交、原键回执、队列/任务/历史、停止。完整 stdio 工具集合不会自动全部暴露到远程入口；其他业务可通过认证 HTTP 使用。远程入口不提供页面呈现类工具。
+**远程工具范围：**当前远程入口由 [remote_mcp.py](../backend/remote_mcp.py) 的固定名单过滤，开放 **54** 个工具；本机 stdio 全量工具为 **61** 个。远程工具按能力覆盖：
+
+- 作品、剧本、计划、分镜、素材复用、审核、预检、队列/任务/历史、请求停止与原键回执；
+- 参考拆解的列表/详情、显式范围/采样/音频观察、ASR、模型观察与回执、校订和转制作草案；
+- 单段与批次生成、关键帧/语音/音频编辑/全片音频后期、视频技术检查、无声审片与媒体能力；
+- 装配编辑读取、接点审核、音轨选择、装配预检与提交。
+
+远程入口不暴露的 7 个工具是 `update_guide_settings`、`import_reference`、`restore_shot_version`、`repair_shot_recipe_identity`、`control_batch`、`resolve_missing_execution`、`resume_generation`；其中参考原始文件登记在远程通过 HTTP `POST /api/projects/{project_id}/reverse-analyses` multipart 完成，其余按需使用认证 HTTP 原业务入口。完整 stdio 工具集合不会自动全部暴露到远程入口。远程入口不提供页面呈现类工具，也不提供 MCP resources 或 prompts；Skill 需由客户端自行安装。
 
 `upload_material` 接受素材内容的 base64，解码后单文件至多 16 MiB；较大素材走原 HTTP multipart。远程素材应上传实际内容，不能把客户端路径传给服务器本地路径导入工具。上传不自动把图片绑定为首帧。
 
@@ -64,11 +71,12 @@ stdio 供服务器本机客户端或主动诊断使用，需要项目 Python 环
 - 业务结果为 `{ok: true, data: ...}` 或 `{ok: false, error: ...}`；MCP 传输成功不代表业务成功。HTTP 失败保留 `http_status` 和 `detail`，参数 schema 错误由 SDK 返回。
 - 写入使用工具要求的当前版本：计划、剧本、参考分析和审核各有 revision。409 后重读比较，不自动提高版本覆盖。MCP 与工作台随同发布，不探测/静默回退旧软件流程。
 - 提交生成前保存请求键。相同作品、键和参数返回原任务；不同参数冲突。写入超时可能标记 `outcome_unknown`，先查询原回执或保存内容，不盲目重发。创建、上传和新增分镜没有通用幂等保证，先读取核对。
-- `stop_requested` 不等于停止完成；`reconcile_generation` 核对原执行，不自动重试。`resume_generation` 可能返回原成功任务或创建新尝试，使用实际返回 ID 接续。`resolve_missing_execution` 要求先核实旧执行已结束、检查输出并提供说明，不能仅凭超时调用。
+- `stop_requested` 不等于停止完成；`reconcile_generation` 核对原执行，不自动重试。`resume_generation` 可能返回原成功任务或创建新尝试，使用实际返回 ID 接续。`resolve_missing_execution` 要求先核实旧执行已结束、检查输出并提供说明，不能仅凭超时调用。后两者不在远程工具名单中，远程客户端只能走认证 HTTP，并遵守相同门禁。
+- 候选、版本和成片媒体通过同源受控地址 `GET /media-file?path=<已登记引用>`（带本人 Bearer）读取；`/media/{asset_name}` 是旧别名。远程 MCP 不提供下载工具，任务成功或路径存在不等于已查看/已试听，技术检查也不等于采用或交付。
 - `create_project` 必须显式传 `creation_mode="advanced"`；`preflight` 必须传实际 `stage_id`；`create_shot`／`update_shot` 可传 `workflow` 或已安装的 `preset_id`。自动方案、`stage_id="auto"` 和 `generation.mode` 已移除；缺省或未安装时 HTTP 返回结构化阻塞和可选项，不写计划。`read_project` 的 `section:"state"` 返回同一准备度（无显式方案时为 `stage_required`/`recipe_unresolved` 并带显式方案事实），`section:"reusable-templates"` 返回 `available_templates` 事实清单，不含 `recommended` 或默认选择。
 - `submit_shot` 必须显式提供 `asset_id`；`submit_batch` 必须提供至少一个 `asset_ids`，不会隐式选择默认或全部分镜。分镜还必须绑定明确 workflow/制作方案，缺失时 HTTP 返回结构化 `workflow_required` blocker。`approve_candidate` 需要真实候选、当前计划/审核版本、非空说明和严格布尔 `confirm_adoption=true`。任务成功或技术检查不自动批准画面、音色、表演、采用或交付；明确采用也不表示用户亲自验收。
 
-可分发创作 Skill 位于 [director-workbench/SKILL.md](../.agents/skills/director-workbench/SKILL.md)。它描述业务使用方法，不含凭据或服务器部署地址，不自动安装到用户全局目录。
+可分发创作 Skill 位于 [director-workbench/SKILL.md](../.agents/skills/director-workbench/SKILL.md)。它描述外部 Agent 从认证到交付的执行阶段、必须询问用户的选择、显式方案/采用边界、错误/分页/长任务处理和最小验收清单，不含凭据或服务器部署地址。外部客户端从公开源代码快照或维护者提供的 Skill 目录取得该文件，按自己的项目级/用户级 Skill 机制安装；工作台不会自动写入任何客户端目录。当前 MCP 服务只注册 tools，没有注册 resources 或 prompts，因此不能通过 MCP 资源接口拉取 Skill；这是当前限制。Skill 版本与远程/全量工具数量会随合同更新，当前快照为远程 54 / stdio 61。
 
 ## 验证与反馈
 

@@ -12,6 +12,8 @@
 
 需要 Bearer 的非浏览器客户端可调用 `POST /api/auth/agent-token`（JSON 同样只含 `username`/`password`）：成功响应包含 `token`、`username`、`administrator`、`expires_at`，**不设置 Cookie**。把返回的 `token` 作为 `Authorization: Bearer <token>` 使用；Token 等同本人会话凭据，只放本地客户端配置/环境变量，不写仓库、日志或聊天。注销、过期或换账号后重新获取，该入口与登录共用账号、会话和限流。
 
+工作台若通过 HTTPS 和私人 CA 提供，客户端所在操作系统/运行时必须信任该 CA 链；CA 根证书由维护者通过私人渠道提供，只安装到该客户端的受信存储并限定用途。不要关闭证书校验、不要接受任意证书，也不要把 CA 私钥放进客户端；公开仓库不包含 CA、证书或私钥。使用 loopback HTTP 或已配置 SSH 隧道时不需要额外 CA 步骤，但 MCP 仍检查 Host/Origin。
+
 登录后用 `GET /api/auth/me` 核对当前身份，再 `GET /api/projects` 获取本人实际作品 ID。Cookie 写入请求须携带允许的同源 `Origin` 和当前身份 `X-Workspace-User`；Bearer 写入不需要浏览器身份头，但发送的 Origin 仍须符合允许列表。伪造用户名、localhost 来源或 MCP 标签不能获得管理员权限。会话只在当前服务进程内保存，服务重启、过期或密码变化后重新登录；账号切换时更新连接身份。
 
 | 响应 | 接续方式 |
@@ -83,7 +85,7 @@
 
    空列表、缺少字段或未绑定 workflow 的分镜会在创建任务前返回结构化 `422` blocker；服务端不会把所有可执行分镜隐式加入批次。
 
-8. 用 `GET /api/queue` 和 `GET /api/projects/{project_id}/tasks/{task_id}` 查询原任务。候选通过任务返回的授权媒体入口访问；`GET /api/projects/{project_id}/segments/{segment_id}/versions` 读取历史。`stop_requested` 是停止请求，仍需等实际结束；`needs_reconcile` 需核对原执行。任务成功不表示审核、采用或交付通过。
+8. 用 `GET /api/queue` 和 `GET /api/projects/{project_id}/tasks/{task_id}` 查询原任务。候选通过任务返回的授权媒体入口访问；`GET /api/projects/{project_id}/segments/{segment_id}/versions` 读取历史。实际媒体通过同源 `GET /media-file?path=<已登记引用>`（带本人 Bearer）读取/保存；`/media/{asset_name}` 是旧别名。`stop_requested` 是停止请求，仍需等实际结束；`needs_reconcile` 需核对原执行。任务成功不表示审核、采用或交付通过。
 
 创建/上传/新增分镜没有统一幂等回执，未知结果先读取本人作品、计划或素材确认。不要给这些操作套用生成任务的同键保证。
 
@@ -118,7 +120,7 @@
 
 ## MCP 和验证边界
 
-远程 MCP 使用同一私人 URL 的 `/mcp/`，要求可配置 Bearer 的 Streamable HTTP 客户端。公网入口由 HTTPS 反向代理转发到本机 `/mcp/`，未认证请求返回 401；远程端固定开放一组经过业务路由授权的安全工具（当前 50 个），按能力覆盖：
+远程 MCP 使用同一私人 URL 的 `/mcp/`，要求可配置 Bearer 的 Streamable HTTP 客户端。公网入口由 HTTPS 反向代理转发到本机 `/mcp/`，未认证请求返回 401；远程端固定开放一组经过业务路由授权的安全工具（当前 54 个；本机 stdio 全量 61 个），按能力覆盖：
 
 | 类别 | 远程能力 |
 | --- | --- |
@@ -128,9 +130,11 @@
 | 关键帧、声音与媒体 | 关键帧/语音能力检查和候选提交，音频编辑、静音、视频技术检查、转写和无声审片候选 |
 | 装配 | 装配编辑与预检读取、接点/音轨记录、装配提交 |
 
-这些工具仍通过现有 Bearer 认证和 HTTP 业务路由执行；远程端不提供账户或管理操作、删除/清理、任意服务器路径导入或导出、脚本执行、全局设置修改、历史版本恢复、任务恢复/强制收尾等能力。完整适配工具可通过本机 stdio 使用，其他业务使用认证 HTTP。没有 OAuth 登录发现；只能 OAuth 且不能配置现有 Bearer 的宿主尚未支持。
+这些工具仍通过现有 Bearer 认证和 HTTP 业务路由执行；远程端不提供账户或管理操作、删除/清理、任意服务器路径导入或导出、脚本执行、全局设置修改、历史版本恢复、任务恢复/强制收尾等能力。完整适配工具可通过本机 stdio 使用，其他业务使用认证 HTTP。远程入口不暴露 `import_reference`；参考原始文件登记使用 `POST /api/projects/{project_id}/reverse-analyses` 的 multipart 上传。没有 OAuth 登录发现；只能 OAuth 且不能配置现有 Bearer 的宿主尚未支持。
 
 远程 MCP 与 HTTP 使用同一显式创作合同：`create_project` 必须传 `creation_mode:"advanced"`；`preflight` 必须传实际 `stage_id`；`create_shot`／`update_shot` 可传 `workflow` 或已安装的 `preset_id`。`read_project` 的 `section:'state'` 返回同一准备度结构（含 `stage_required`/`recipe_unresolved` 与 `options`），`section:'reusable-templates'` 返回不含推荐的 `available_templates` 事实清单。自动方案、`stage_id:"auto"` 和 `generation.mode` 已移除，缺省时返回结构化阻塞和可选项，不写计划。
+
+可分发 Skill 位于 [director-workbench/SKILL.md](../.agents/skills/director-workbench/SKILL.md)。外部客户端从公开源代码快照取得该目录后，按自身项目级或用户级 Skill 机制安装；工作台不会自动写入客户端目录。当前远程 MCP 只注册 tools，没有注册 resources 或 prompts，因此不能通过 MCP 资源接口拉取 Skill；这是当前限制。Skill 版本与工具数量作为合同快照维护（当前远程 54 / stdio 61），新部署仍以 `tools/list` 和 `/openapi.json` 为准。
 
 MCP 默认保留官方 SDK 的 loopback Host/Origin 限制和 DNS rebinding 防护。公网入口必须在工作台或反向代理启动前配置精确允许列表，不能由客户端请求或 `Forwarded`/`X-Forwarded-Host` 决定：
 
@@ -146,7 +150,7 @@ MCP 默认保留官方 SDK 的 loopback Host/Origin 限制和 DNS rebinding 防�
 
 ## 审核可写值与诊断结果
 
-HTTP `/openapi.json` 为阶段和状态的参数来源：审核阶段为 `sample/finish/final`，审核状态为 `pending_review/approved/changes_requested/stale`；设定、checkpoint 与 artifact 另允许 `draft`。MCP `record_review` 的手动写入子集为 `pending_review/changes_requested`，正式采用通过 `adopt_candidate`，不要把两个入口的权限和参数混用。非法 HTTP 值返回 422，不保存记录。
+HTTP `/openapi.json` 为阶段和状态的参数来源：审核阶段为 `sample/finish/final`，审核状态为 `pending_review/approved/changes_requested/stale`；设定、checkpoint 与 artifact 另允许 `draft`。MCP `record_review` 的手动写入子集为 `pending_review/changes_requested`，正式采用通过 `approve_candidate` 或 HTTP `POST /adoptions`，不要把两个入口的权限和参数混用。非法 HTTP 值返回 422，不保存记录。
 
 `video_qc` 抽帧与联系表是任务诊断结果，保留在任务回执供查看；不登记为创作关键帧，不进入首尾帧或其他作品的可复用图片。旧诊断登记也过滤，旧分镜中的已保存诊断引用需明确改选创作素材，工作台不会擅自改写原计划。
 
