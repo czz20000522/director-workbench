@@ -76,7 +76,7 @@ export default function LoginGate() {
     } finally { setBusy(false); }
   }
 
-  if (checking) return <main className="workspace-login"><p role="status">正在连接工作台…</p></main>;
+  if (checking) return <main className="workspace-login"><p role="status" aria-live="polite">正在连接工作台…</p></main>;
 
   if (user) return <App key={user.username} privateMode onLogout={logout} logoutBusy={busy} sessionError={error} />;
 

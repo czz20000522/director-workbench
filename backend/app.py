@@ -35,14 +35,15 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictInt, field_validator, model_validator
-from . import production_presets, background_jobs, speech, keyframes, audio_edit_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, guide, readiness, task_scheduler, creative_inspection, shot_creation
+from . import production_presets, background_jobs, speech, keyframes, audio_edit_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, assembly_continuity, guide, readiness, task_scheduler, creative_inspection, shot_creation
 from . import output_resolution, enhancement, task_store
 import av
 import paths
 from .private_auth import SecurityHeaders, current_principal
 from .atomic_files import replace_prepared
 from .storage import storage_roots, relocate_asset, legacy_mappings
-from .user_context import project_location
+from .user_context import AccessDenied, project_location
+from .secure_files import checked_directory, checked_file, verify_directory_identity, verify_identity
 
 # 模块级常量与共享锁集中在 workbench_config；这里重新导出，既有引用与 monkeypatch 不变。
 from .workbench_config import (
@@ -211,6 +212,10 @@ async def stream_upload(upload: UploadFile, destination: Path) -> int:
     remaining as a material the manifest never registered.  Blocking file calls go to the
     thread pool so a large upload does not stall the event loop (and its SSE streams).
     """
+    destination = Path(destination)
+    parent, parent_identity = checked_directory(destination.parent)
+    existing_identity = checked_file(destination)[1] if destination.exists() else None
+    destination = parent / destination.name
     temporary = destination.with_name(f'.{uuid.uuid4().hex}.upload')
     written = 0
     try:
@@ -224,8 +229,18 @@ async def stream_upload(upload: UploadFile, destination: Path) -> int:
         finally:
             await upload.close()
             await run_in_threadpool(handle.close)
+        verify_directory_identity(parent, parent_identity)
+        if existing_identity is not None and destination.exists():
+            verify_identity(destination, existing_identity)
+        prepared_identity = checked_file(temporary)[1]
         await run_in_threadpool(replace_prepared, temporary, destination)
+        verify_directory_identity(parent, parent_identity)
+        if checked_file(destination)[1] != prepared_identity:
+            raise AccessDenied('上传结果在替换期间发生变化，请重试')
         return written
+    except AccessDenied as exc:
+        await run_in_threadpool(temporary.unlink, missing_ok=True)
+        raise HTTPException(409, '上传期间目标目录或文件发生变化，请重试') from exc
     except BaseException:
         await run_in_threadpool(temporary.unlink, missing_ok=True)
         raise
@@ -3198,6 +3213,14 @@ def assembly_sound_selection(manifest: dict[str, Any], document: dict[str, Any])
             'modified_ns': path.stat().st_mtime_ns}
 
 
+def assembly_continuity_view(manifest: dict[str, Any], document: dict[str, Any]) -> dict[str, Any]:
+    """Expose CPU-only continuity hints while keeping the plan read-only."""
+    result = assembly_continuity.analyze_document(document, resolve_path=resolve_registered_path)
+    result['project_id'] = manifest['id']
+    result['revision'] = int(document.get('revision', 0) or 0)
+    return result
+
+
 def assembly_edit_view(manifest: dict[str, Any], document: dict[str, Any]) -> dict[str, Any]:
     video_blockers = assembly_video_blockers(document)
     missing_videos = [item['dependency'] for item in video_blockers if item['code'] == 'video_required']
@@ -3211,9 +3234,11 @@ def assembly_edit_view(manifest: dict[str, Any], document: dict[str, Any]) -> di
                  'duration_seconds': None, 'error': str(exc)}
     warnings = ['非 WAV 完整母版的时长尚未验证，成片后须核对尾部声音'] if (
         sound.get('policy') == 'complete_master' and sound.get('duration_seconds') is None and not sound.get('error')) else []
+    continuity = assembly_continuity_view(manifest, document)
     return {'project_id': manifest['id'], 'revision': int(document.get('revision', 0) or 0),
             'joins': join_rows, 'blocking_joins': assembly_edit.blocking_joins(document),
             'join_review': assembly_edit.review_readiness(join_rows),
+            'continuity': continuity,
             'missing_videos': missing_videos, 'blockers': video_blockers,
             'sound': sound, 'warnings': warnings, 'target_duration_seconds': round(sum(float(item.get('duration_seconds') or 0)
                        for item in document.get('segments', []) if isinstance(item, dict)), 3),

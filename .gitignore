@@ -1,5 +1,6 @@
 # Source allowlist. New public files must be reviewed and added explicitly.
 /*
+!/CODEX_REPORT.md
 !/start-director-services.ps1
 !/start-director-services.cmd
 !/stop-director-services.cmd
@@ -23,6 +24,7 @@
 /.agents/skills/aigc-video-production/scripts/*
 !/backend/
 /backend/*
+!/backend/secure_files.py
 !/backend/routers/
 /backend/routers/*
 !/backend/routers/__init__.py
@@ -40,10 +42,12 @@
 !/backend/routers/gpu_idle.py
 !/backend/routers/queue_scheduler.py
 !/backend/routers/events_media.py
+!/backend/assembly_continuity.py
 !/contracts/
 /contracts/*
 !/docs/
 /docs/*
+!/docs/assembly-continuity.md
 !/mcp_server/
 /mcp_server/*
 !/public/
@@ -60,8 +64,11 @@
 !/src/app/types.ts
 !/src/app/helpers.ts
 !/src/app/hooks.ts
+!/src/app/useDialogFocusTrap.ts
 !/tests/
 /tests/*
+!/tests/test_assembly_continuity.py
+!/tests/test_secure_files.py
 !/tests/conftest.py
 !/tests/support.py
 !/tools/
@@ -75,6 +82,8 @@
 !/src/components/WorkbenchSidebar.tsx
 !/src/components/WorkbenchTopbar.tsx
 !/src/components/WorkbenchOverlays.tsx
+!/src/components/ProjectActionsPopover.tsx
+!/src/components/ResourceStatusPanel.tsx
 !/.agents/skills/director-workbench/
 /.agents/skills/director-workbench/*
 !/.agents/skills/aigc-video-production/assets/workflows/minimax-h3-current-api.json

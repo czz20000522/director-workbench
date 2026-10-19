@@ -2,7 +2,9 @@
 
 Only server authentication code may supply session_lookup and construct Layout.
 TaskOwner must come from server-owned storage, never an uploaded receipt.
-Path checks do not provide OS-level isolation against concurrent filesystem edits.
+Path checks are point-in-time checks, not OS-level isolation against concurrent
+filesystem edits. File-serving and deletion callers must capture and re-check
+the file or directory identity immediately around the operation.
 """
 from __future__ import annotations
 

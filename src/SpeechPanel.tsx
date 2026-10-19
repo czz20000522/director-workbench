@@ -132,9 +132,9 @@ export default function SpeechPanel({ projectId, options, onBrowse, onComplete }
     </div>
     <p className="director-muted">{saved.mode === 'design' ? '描述希望的音色，无需参考音频；满意的候选可用作后续台词的参考。' : '参考音频与请求时长合计须不超过 30 秒。'}请求时长不保证台词完整。</p>
     <p className="director-muted">生成后先试听，再在分镜中选择。现有分镜音频会保留。</p>
-    {!capability?.available && <p role="status">{capability ? capability.reason || '声音生成环境尚未就绪。' : '正在检查声音环境…'}</p>}
-    {message && <p role="status">{message}</p>}
-    {task?.error && <p role="status">{task.error}</p>}
+    {!capability?.available && <p role="status" aria-live="polite">{capability ? capability.reason || '声音生成环境尚未就绪。' : '正在检查声音环境…'}</p>}
+    {message && <p role="status" aria-live="polite">{message}</p>}
+    {task?.error && <p role="status" aria-live="polite">{task.error}</p>}
     <div className="director-form-actions">
       {!saved.pending && <button className="button primary compact" disabled={busy || !capability?.available || !saved.text.trim() || (saved.mode === 'design' ? !saved.voice_description.trim() : !saved.voice_reference) || !Number.isFinite(saved.gen_seconds) || saved.gen_seconds <= 0 || saved.gen_seconds > 30 || !Number.isInteger(saved.seed) || saved.seed < 0 || saved.seed > 4294967295} onClick={() => void act('submit')}>生成声音候选</button>}
       {saved.pending && !task && <><button className="button secondary compact" disabled={busy} onClick={() => void act('check')}>核对声音提交</button><button className="button secondary compact" disabled={busy || !capability?.available} onClick={() => void act('submit')}>使用原凭据重试</button></>}

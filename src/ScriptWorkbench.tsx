@@ -138,7 +138,7 @@ export default function ScriptWorkbench({ projectId, shots, request, onCreateSho
       </div>
     </header>
     {error && <div className="script-message script-error" role="alert"><span>{error}</span><button className="text-button" disabled={busy} onClick={() => saved ? void inspectLatest() : setReload(value => value + 1)}>{saved ? '查看最新版本' : '重新读取'}</button></div>}
-    {notice && <p className="script-message" role="status">{notice}</p>}
+    {notice && <p className="script-message" role="status" aria-live="polite">{notice}</p>}
     {latest && <section className="script-latest" aria-label="服务器最新剧本"><h3>最新版本 {latest.revision} · {latest.title}</h3><p>下方只读预览不会覆盖你的编辑。采用后会放弃当前未保存修改。</p><details><summary>展开最新正文与场次</summary><div className="script-prose">{latest.text || '暂无正文'}</div><ul>{latest.scenes.map(scene => <li key={scene.id}>{scene.id} · {scene.title}{scene.duration_seconds != null ? ` · ${scene.duration_seconds} 秒` : ''}{scene.text && <p className="script-prose">{scene.text}</p>}</li>)}</ul></details><button className="button secondary compact" disabled={busy} onClick={() => { if (dirty && !window.confirm('放弃当前未保存修改，采用服务器最新版本？')) return; drafts.delete(projectId); setSaved(latest); setDraft(latest); setLatest(null); setEditing(false); setError(''); setNotice('已采用最新版本。'); setSelected(''); }}>采用最新版本</button></section>}
     {!current ? <p className="script-empty">{busy ? '正在读取剧本…' : '暂时无法读取剧本。'}</p> : <div className="script-layout">
       <aside className="script-scenes" aria-label="场次目录">

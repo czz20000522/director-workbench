@@ -105,7 +105,7 @@ function ClassificationEditor({ analysis, projectId, disabled, onSaved }: { anal
     <span>内容类型 · {contentModes[analysis.content_mode || ''] || '待判断'}{analysis.content_mode_user_status === 'reviewed' ? ' · 已校订' : ''}</span>
     <button className="text-button" disabled={disabled || saving} onClick={() => editing ? setEditing(false) : begin()}>{editing ? '收起校订' : '校订类型'}</button>
     {editing && <div className="reverse-timeline-editor"><label>内容类型<select aria-label="内容类型" value={mode} disabled={saving} onChange={event => setMode(event.target.value)}>{Object.entries(contentModes).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>判断理由<textarea aria-label="内容类型判断理由" rows={2} maxLength={2000} value={reason} disabled={saving} onChange={event => setReason(event.target.value)} /></label><button className="button secondary compact" disabled={disabled || saving || !reason.trim() || reason.length > 2000} onClick={() => void save()}>{saving ? '保存中…' : '保存内容类型'}</button></div>}
-    {message && <p role="status">{message}</p>}
+    {message && <p role="status" aria-live="polite">{message}</p>}
   </div>;
 }
 
@@ -371,7 +371,7 @@ export default function ReverseWorkbench({ projectId, initialAnalysisId = '', on
   const fast = modelStatus.fast_optional;
   const busy = uploading || importing || analyzing || converting || saving || timelineSaving;
 
-  if (loading) return <section className="reverse-empty" role="status"><LoaderCircle className="spin" size={24} /><p>正在读取参考拆解…</p></section>;
+  if (loading) return <section className="reverse-empty" role="status" aria-live="polite"><LoaderCircle className="spin" size={24} /><p>正在读取参考拆解…</p></section>;
 
   if (!active) return <section className="reverse-empty"><div className="reverse-empty-mark"><Search size={28} /></div><span className="director-kicker">参考素材逆向拆解</span><h1>从一段参考开始</h1><p>导入音视频，逐段观察与校订。拆解结果可以转为自己的制作草案。</p><input ref={fileRef} type="file" accept="video/*,audio/*" hidden onChange={event => void uploadReference(event.target.files?.[0])} /><button className="button primary" disabled={uploading} onClick={() => fileRef.current?.click()}>{uploading ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />}{uploading ? '正在拆分素材…' : '导入参考素材'}</button><div className="reverse-empty-facts"><span>保留原始参考</span><span>每项可校订</span><span>可转为制作草案</span></div>{error && <p className="director-error">{error}</p>}</section>;
 
@@ -380,7 +380,7 @@ export default function ReverseWorkbench({ projectId, initialAnalysisId = '', on
     {active.import_task && <TaskQueueStatus task={{ ...active.import_task, asset_id: active.import_task.asset_id || active.id }} />}
     {semanticJob && <TaskQueueStatus task={{ ...semanticJob, asset_id: active.id }} />}
     {semanticJob?.task_id && analyzing && <button className="button secondary compact" disabled={startingAnalysis || ['stop_requested', 'stopping'].includes(semanticJob.status)} onClick={() => void stopSemanticAnalysis()}>停止内容分析</button>}
-    {importing && <p role="status">参考拆分任务已登记，等待处理完成。素材探测结果将在完成后显示。</p>}
+    {importing && <p role="status" aria-live="polite">参考拆分任务已登记，等待处理完成。素材探测结果将在完成后显示。</p>}
     {active.import_task_id && <div className="reverse-heading-actions">{importing && <button className="button secondary compact" disabled={importControlling} onClick={() => void controlImport('stop')}>停止参考拆分</button>}{['failed', 'stopped'].includes(active.import_task?.status ?? active.import_status ?? '') && <button className="button secondary compact" disabled={importControlling} onClick={() => void controlImport('resume')}>继续参考拆分</button>}{(active.import_task?.status ?? active.import_status) === 'needs_reconcile' && <button className="button secondary compact" disabled={importControlling} onClick={() => void controlImport('reconcile')}>核对参考拆分</button>}</div>}
     <ClassificationEditor key={`${projectId}:${active.id}`} analysis={active} projectId={projectId} disabled={busy} onSaved={analysis => setAnalyses(previous => previous.map(item => item.id === analysis.id ? analysis : item))} />
 

@@ -6,6 +6,9 @@ The caller installs a project authorization callback before enabling this layer.
 from contextvars import ContextVar
 from dataclasses import dataclass
 import json
+import logging
+from pathlib import Path
+import sqlite3
 import threading
 import time
 from typing import Callable
@@ -14,6 +17,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from .private_sessions import AuthenticationError, SessionManager
+from . import task_store
 from .user_context import SessionIdentity
 
 COOKIE = 'director_session'
@@ -81,7 +85,8 @@ current_principal: ContextVar[Principal | None] = ContextVar('director_principal
 
 class PrivateAuth:
     def __init__(self, app, *, sessions: SessionManager, origins: tuple[str, ...],
-                 authorize: Callable, administrators: tuple[str, ...] = (), secure_cookie=False):
+                 authorize: Callable, administrators: tuple[str, ...] = (), secure_cookie=False,
+                 database_path: str | Path | None = None):
         if not origins or any(not origin.startswith(('http://', 'https://')) or origin.endswith('/') for origin in origins):
             raise ValueError('Configure exact browser origins without a trailing slash')
         self.app, self.sessions = app, sessions
@@ -89,12 +94,100 @@ class PrivateAuth:
         self.authorize = authorize
         self.administrators = frozenset(administrators)
         self.secure_cookie = secure_cookie
+        self.database_path = Path(database_path) if database_path is not None else None
+        self.login_logger = logging.getLogger(__name__)
         # (account, source) -> monotonic timestamps of recent failures, under a lock.
         self.login_failures: dict[tuple[str, str], list[float]] = {}
         self.login_lock = threading.Lock()
 
+    @staticmethod
+    def _key(username: str, source: str) -> tuple[str, str]:
+        return username.lower(), source or ''
+
+    def _persistent_connection(self):
+        if self.database_path is None:
+            return None
+        self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(self.database_path, check_same_thread=False)
+        return task_store.configure(connection, self.database_path)
+
+    def _persistent_count(self, identity: str, source: str, now: float) -> int | None:
+        connection = None
+        try:
+            connection = self._persistent_connection()
+            if connection is None:
+                return None
+            cutoff = now - LOGIN_FAILURE_WINDOW_SECONDS
+            with connection:
+                connection.execute('DELETE FROM login_failure_events WHERE failed_at < ?', (cutoff,))
+                row = connection.execute(
+                    'SELECT COUNT(*) FROM login_failure_events WHERE identity=? AND source=? AND failed_at>=?',
+                    (identity, source, cutoff),
+                ).fetchone()
+            return int(row[0])
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            self.login_logger.warning('持久化登录失败计数不可用，回退内存限流: %s', type(exc).__name__)
+            return None
+        finally:
+            if connection is not None:
+                connection.close()
+
+    def _persistent_record(self, identity: str, source: str, now: float) -> bool:
+        connection = None
+        try:
+            connection = self._persistent_connection()
+            if connection is None:
+                return False
+            cutoff = now - LOGIN_FAILURE_WINDOW_SECONDS
+            keep = max(1, int(LOGIN_FAILURE_LIMIT))
+            with connection:
+                connection.execute('BEGIN IMMEDIATE')
+                connection.execute('DELETE FROM login_failure_events WHERE failed_at < ?', (cutoff,))
+                connection.execute(
+                    'INSERT INTO login_failure_events(identity, source, failed_at) VALUES (?, ?, ?)',
+                    (identity, source, now),
+                )
+                connection.execute(
+                    'DELETE FROM login_failure_events WHERE identity=? AND source=? AND id NOT IN '
+                    '(SELECT id FROM login_failure_events WHERE identity=? AND source=? ORDER BY failed_at DESC, id DESC LIMIT ?)',
+                    (identity, source, identity, source, keep),
+                )
+                overflow = connection.execute(
+                    'SELECT identity, source FROM login_failure_events GROUP BY identity, source '
+                    'ORDER BY MAX(failed_at) ASC LIMIT -1 OFFSET ?',
+                    (max(0, int(LOGIN_FAILURE_MAX_KEYS)),),
+                ).fetchall()
+                for old_identity, old_source in overflow:
+                    connection.execute(
+                        'DELETE FROM login_failure_events WHERE identity=? AND source=?',
+                        (old_identity, old_source),
+                    )
+            return True
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            self.login_logger.warning('持久化登录失败写入不可用，回退内存限流: %s', type(exc).__name__)
+            return False
+        finally:
+            if connection is not None:
+                connection.close()
+
+    def _persistent_clear(self, identity: str, source: str) -> bool:
+        connection = None
+        try:
+            connection = self._persistent_connection()
+            if connection is None:
+                return False
+            with connection:
+                connection.execute('DELETE FROM login_failure_events WHERE identity=? AND source=?', (identity, source))
+            return True
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            self.login_logger.warning('持久化登录失败清理不可用，回退内存限流: %s', type(exc).__name__)
+            return False
+        finally:
+            if connection is not None:
+                connection.close()
+
     def login_allowed(self, username: str, source: str) -> bool:
-        key = (username.lower(), source or '')
+        key = self._key(username, source)
         now = time.monotonic()
         with self.login_lock:
             self._prune_login_failures(now)
@@ -104,19 +197,26 @@ class PrivateAuth:
                 self.login_failures[key] = attempts
             else:
                 self.login_failures.pop(key, None)
-            return len(attempts) < LOGIN_FAILURE_LIMIT
+            memory_count = len(attempts)
+        persistent_count = self._persistent_count(key[0], key[1], time.time())
+        count = memory_count if persistent_count is None else max(memory_count, persistent_count)
+        return count < LOGIN_FAILURE_LIMIT
 
     def record_login_failure(self, username: str, source: str) -> None:
-        key = (username.lower(), source or '')
+        key = self._key(username, source)
+        wall_now = time.time()
         with self.login_lock:
             now = time.monotonic()
             self._prune_login_failures(now)
             self.login_failures.setdefault(key, []).append(now)
             self._trim_login_failures()
+        self._persistent_record(key[0], key[1], wall_now)
 
     def clear_login_failures(self, username: str, source: str) -> None:
+        key = self._key(username, source)
         with self.login_lock:
-            self.login_failures.pop((username.lower(), source or ''), None)
+            self.login_failures.pop(key, None)
+        self._persistent_clear(key[0], key[1])
 
     def _prune_login_failures(self, now: float) -> None:
         """Drop expired keys before every limiter operation."""
