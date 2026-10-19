@@ -46,7 +46,10 @@ def test_copy_checked_keeps_existing_destination_when_source_changes(tmp_path, m
     real_verify = secure_files.verify_identity
 
     def replace_before_final_check(path, expected):
-        source.write_bytes(b'replaced')
+        # A different size is used deliberately: identity compares size, inode and
+        # mtime, and a same-size rewrite could land inside the filesystem timestamp
+        # granularity and go undetected, making this test flaky by construction.
+        source.write_bytes(b'replaced-with-different-size')
         return real_verify(path, expected)
 
     monkeypatch.setattr(secure_files, 'verify_identity', replace_before_final_check)

@@ -58,6 +58,8 @@ pytest 硬超时：`pyproject.toml` 设 `timeout = 90`、`timeout_method = "thre
 
 **根因**：Starlette 1.9 的 `FileResponse.__call__` 在 ASGI `spec_version < 2.4` 时把流式发送放进 collapsing task group，并循环等待 `receive()` 返回 `http.disconnect`。测试里的假 ASGI scope 没声明 `asgi.spec_version`（默认 2.0），假 `receive()` 永远返回 `http.request`，且无 await 让出事件循环，于是 3 个 range 测试在 `send_file()` 完成后死循环（整文件运行时表现为第 6 个测试开始挂起）。这不是环境/基线问题，修复方式是在假 scope 声明 `spec_version = 2.4`，走 Starlette 的直接发送路径；测试语义（响应头、分块、短读终止、416）不变。此外全局 90s pytest 超时把未来的挂起变成失败而不是无限等待。
 
+同文件另一个测试 `test_copy_checked_keeps_existing_destination_when_source_changes` 依赖同尺寸重写的 mtime 变化来触发身份校验，在时间戳粒度内可能漏检而偶发失败；现已改为写入不同尺寸的内容，使替换必然被设备/inode/size/mtime 身份比较发现，重复运行 5 次稳定通过。
+
 ## 4. 新增测试
 
 `tests/test_test_impact.py`（15 项）覆盖：
@@ -102,7 +104,8 @@ pytest 硬超时：`pyproject.toml` 设 `timeout = 90`、`timeout_method = "thre
 1. `test: bound every test with a hard timeout and unblock secure-file streaming cases`
 2. `feat: add deterministic test impact selector`
 3. `feat: add fast and affected layers to the test entry points`
-4. `docs: document the layered test entry points`（含报告与 CI 映射校验）
+4. `docs: record the layered test system and gate its impact map in CI`
+5. `test: make the secure-file replacement case detect the rewrite deterministically`
 
 ## 7. 未运行 / 已知边界
 
