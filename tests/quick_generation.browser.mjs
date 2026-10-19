@@ -305,6 +305,9 @@ try {
   await page.getByLabel('使用生成结果').getByText('已采用', { exact: true }).waitFor();
   await page.getByRole('button', { name: '检查并装配成片', exact: true }).click();
   const delivery = page.getByRole('region', { name: '装配与取得文件', exact: true });
+  console.log('DEBUG delivery', await delivery.innerText());
+  console.log('DEBUG plan', JSON.stringify(await page.evaluate(async pid => (await (await fetch(`/api/projects/${pid}/plan`)).json()), projectId)));
+  console.log('DEBUG state', JSON.stringify(await page.evaluate(async pid => (await (await fetch(`/api/projects/${pid}/state`)).json()), projectId)));
   await delivery.getByRole('heading', { name: '已采用 1 / 2 段', exact: true }).waitFor();
   assert.ok(await delivery.getByRole('button', { name: '装配成片', exact: true }).isDisabled());
   await delivery.getByRole('button', { name: '打开分镜2', exact: true }).click();
