@@ -18,6 +18,7 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.exceptions import MCPError
 
 from backend import app as backend, remote_mcp
+from mcp_server.server import create_server
 # Used as a callable (.__wrapped__), not only as a pytest fixture, so it stays imported.
 from test_private_workbench import private_workbench
 from support import seed_test_models
@@ -40,6 +41,11 @@ EXPECTED_REMOTE_TOOLS = (
     'stop_generation', 'submit_audio_edit', 'get_media_capability',
     'create_silence', 'inspect_video', 'transcribe_audio', 'export_silent_video',
 )
+FORBIDDEN_REMOTE_TOOLS = {
+    'update_guide_settings', 'import_reference', 'restore_shot_version',
+    'repair_shot_recipe_identity', 'control_batch', 'resolve_missing_execution',
+    'resume_generation',
+}
 
 
 @pytest.fixture
@@ -138,6 +144,18 @@ def test_remote_tool_set_is_the_fixed_allow_list(access):
                 assert [tool.name for tool in tools] == list(EXPECTED_REMOTE_TOOLS)
                 assert all(isinstance(tool.input_schema, dict) and tool.input_schema.get('type') == 'object'
                            for tool in tools)
+    asyncio.run(verify())
+
+
+def test_remote_allowlist_is_backed_by_stdio_schemas():
+    async def verify():
+        tools = {tool.name: tool for tool in await create_server('http://localhost').list_tools()}
+        assert set(EXPECTED_REMOTE_TOOLS) <= tools.keys()
+        assert FORBIDDEN_REMOTE_TOOLS.isdisjoint(EXPECTED_REMOTE_TOOLS)
+        assert all(isinstance(tools[name].input_schema, dict)
+                   and tools[name].input_schema.get('type') == 'object'
+                   for name in EXPECTED_REMOTE_TOOLS)
+
     asyncio.run(verify())
 
 
