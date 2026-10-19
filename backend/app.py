@@ -1390,6 +1390,110 @@ def segment_review_binding(segment: dict[str, Any], reference: str) -> dict[str,
     return {'current': segment_candidate_identity(segment), 'selected': selected}
 
 
+def adoption_file_identity(path: Path) -> dict[str, Any]:
+    """Freeze the registered candidate identity used by the assembly gate."""
+    stat = path.stat()
+    return {'path': str(path), 'size_bytes': stat.st_size, 'modified_ns': stat.st_mtime_ns}
+
+
+def adoption_binding_for_review(document: dict[str, Any], asset_id: str, candidate_ref: str,
+                                plan_revision: int, assembly_asset_id: str = 'MASTER') -> dict[str, Any]:
+    candidate = adoption_candidate_path(candidate_ref)
+    if not candidate.is_file():
+        raise HTTPException(409, '采用候选文件不存在，请重新读取当前作品')
+    segment = next((item for item in document.get('segments', [])
+                    if isinstance(item, dict) and str(item.get('id')) == asset_id), None)
+    if segment is not None:
+        binding = segment_review_binding(segment, candidate_ref)
+        selected = binding['selected']
+        version_task_id = selected.get('version_task_id')
+        task_id = version_task_id or selected.get('prompt_id')
+    elif asset_id == assembly_asset_id:
+        assembly = document.get('assembly') or {}
+        version_task_id = assembly.get('prompt_id')
+        task_id = version_task_id
+    else:
+        version_task_id = None
+        task_id = None
+    return {
+        'task_id': task_id,
+        'version_task_id': version_task_id,
+        'plan_revision': plan_revision,
+        'file_identity': adoption_file_identity(candidate),
+    }
+
+
+def assembly_adoption_blockers(manifest: dict[str, Any], document: dict[str, Any]) -> list[dict[str, Any]]:
+    """Require every assembled segment to reference one current explicit adoption."""
+    project_id = str(manifest['id'])
+    state = build_project_state(project_id)
+    reviews = state.get('reviews') or {}
+    revision = int(document.get('revision', 0) or 0)
+    blockers: list[dict[str, Any]] = []
+    for segment in document.get('segments', []):
+        if not isinstance(segment, dict) or not segment.get('id'):
+            continue
+        asset_id = str(segment['id'])
+        records = reviews.get(asset_id) or {}
+        review = next((records.get(stage) for stage in ('finish', 'sample')
+                       if isinstance(records.get(stage), dict) and records[stage].get('status') == 'approved'), None)
+        base = {'dependency': asset_id, 'object': {'kind': 'segment', 'id': asset_id}}
+        if not review or review.get('source') != 'explicit-adoption' or not isinstance(review.get('adoption_binding'), dict):
+            blockers.append({**base, 'code': 'adoption_required',
+                             'message': f'{asset_id} 尚未有带候选身份的明确采用记录。'})
+            continue
+        binding = review['adoption_binding']
+        if binding.get('plan_revision') != revision:
+            blockers.append({**base, 'code': 'adoption_plan_stale',
+                             'message': f'{asset_id} 的采用记录来自计划 revision {binding.get("plan_revision")}，当前为 {revision}；请重新采用。'})
+            continue
+        file_identity = binding.get('file_identity') or {}
+        try:
+            candidate = resolve_registered_path(str(file_identity.get('path') or ''))
+            current_path = resolve_registered_path(str((segment.get('video') or {}).get('path') or ''))
+            stat = candidate.stat()
+        except (HTTPException, ValueError, OSError):
+            candidate = None
+            current_path = None
+            stat = None
+        current_task_id = segment.get('current_version_task_id') or segment.get('comfyui_task_id')
+        video = segment.get('video') or {}
+        alternate = video.get('rework_candidate') or video.get('finish_review') or {}
+        if alternate.get('path') and candidate is not None and same_registered_media(str(alternate['path']), str(candidate)):
+            current_task_id = alternate.get('task_id') or alternate.get('prompt_id')
+            current_path = candidate
+        if (candidate is None or current_path is None or candidate != current_path or not candidate.is_file()
+                or file_identity.get('size_bytes') != stat.st_size
+                or file_identity.get('modified_ns') != stat.st_mtime_ns):
+            blockers.append({**base, 'code': 'adoption_candidate_changed',
+                             'message': f'{asset_id} 的采用候选文件或路径已变化，请重新采用当前候选。'})
+            continue
+        version_task_id = binding.get('version_task_id') or binding.get('task_id')
+        if not version_task_id or version_task_id != current_task_id:
+            blockers.append({**base, 'code': 'adoption_version_stale',
+                             'message': f'{asset_id} 的采用记录与当前生成版本不一致，请重新采用当前版本。'})
+    return blockers
+
+
+def bind_explicit_assembly_candidates(document: dict[str, Any], manifest: dict[str, Any]) -> None:
+    """Apply only the candidates already proven by the explicit adoption gate."""
+    state = build_project_state(str(manifest['id']))
+    reviews = state.get('reviews') or {}
+    for segment in document.get('segments', []):
+        if not isinstance(segment, dict) or not segment.get('id'):
+            continue
+        records = reviews.get(str(segment['id'])) or {}
+        review = next((records.get(stage) for stage in ('finish', 'sample')
+                       if isinstance(records.get(stage), dict)
+                       and records[stage].get('status') == 'approved'
+                       and records[stage].get('source') == 'explicit-adoption'
+                       and isinstance(records[stage].get('adoption_binding'), dict)), None)
+        if not review or not review.get('candidate_ref'):
+            continue
+        candidate = adoption_candidate_path(str(review['candidate_ref']))
+        segment['video'] = {**(segment.get('video') or {}), 'path': str(candidate)}
+
+
 def stale_candidate_reviews(project_id: str, asset_id: str, stages: tuple[str, ...], note: str) -> None:
     """Append invalidation without changing the retained review or candidate."""
     with DB_LOCK, db() as connection:
@@ -1878,7 +1982,7 @@ def assembly_builder_blocker(manifest: dict[str, Any] | None = None):
     return None
 
 
-def build_assembly_snapshot(manifest: dict[str, Any] | None = None) -> Path:
+def build_assembly_snapshot(manifest: dict[str, Any] | None = None, *, bind_adoptions: bool = False) -> Path:
     """Materialize an assembly graph from the current plan before submission.
 
     Segment regeneration updates the plan's video path. Reusing the checked-in
@@ -1900,6 +2004,8 @@ def build_assembly_snapshot(manifest: dict[str, Any] | None = None) -> Path:
     module = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)
     document = json.loads(plan_path.read_text(encoding="utf-8-sig"))
+    if bind_adoptions and manifest is not None:
+        bind_explicit_assembly_candidates(document, manifest)
     blocking = assembly_edit.blocking_joins(document)
     if blocking:
         raise ValueError(f"接点尚未按当前视频版本审核通过: {', '.join(blocking)}")
@@ -2404,6 +2510,11 @@ def persist_review(request: ReviewRecordRequest, project_id: str | None = None) 
                         stale_reason='缺少明确候选引用或计划版本，请重新读取候选后确认审核')
         else:
             data['candidate_binding'] = segment_review_binding(segment, request.candidate_ref)
+    if request.status == 'approved' and request.source == 'explicit-adoption' and request.candidate_ref:
+        owner_manifest = load_project_manifest(owner_id)
+        data['adoption_binding'] = adoption_binding_for_review(
+            document, request.asset_id, request.candidate_ref, int(document.get('revision', 0) or 0),
+            str(owner_manifest.get('assembly_asset_id') or 'MASTER'))
     record = append_project_record(f"review:{request.stage}", data, asset_id=request.asset_id, source=request.source, project_id=project_id, expected_revision=request.expected_revision)
     return {**data, "asset_id": request.asset_id, "revision": record["revision"], "source": record["source"], "created_at": record["created_at_iso"]}
 
@@ -3237,6 +3348,15 @@ def assembly_edit_view(manifest: dict[str, Any], document: dict[str, Any], *, in
     if readiness_complete is None:
         readiness_complete = include_continuity
     video_blockers = assembly_video_blockers(document)
+    adoption_blockers = assembly_adoption_blockers(manifest, document)
+    adoption_by_asset = {}
+    for blocker in adoption_blockers:
+        adoption_by_asset.setdefault(str(blocker.get('dependency')), []).append(blocker)
+    adoption_segments = [
+        {'asset_id': str(segment.get('id')), 'adopted': str(segment.get('id')) not in adoption_by_asset,
+         'blockers': adoption_by_asset.get(str(segment.get('id')), [])}
+        for segment in document.get('segments', []) if isinstance(segment, dict) and segment.get('id')
+    ]
     missing_videos = [item['dependency'] for item in video_blockers if item['code'] == 'video_required']
     join_rows = assembly_edit.joins(document, missing_videos=[item['dependency'] for item in video_blockers])
     if sound_override is not None:
@@ -3262,7 +3382,8 @@ def assembly_edit_view(manifest: dict[str, Any], document: dict[str, Any], *, in
             'joins': join_rows, 'blocking_joins': assembly_edit.blocking_joins(document),
             'join_review': assembly_edit.review_readiness(join_rows),
             'continuity': continuity,
-            'missing_videos': missing_videos, 'blockers': video_blockers,
+            'missing_videos': missing_videos, 'blockers': [*video_blockers, *adoption_blockers],
+            'adoption': {'ready': not adoption_blockers, 'blockers': adoption_blockers, 'segments': adoption_segments},
             'sound': sound, 'warnings': warnings, 'target_duration_seconds': round(sum(float(item.get('duration_seconds') or 0)
                        for item in document.get('segments', []) if isinstance(item, dict)), 3),
             'readiness_complete': readiness_complete,
@@ -3276,7 +3397,7 @@ def assembly_edit_view(manifest: dict[str, Any], document: dict[str, Any], *, in
             'audio_assets': [{'id': item['id'], 'title': item.get('title', item['id'])}
                              for item in manifest.get('assets', []) if isinstance(item, dict)
                              and item.get('kind') == 'audio' and item.get('id')],
-            'ready': readiness_complete and bool(document.get('segments')) and not video_blockers and
+            'ready': readiness_complete and bool(document.get('segments')) and not video_blockers and not adoption_blockers and
                      not assembly_edit.blocking_joins(document) and not sound.get('error')}
 
 

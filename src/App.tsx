@@ -1493,7 +1493,10 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   const quickShell = quickMode && workspaceMode === 'production' && ['shots', 'delivery', 'enhance'].includes(workspacePage) && !archive;
   const quickActive = quickShell && workspacePage === 'shots';
   const quickDelivery = quickShell && workspacePage === 'delivery';
-  const adoptedShotCount = planSegments.filter(segment => projectState?.reviews[segment.id]?.sample?.status === 'approved').length;
+  const adoptedShotCount = planSegments.filter(segment => {
+    const review = projectState?.reviews[segment.id]?.finish ?? projectState?.reviews[segment.id]?.sample;
+    return review?.status === 'approved' && review.source === 'explicit-adoption' && Boolean(review.adoption_binding);
+  }).length;
   const assemblyTask = projectTasks.find(task => task.id === assemblyTaskId);
   const finalAdopted = !assemblyIsStale && projectState?.reviews[project?.assembly_asset_id ?? 'MASTER']?.final?.status === 'approved';
   const nextPlanAsset = currentPlanSegment ? planVideoAssets[planSegments.findIndex(segment => segment.id === current.id) + 1] : undefined;
@@ -1554,7 +1557,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
         {quickDelivery && project && <section className="quick-delivery" aria-label="装配与取得文件">
           <header><div><h1>装配与取得文件</h1><p>核对各段和接点，明确提交装配，再查看和下载成片候选。</p></div><button type="button" className="button secondary" onClick={() => setWorkspacePage('shots')}>返回分镜</button></header>
           <section aria-label="分镜采用进度"><h2>已采用 {savedPlanCurrent ? adoptedShotCount : '…'} / {planSegments.length} 段</h2><p>装配保留原片及候选。未采用或版本变化的分镜，请先打开核对。</p>
-            <ol className="quick-delivery-shots">{planSegments.map(segment => <li key={segment.id}><span>{assetLabel(segment.id)} · {projectState?.reviews[segment.id]?.sample?.status === 'approved' ? '已采用' : segment.video?.path ? '等待采用' : '等待生成'}</span><button type="button" className="text-button" onClick={() => openQuickShot(segment.id)}>打开{assetLabel(segment.id)}</button></li>)}</ol>
+            <ol className="quick-delivery-shots">{planSegments.map(segment => { const review = projectState?.reviews[segment.id]?.finish ?? projectState?.reviews[segment.id]?.sample; const adopted = review?.status === 'approved' && review.source === 'explicit-adoption' && Boolean(review.adoption_binding); return <li key={segment.id}><span>{assetLabel(segment.id)} · {adopted ? '已明确采用' : segment.video?.path ? '等待明确采用' : '等待生成'}</span><button type="button" className="text-button" onClick={() => openQuickShot(segment.id)}>打开{assetLabel(segment.id)}</button></li>; })}</ol>
           </section>
           <Suspense fallback={null}><AssemblyEditPanel projectId={project.id} planRevision={planRevision} assemblyPath={planAssembly?.output} onPlanChanged={() => refreshPlan()} onBrowse={() => setMaterialBridgeOpen(true)} onOpenShot={openQuickShot} /></Suspense>
           <section className="quick-delivery-submit" aria-label="提交成片装配"><h2>提交装配</h2>

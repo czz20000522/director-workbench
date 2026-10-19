@@ -263,6 +263,13 @@ def submit_project_assembly(manifest: dict[str, Any] | None = None, request: Ass
     blocking = assembly_edit.blocking_joins(plan_document)
     if blocking:
         raise HTTPException(409, f"接点审核未通过或已过期: {', '.join(blocking)}")
+    adoption_blockers = backend.assembly_adoption_blockers(project, plan_document)
+    if adoption_blockers:
+        raise HTTPException(409, {
+            'code': 'assembly_adoption_required',
+            'message': '所有参与装配的分镜都必须明确采用当前候选后才能装配。',
+            'blockers': adoption_blockers,
+        })
     segment_ids = [str(item.get("id")) for item in plan_document.get("segments", []) if isinstance(item, dict) and item.get("id")]
     if not segment_ids:
         raise HTTPException(422, "装配需要至少一个分镜")
@@ -273,7 +280,8 @@ def submit_project_assembly(manifest: dict[str, Any] | None = None, request: Ass
     if missing_video:
         raise HTTPException(409, f"{len(missing_video)} 个分镜尚无当前生成视频")
     try:
-        workflow_path = backend.build_assembly_snapshot(manifest) if manifest is not None else backend.build_assembly_snapshot()
+        workflow_path = (backend.build_assembly_snapshot(manifest, bind_adoptions=True)
+                         if manifest is not None else backend.build_assembly_snapshot())
     except (OSError, ValueError, RuntimeError) as exc:
         raise HTTPException(500, f"无法根据最新分段计划生成装配工作流: {exc}") from exc
     active_statuses = tuple(task_scheduler.WAITING | task_scheduler.EXECUTING)
