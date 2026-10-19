@@ -21,12 +21,25 @@ type Continuity = {
     right?: { rms: number; peak: number; silent: boolean; clipping: boolean };
   } };
 };
+type ContinuityCheckItem = {
+  code: string; category: string; severity: 'blocker' | 'warning' | 'pass' | 'not_applicable';
+  message: string; object?: { kind?: string; id?: string }; evidence?: Record<string, unknown>;
+  action?: { id?: string; label?: string; method?: string; path?: string };
+};
+type ContinuityCheck = {
+  schema_version: number; revision: number; read_only: boolean; automatic_actions?: boolean; ready: boolean;
+  counts: { blocker: number; warning: number; pass: number; not_applicable: number };
+  inputs?: { segment_order?: string[]; join_review?: string; sound?: { selected: boolean; policy?: string | null; selection_source?: string | null } };
+  checks: ContinuityCheckItem[]; blockers: ContinuityCheckItem[]; warnings?: ContinuityCheckItem[];
+  note?: string;
+};
 type Edit = {
   revision: number; joins: Join[]; blocking_joins: string[];
   join_review?: { state: string; completed: boolean; remaining_joins: string[] };
-  sound: { policy: string; audio_asset_id?: string | null; path?: string | null; duration_seconds?: number | null; error?: string };
+  sound: { policy: string; audio_asset_id?: string | null; path?: string | null; duration_seconds?: number | null; error?: string; selected?: boolean; selection_source?: string | null };
   audio_assets: Array<{ id: string; title: string }>; warnings?: string[];
   continuity?: { advisory: boolean; available: boolean; status?: 'ok' | 'partial' | 'unavailable'; note: string; reason?: string; joins: Continuity[] } | null;
+  continuity_check?: ContinuityCheck | null;
   adoption?: { ready: boolean; segments: Array<{ asset_id: string; adopted: boolean; blockers: Array<{ code: string; message?: string }> }> };
   target_duration_seconds: number;
   timing_summary?: { playback_seconds: number; frame_count: number; precision: string; segments: { segment_id: string; start_seconds: number; duration_seconds: number; frame_count: number; playback_seconds: number }[] } | null;
@@ -35,13 +48,20 @@ type Props = { projectId: string; planRevision: number; assemblyPath?: string; o
 const statusLabel: Record<Join['status'], string> = {
   pending: '待检查', approved: '已通过', redo_left: '重做前段', redo_right: '重做后段', stale: '版本已变化',
 };
+const checkSeverityLabel: Record<ContinuityCheckItem['severity'], string> = {
+  blocker: '阻断', warning: '提醒', pass: '通过', not_applicable: '不适用',
+};
+const checkCategoryLabel: Record<string, string> = {
+  order: '顺序/时长', media: '当前视频', adoption: '明确采用', join: '接点审核',
+  sound: '音轨方式', reference: '参考/当前', output: '上次成片',
+};
 
 export default function AssemblyEditPanel({ projectId, planRevision, assemblyPath, onPlanChanged, onBrowse, onOpenShot }: Props) {
   const [edit, setEdit] = useState<Edit | null>(null);
   const [supported, setSupported] = useState(false);
   const [openKey, setOpenKey] = useState('');
   const [drafts, setDrafts] = useState<Record<string, { constraint: string; note: string }>>({});
-  const [policy, setPolicy] = useState('segment_native');
+  const [policy, setPolicy] = useState('');
   const [audioAssetId, setAudioAssetId] = useState('');
   const [error, setError] = useState('');
   const [preflight, setPreflight] = useState('');
@@ -51,6 +71,7 @@ export default function AssemblyEditPanel({ projectId, planRevision, assemblyPat
   const leftRef = useRef<HTMLVideoElement>(null);
   const rightRef = useRef<HTMLVideoElement>(null);
   const fullRef = useRef<HTMLVideoElement>(null);
+  const soundSelectRef = useRef<HTMLSelectElement>(null);
 
   async function load() {
     const sequence = ++loadSequence.current;
@@ -65,7 +86,8 @@ export default function AssemblyEditPanel({ projectId, planRevision, assemblyPat
       setEdit(data as Edit);
       setSupported(true);
       setDrafts(Object.fromEntries((data as Edit).joins.map(join => [join.key, { constraint: join.constraint, note: join.note }])));
-      setPolicy(['complete_master', 'mute'].includes(data.sound.policy) ? data.sound.policy : 'segment_native');
+      setPolicy((data.sound.selected === false || !['complete_master', 'mute', 'segment_native', 'legacy_master'].includes(data.sound.policy))
+        ? '' : data.sound.policy);
       setAudioAssetId(data.sound.audio_asset_id ?? '');
       setError('');
     } finally { if (sequence === loadSequence.current) setLoading(false); }
@@ -80,7 +102,8 @@ export default function AssemblyEditPanel({ projectId, planRevision, assemblyPat
       if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '装配预检失败');
       const missing = (data.missing_videos as string[]).join('、');
       const joins = (data.blocking_joins as string[]).join('、');
-      setPreflight((data.ready ? '预检通过：接点和音轨可用于装配。' : `暂不可装配${missing ? `；缺少视频：${missing}` : ''}${joins ? `；待审核接点：${joins}` : ''}${data.sound?.error ? `；音轨：${data.sound.error}` : ''}`) + ((data.warnings as string[] | undefined)?.length ? ` 提醒：${data.warnings.join('；')}` : ''));
+      const blockerCodes = [...new Set(((data.blockers as Array<{ code?: string }> | undefined) ?? []).map(item => item.code).filter(Boolean) as string[])];
+      setPreflight((data.ready ? '预检通过：接点和音轨可用于装配。' : `暂不可装配${missing ? `；缺少视频：${missing}` : ''}${joins ? `；待审核接点：${joins}` : ''}${blockerCodes.length ? `；阻断：${blockerCodes.join('、')}` : ''}${data.sound?.error ? `；音轨：${data.sound.error}` : ''}`) + ((data.warnings as string[] | undefined)?.length ? ` 提醒：${data.warnings.join('；')}` : ''));
     } catch (cause) { setPreflight(cause instanceof Error ? cause.message : '装配预检失败'); }
   }
 
@@ -113,19 +136,48 @@ export default function AssemblyEditPanel({ projectId, planRevision, assemblyPat
   };
   const continuityStatus = (row: { available: boolean; status?: Continuity['status'] }) => row.status ?? (row.available ? 'ok' : 'unavailable');
   const continuityStatusLabel = (row: { available: boolean; status?: Continuity['status'] }) => ({ ok: '已测量', partial: '部分结果', unavailable: '不可用' }[continuityStatus(row)]);
+  const check = edit?.continuity_check;
+  const checkEvidenceKey = (item: ContinuityCheckItem) => {
+    const value = item.evidence?.join;
+    return typeof value === 'string' ? value : '';
+  };
   if (!supported) return null;
   return <details className="assembly-edit-panel">
     <summary><strong>接点与全片声音</strong><span>{edit ? `${edit.joins.length} 个接点 · ${(edit.join_review?.remaining_joins ?? edit.blocking_joins).length} 个待处理` : '读取中'}</span></summary>
     {error && <p role="alert" className="assembly-edit-error">{error}</p>}
     {edit && <div className="assembly-edit-content"><div className="assembly-edit-row"><button type="button" className="button secondary compact" disabled={busy || loading} onClick={() => void checkPreflight()}>无 GPU 装配预检</button>{preflight && <small role="status">{preflight}</small>}</div>
       <section aria-label="分镜采用状态"><h3>分镜采用门</h3><p>每段必须通过明确采用入口绑定当前候选、任务版本和计划 revision；生成成功或普通审核不会自动采用。</p><ul>{(edit.adoption?.segments ?? []).map(row => <li key={row.asset_id}><strong>{row.asset_id}</strong> · {row.adopted ? '已明确采用当前候选' : '尚未采用'}{row.blockers.length > 0 && <span> · {row.blockers.map(item => item.message ?? item.code).join('；')}</span>}{!row.adopted && <button type="button" className="text-button" onClick={() => onOpenShot(row.asset_id)}>打开并采用</button>}</li>)}</ul></section>
+      <section className="assembly-check" aria-label="跨分镜连续性检查">
+        <h3>跨分镜连续性检查（只读）</h3>
+        <p>以显式分镜顺序、明确采用、接点审核、音轨选择与参考绑定为输入，只返回检查项和阻断项；不会自动修复、自动选候选、自动审核或自动采用。</p>
+        {check && <>
+          <div className="assembly-check-summary">
+            <strong className={check.ready ? 'assembly-continuity-ok' : 'assembly-edit-error'}>{check.ready ? '检查通过' : `${check.blockers.length} 个阻断项`}</strong>
+            <span>{check.counts.pass} 项通过 · {check.counts.warning} 项提醒 · 计划 revision {check.revision}</span>
+            <button type="button" className="button secondary compact" disabled={busy || loading} onClick={() => void load()}>重新检查</button>
+          </div>
+          <ul className="assembly-check-list">{check.checks.map((item, index) => <li key={`${item.code}:${index}`} className={`assembly-check-item severity-${item.severity}`}>
+            <span className="assembly-check-badge">{checkSeverityLabel[item.severity]}</span>
+            <span className="assembly-check-meta">{checkCategoryLabel[item.category] ?? item.category} · {item.code}</span>
+            <p>{item.message}</p>
+            <div className="assembly-check-actions">
+              {checkEvidenceKey(item) && <button type="button" className="text-button" onClick={() => setOpenKey(checkEvidenceKey(item))}>查看接点</button>}
+              {['adoption', 'reference'].includes(item.category) && item.object?.id && <button type="button" className="text-button" onClick={() => onOpenShot(String(item.object?.id))}>{item.category === 'adoption' ? '打开并采用' : '打开分镜核对参考'}</button>}
+              {(item.code === 'sound_policy_required' || item.code === 'sound_policy_invalid') && <button type="button" className="text-button" onClick={() => soundSelectRef.current?.focus()}>选择音轨方式</button>}
+            </div>
+          </li>)}</ul>
+          <small>{check.note ?? '只读检查；阻断项需人工处理后重新检查。'}</small>
+        </>}
+      </section>
       <section><h3>全片声音</h3><p>选择已登记的完整音频母版后，装配会用它替换各段原音。母版应已包含需要保留的对白和音效。</p>
+        {edit.sound.selected === false && <p role="status" className="assembly-continuity-unavailable">尚未显式选择音轨方式；装配预检与提交会以 sound_policy_required 阻断，不会自动保留原音。</p>}
+        {edit.sound.selected === true && edit.sound.selection_source === 'legacy_master' && <p role="status">当前使用作品清单登记的旧版全片音轨；如需更改，请重新选择并保存。</p>}
         {edit.timing_summary && <details><summary>装配取片：{edit.timing_summary.frame_count}帧／{edit.timing_summary.playback_seconds}秒</summary>
           {edit.timing_summary.segments.map(row => <p key={row.segment_id}>{row.segment_id}：从{row.start_seconds}秒取{row.duration_seconds}秒 → {row.frame_count}帧／{row.playback_seconds}秒</p>)}<p>{edit.timing_summary.precision}</p></details>}
-        <div className="assembly-edit-row"><label>音轨方式<select value={policy} onChange={event => setPolicy(event.target.value)}><option value="segment_native">保留各段原音</option><option value="mute">全片静音（移除声音）</option><option value="complete_master">统一完整音轨</option></select></label>
+        <div className="assembly-edit-row"><label>音轨方式<select ref={soundSelectRef} value={policy} onChange={event => setPolicy(event.target.value)}><option value="">未选择（装配会被阻断）</option><option value="segment_native">保留各段原音</option><option value="mute">全片静音（移除声音）</option><option value="complete_master">统一完整音轨</option>{policy === 'legacy_master' && <option value="legacy_master">作品登记的全片音轨（旧版）</option>}</select></label>
           {policy === 'complete_master' && <label>已登记音频<select value={audioAssetId} onChange={event => setAudioAssetId(event.target.value)}><option value="">选择音频</option>{edit.audio_assets.map(asset => <option key={asset.id} value={asset.id}>{asset.title}</option>)}</select></label>}
           <button className="button secondary compact" type="button" onClick={onBrowse}>登记素材</button><button className="button secondary compact" type="button" onClick={() => void load().catch(cause => setError(cause instanceof Error ? cause.message : '音频列表刷新失败'))}>刷新素材</button>
-          <button className="button primary compact" type="button" disabled={busy || (policy === 'complete_master' && !audioAssetId)} onClick={() => void save('sound', { policy, audio_asset_id: policy === 'complete_master' ? audioAssetId : null })}>保存音轨方案</button></div>
+          <button className="button primary compact" type="button" disabled={busy || !policy || policy === 'legacy_master' || (policy === 'complete_master' && !audioAssetId)} onClick={() => void save('sound', { policy, audio_asset_id: policy === 'complete_master' ? audioAssetId : null })}>保存音轨方案</button></div>
         <small>剧情计划总长 {edit.target_duration_seconds} 秒{edit.sound.duration_seconds !== null && edit.sound.duration_seconds !== undefined ? ` · 当前音轨实测 ${edit.sound.duration_seconds} 秒` : ' · 当前独立音轨时长未知或不适用'}。短母版明确拒绝；请先用全片母版后期明确补静音，最长处理30分钟。原音接缝不自动混合。</small>
         {edit.sound.error && <p role="alert" className="assembly-edit-error">{edit.sound.error}</p>}
         {edit.sound.path && <audio controls preload="metadata" src={mediaUrl(edit.sound.path)} aria-label="当前全片音轨试听" />}
