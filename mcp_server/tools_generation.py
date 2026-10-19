@@ -8,11 +8,24 @@ from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 from pydantic import Field, StrictBool
 
+if __package__:
+    from . import media
+else:
+    import media
+
 
 def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, write_record: ToolAnnotations) -> None:
     request = client.request
     project_path = client.project_path
     path_id = client.path_id
+
+    async def shape_task_result(result: dict[str, Any], project_id: str) -> dict[str, Any]:
+        data = result.get('data')
+        if not client.remote or not result.get('ok') or not isinstance(data, dict):
+            return result
+        if {'id', 'status', 'payload'} <= data.keys():
+            result['data'] = await media.shape_task(client, project_id, data)
+        return result
 
     @server.tool(annotations=write_record)
     async def submit_shot(project_id: str, asset_id: str, idempotency_key: str, pipeline_stage_id: str | None = None, pipeline_values: dict[str, Any] | None = None, prompt: str | None = None, seed: int | None = None,
@@ -20,8 +33,9 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         """提交已配置方案的单段生成，返回任务回执。先预检；每次新操作使用唯一请求标识，网络不确定时保留同一标识和参数核对，勿改键重发。不会自动采用结果。"""
         if not idempotency_key.strip() or len(idempotency_key) > 160:
             raise ValueError('请求标识必须为 1–160 个字符且非空白')
-        return await request('POST', project_path(project_id) + '/tasks', json={'asset_id': asset_id, 'idempotency_key': idempotency_key, 'pipeline_stage_id': pipeline_stage_id, 'pipeline_values': pipeline_values or {}, 'prompt': prompt, 'seed': seed,
+        result = await request('POST', project_path(project_id) + '/tasks', json={'asset_id': asset_id, 'idempotency_key': idempotency_key, 'pipeline_stage_id': pipeline_stage_id, 'pipeline_values': pipeline_values or {}, 'prompt': prompt, 'seed': seed,
             **({'expected_revision': expected_revision} if expected_revision is not None else {})})
+        return await shape_task_result(result, project_id)
 
     @server.tool(annotations=write_record)
     async def submit_batch(project_id: str, asset_ids: list[str], idempotency_key: str,
@@ -50,8 +64,9 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         """按已审核候选和计划顺序提交成片装配。要求plan.revision及唯一请求标识；不批准分镜。同键同参数找回原任务，断线先get_submission_receipt查询，不能换键重提。完成后read_project读取成片候选，不代表最终采用。"""
         if expected_revision < 0 or not idempotency_key.strip() or len(idempotency_key) > 160:
             raise ValueError('需要非负计划版本及有效请求标识')
-        return await request('POST', project_path(project_id) + '/assembly', json={
+        result = await request('POST', project_path(project_id) + '/assembly', json={
             'expected_revision': expected_revision, 'idempotency_key': idempotency_key})
+        return await shape_task_result(result, project_id)
 
     @server.tool(annotations=read_only)
     async def read_assembly_edit(project_id: str) -> dict[str, Any]:
@@ -88,9 +103,10 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
                               width: int = 768, height: int = 1344,
                               creative_profile: Literal['general', 'adult-realism', 'adult-anime'] = 'general') -> dict[str, Any]:
         """生成独立图片候选。reference 需参考图片；text 不传图片、可设画幅。成人向配置仅支持虚构成年人和非露骨内容；断线保留原键查回执，不自动采用首尾帧。"""
-        return await request('POST', project_path(project_id) + '/keyframe-tasks', json={
+        result = await request('POST', project_path(project_id) + '/keyframe-tasks', json={
             'prompt': prompt, 'reference_image': reference_image, 'idempotency_key': idempotency_key,
             'seed': seed, 'mode': mode, 'width': width, 'height': height, 'creative_profile': creative_profile})
+        return await shape_task_result(result, project_id)
 
     @server.tool(annotations=read_only)
     async def get_speech_capability() -> dict[str, Any]:
@@ -114,19 +130,22 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
             body['gen_seconds'] = gen_seconds
         if seed is not None:
             body['seed'] = seed
-        return await request('POST', project_path(project_id) + '/speech-tasks', json=body)
+        result = await request('POST', project_path(project_id) + '/speech-tasks', json=body)
+        return await shape_task_result(result, project_id)
 
     @server.tool(annotations=read_only)
     async def get_submission_receipt(project_id: str, idempotency_key: str) -> dict[str, Any]:
-        """按原请求标识查生成任务，无需 ComfyUI 在线，不提交生成。404 只代表尚未落库，不证明原请求失败；保留原键并稍后核对。"""
-        return await request('GET', project_path(project_id) + '/submission-receipt', params={'key': idempotency_key})
+        """按原请求标识查生成任务，无需 ComfyUI 在线，不提交生成。404 只代表尚未落库，不证明原请求失败；保留原键并稍后核对。远程回执以受控 media 引用替代服务器路径。"""
+        result = await request('GET', project_path(project_id) + '/submission-receipt', params={'key': idempotency_key})
+        return await shape_task_result(result, project_id)
 
     @server.tool(annotations=write_record)
     async def reconcile_generation(project_id: str, task_id: str) -> dict[str, Any]:
         """核对待恢复任务：视频查原 ComfyUI 队列/历史，声音及媒体工具查独立完成回执；找回结果到原任务，不创建重试或提交生成。无法确认时保留原状态。"""
         if not task_id or task_id in {'.', '..'} or '/' in task_id or '\\' in task_id:
             raise ValueError('必须提供有效任务 ID')
-        return await request('POST', project_path(project_id) + '/tasks/' + quote(task_id, safe='') + '/reconcile')
+        result = await request('POST', project_path(project_id) + '/tasks/' + quote(task_id, safe='') + '/reconcile')
+        return await shape_task_result(result, project_id)
 
     @server.tool(annotations=write_record)
     async def resolve_missing_execution(project_id: str, task_id: str,
@@ -146,7 +165,8 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         """请求停止指定作品的原任务，返回服务端实际状态；stop_requested 不代表已停止。继续 get_task 核对终态，待核对任务先 reconcile_generation。未知响应先查询原任务，不自动重发。"""
         if not task_id or task_id in {'.', '..'} or '/' in task_id or '\\' in task_id:
             raise ValueError('必须提供有效任务 ID')
-        return await request('POST', project_path(project_id) + '/tasks/' + quote(task_id, safe='') + '/stop')
+        result = await request('POST', project_path(project_id) + '/tasks/' + quote(task_id, safe='') + '/stop')
+        return await shape_task_result(result, project_id)
 
     @server.tool(annotations=write_record)
     async def resume_generation(project_id: str, task_id: str) -> dict[str, Any]:

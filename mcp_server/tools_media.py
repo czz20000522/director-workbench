@@ -1,17 +1,71 @@
-"""Audio editing and media inspection tools."""
+"""Audio editing, media inspection and controlled media delivery tools."""
 from __future__ import annotations
 
 from typing import Annotated, Any, Literal
+from urllib.parse import quote
 
 from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 from pydantic import Field, StrictBool
+
+if __package__:
+    from . import media
+else:
+    import media
 
 
 def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, write_record: ToolAnnotations) -> None:
     request = client.request
     project_path = client.project_path
     path_id = client.path_id
+
+    async def shape_task_result(result: dict[str, Any], project_id: str) -> dict[str, Any]:
+        if not client.remote or not result.get('ok') or not isinstance(result.get('data'), dict):
+            return result
+        result['data'] = await media.shape_task(client, project_id, result['data'])
+        return result
+
+    @server.tool(annotations=read_only)
+    async def list_media(project_id: str,
+                         category: Literal['all', 'assets', 'segments', 'assembly', 'references', 'tasks'] = 'all',
+                         kind: Literal['all', 'image', 'audio', 'video', 'file'] = 'all',
+                         limit: Annotated[int, Field(ge=1, le=100)] = 50,
+                         offset: Annotated[int, Field(ge=0)] = 0) -> dict[str, Any]:
+        """分页列出本作品可读取的候选视频/音频/图片、成片、审片和参考观察媒体。
+        只返回稳定 media_ref、文件事实和短期受控 URL，不返回服务器路径；媒体读取仍需本人会话。
+        用 next_offset 继续；任务产物通过 category='tasks' 读取。不会采用或审核任何候选。
+        """
+        return await request('GET', project_path(project_id) + '/media',
+                             params={'category': category, 'kind': kind, 'limit': limit, 'offset': offset})
+
+    @server.tool(annotations=read_only)
+    async def get_media_url(project_id: str, media_ref: str) -> dict[str, Any]:
+        """按稳定 media_ref 重新签发短期受控 URL（默认15分钟），用于候选查看和交付。
+        media_ref 由 list_media、get_task、read_reference 或观察工具返回；不接受服务器路径。
+        返回文件类型、大小和 URL；URL 仍需同一 Bearer 会话，过期后重新调用即可。
+        """
+        if not media_ref.strip() or len(media_ref) > 512:
+            raise ValueError('必须提供有效媒体引用')
+        refs = await media.issue_media(client, project_id, [media_ref])
+        entry = refs.get(media_ref)
+        if entry is None:
+            return {'ok': False, 'error': {'code': 'media_ref_unavailable',
+                                           'message': '媒体引用不存在、无权访问或文件已变化', 'retryable': False}}
+        return {'ok': True, 'data': entry}
+
+    @server.tool(annotations=read_only)
+    async def download_media(project_id: str, media_ref: str,
+                             max_inline_bytes: Annotated[int, Field(ge=1, le=media.MAX_INLINE_MEDIA_LIMIT)] = media.INLINE_MEDIA_LIMIT) -> dict[str, Any]:
+        """读取一个受控媒体文件：小文件直接返回 base64 内容，大文件只返回短期受控 URL。
+        不会回传服务器路径，也不会为超大文件拼接 base64。需要原文件时按返回 url 下载；
+        url 过期后重新调用 get_media_url。媒体内容本身不代表已审核或已采用。
+        """
+        if not media_ref.strip() or len(media_ref) > 512:
+            raise ValueError('必须提供有效媒体引用')
+        try:
+            return {'ok': True, 'data': await media.inline_media(client, project_id, media_ref, max_inline_bytes)}
+        except ValueError as exc:
+            return {'ok': False, 'error': {'code': 'invalid_inline_budget', 'message': str(exc), 'retryable': False}}
 
     @server.tool(annotations=write_record)
     async def submit_audio_edit(project_id: str, source_asset_id: str, idempotency_key: str,
@@ -27,7 +81,7 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         """
         if not source_asset_id.strip() or not idempotency_key.strip():
             raise ValueError('必须提供本作声音素材 ID 与请求标识')
-        return await request('POST', project_path(project_id) + '/audio-edit-tasks', json={
+        result = await request('POST', project_path(project_id) + '/audio-edit-tasks', json={
             'source_asset_id': source_asset_id, 'background_asset_id': background_asset_id,
             'idempotency_key': idempotency_key, 'start_seconds': start_seconds,
             'duration_seconds': duration_seconds, 'gain': gain,
@@ -35,6 +89,7 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
             'background_gain': background_gain, 'background_offset_seconds': background_offset_seconds,
             **({'pad_silence': True} if pad_silence else {}),
         })
+        return await shape_task_result(result, project_id)
 
     @server.tool(annotations=write_record)
     async def submit_audio_master(project_id: str, source_asset_id: str, idempotency_key: str,
@@ -50,7 +105,7 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         """
         if not source_asset_id.strip() or not idempotency_key.strip():
             raise ValueError('必须提供完整母版素材 ID 与请求标识')
-        return await request('POST', project_path(project_id) + '/audio-master-tasks', json={
+        result = await request('POST', project_path(project_id) + '/audio-master-tasks', json={
             'source_asset_id': source_asset_id, 'background_asset_id': background_asset_id,
             'idempotency_key': idempotency_key, 'target_lufs': target_lufs,
             'true_peak_dbtp': true_peak_dbtp, 'fade_in_seconds': fade_in_seconds,
@@ -58,6 +113,7 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
             'trim_duration_seconds': trim_duration_seconds, 'background_gain_db': background_gain_db,
             'ducking': ducking, **({'pad_silence': True} if pad_silence else {}),
         })
+        return await shape_task_result(result, project_id)
 
     @server.tool(annotations=read_only)
     async def get_media_capability() -> dict[str, Any]:
@@ -67,9 +123,10 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
     async def media_submit(project_id: str, idempotency_key: str, operation: str, **parameters: Any) -> dict[str, Any]:
         if not idempotency_key.strip():
             raise ValueError('必须保存并提供请求标识')
-        return await request('POST', project_path(project_id) + '/media-tasks', json={
+        result = await request('POST', project_path(project_id) + '/media-tasks', json={
             'operation': operation, 'idempotency_key': idempotency_key, **parameters,
         })
+        return await shape_task_result(result, project_id)
 
     @server.tool(annotations=write_record)
     async def create_silence(project_id: str, idempotency_key: str,
