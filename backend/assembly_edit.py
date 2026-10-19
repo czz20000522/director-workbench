@@ -1,7 +1,28 @@
 """Version-bound join reviews for a project's no-GPU assembly plan."""
 from __future__ import annotations
 
+import os
 from typing import Any
+
+
+def _media_identity(value: Any) -> Any:
+    """Compare the same registered media path across slash/case normalization."""
+    if not isinstance(value, str) or not value:
+        return value
+    return os.path.normcase(os.path.normpath(value)).replace('\\', '/')
+
+
+def _signature_matches(saved: Any, current: dict[str, Any]) -> bool:
+    if not isinstance(saved, dict):
+        return False
+    if set(saved) != set(current):
+        return False
+    for key, value in current.items():
+        expected = _media_identity(saved.get(key)) if key in {'left_video', 'right_video'} else saved.get(key)
+        actual = _media_identity(value) if key in {'left_video', 'right_video'} else value
+        if expected != actual:
+            return False
+    return True
 
 
 def join_key(left_id: str, right_id: str) -> str:
@@ -28,7 +49,7 @@ def joins(document: dict[str, Any], *, missing_videos=()) -> list[dict[str, Any]
         key = join_key(str(left.get('id')), str(right.get('id')))
         record = saved.get(key) if isinstance(saved, dict) else None
         current = signature(left, right)
-        stale = bool(record and record.get('signature') != current)
+        stale = bool(record and not _signature_matches(record.get('signature'), current))
         status = 'stale' if stale else (record or {}).get('status', 'pending')
         review_ready = bool(current['left_video'] and current['right_video'] and
                             left.get('id') not in missing and right.get('id') not in missing)
