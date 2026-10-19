@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import json
 import math
 import os
@@ -1396,6 +1397,31 @@ def adoption_file_identity(path: Path) -> dict[str, Any]:
     return {'path': str(path), 'size_bytes': stat.st_size, 'modified_ns': stat.st_mtime_ns}
 
 
+def adoption_segment_signature(document: dict[str, Any], asset_id: str) -> str | None:
+    """Hash only the adopted segment's own assembly-relevant fields.
+
+    A plan revision changes whenever any shot is added or edited; that must not
+    invalidate an untouched shot's adoption. The signature changes only when this
+    segment's duration, order, current candidate or task identity changes.
+    """
+    segment = next((item for item in document.get('segments', [])
+                    if isinstance(item, dict) and str(item.get('id')) == asset_id), None)
+    if segment is None:
+        return None
+    video = segment.get('video') if isinstance(segment.get('video'), dict) else {}
+    alternate = video.get('rework_candidate') or video.get('finish_review') or {}
+    payload = {
+        'id': asset_id,
+        'duration_seconds': segment.get('duration_seconds'),
+        'start_seconds': segment.get('start_seconds'),
+        'video_path': video.get('path'),
+        'current_version_task_id': segment.get('current_version_task_id') or segment.get('comfyui_task_id'),
+        'alternate_path': alternate.get('path') if isinstance(alternate, dict) else None,
+        'alternate_task_id': alternate.get('task_id') or alternate.get('prompt_id') if isinstance(alternate, dict) else None,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
+
+
 def adoption_binding_for_review(document: dict[str, Any], asset_id: str, candidate_ref: str,
                                 plan_revision: int, assembly_asset_id: str = 'MASTER') -> dict[str, Any]:
     candidate = adoption_candidate_path(candidate_ref)
@@ -1419,6 +1445,7 @@ def adoption_binding_for_review(document: dict[str, Any], asset_id: str, candida
         'task_id': task_id,
         'version_task_id': version_task_id,
         'plan_revision': plan_revision,
+        'segment_signature': adoption_segment_signature(document, asset_id),
         'file_identity': adoption_file_identity(candidate),
     }
 
@@ -1443,9 +1470,9 @@ def assembly_adoption_blockers(manifest: dict[str, Any], document: dict[str, Any
                              'message': f'{asset_id} 尚未有带候选身份的明确采用记录。'})
             continue
         binding = review['adoption_binding']
-        if binding.get('plan_revision') != revision:
+        if binding.get('segment_signature') != adoption_segment_signature(document, asset_id):
             blockers.append({**base, 'code': 'adoption_plan_stale',
-                             'message': f'{asset_id} 的采用记录来自计划 revision {binding.get("plan_revision")}，当前为 {revision}；请重新采用。'})
+                             'message': f'{asset_id} 的分镜内容、时长或当前候选已变化；请重新采用。'})
             continue
         file_identity = binding.get('file_identity') or {}
         try:
@@ -3846,3 +3873,4 @@ REMOTE_MCP = remote_mcp.install(app,http_app_provider=lambda:app,
 if DIST.is_dir():
     # This mount is last so that /api and /media remain explicit backend routes.
     app.mount("/", WorkbenchStaticFiles(directory=DIST, html=True), name="director-ui")
+
