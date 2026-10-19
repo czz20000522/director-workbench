@@ -41,4 +41,6 @@
 - browser gate：通过，报告见 `browser.log`。
 - public docs/source gates：通过，源代码语法及 45 个相对链接通过；public source 8 passed。
 
+Notion 工作台连接当前不可用，已按约定写入 `C:\Users\Tomczz\.agents\state\notion-work-management\outbox\f110345c-f3a7-4a00-bcdb-c264f913931e.json`，状态为 `PENDING_SYNC`；恢复连接后需按记录键查重再同步。
+
 所有候选仍需通过工作台试听、人工审核和装配预检后采用；本报告不代表作品交付或自动验收。
