@@ -133,7 +133,7 @@ export default function AssemblyEditPanel({ projectId, planRevision, assemblyPat
             ...Object.entries(row.video?.differences ?? {}).filter(([, value]) => value.different).map(([key]) => continuityDifferenceLabels[key] ?? key),
             ...Object.entries(row.audio?.differences ?? {}).filter(([, value]) => value.different).map(([key]) => continuityDifferenceLabels[key] ?? key),
           ];
-          return <div className="assembly-continuity-row" key={row.key}><strong>{row.left_id} → {row.right_id}</strong><span className={row.available ? 'assembly-continuity-ok' : 'assembly-continuity-unavailable'}>{row.available ? '已测量' : '不可用'}</span><small>{differences.length ? `规格差异：${differences.join('、')}` : '未发现规格差异'}{row.warnings.length ? ` · ${row.warnings.join('；')}` : ''}{row.reason ? ` · ${row.reason}` : ''}</small></div>;
+          return <div className="assembly-continuity-row" key={row.key}><strong>连续性 · {row.left_id} → {row.right_id}</strong><span className={row.available ? 'assembly-continuity-ok' : 'assembly-continuity-unavailable'}>{row.available ? '已测量' : '不可用'}</span><small>{differences.length ? `规格差异：${differences.join('、')}` : '未发现规格差异'}{row.warnings.length ? ` · ${row.warnings.join('；')}` : ''}{row.reason ? ` · ${row.reason}` : ''}</small></div>;
         })}</div> : <p>至少两个分镜才会形成自动检查接点。</p>}
       </section>
       <section><h3>相邻接点</h3><p>逐个查看前段末尾与后段开头，记录动作、构图和声音连续性。任一当前视频版本变化后，原结论会过期。</p>
