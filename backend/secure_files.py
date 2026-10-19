@@ -198,6 +198,7 @@ class VerifiedFileResponse(FileResponse):
         headers = dict(self.raw_headers)
         headers[b'content-range'] = f'bytes {start}-{end - 1}/{file_size}'.encode()
         headers[b'content-length'] = str(end - start).encode()
+        headers[b'connection'] = b'close'
         if send_header_only:
             await send({'type': 'http.response.start', 'status': 206, 'headers': list(headers.items())})
             await send({'type': 'http.response.body', 'body': b'', 'more_body': False})
@@ -210,7 +211,11 @@ class VerifiedFileResponse(FileResponse):
             while remaining:
                 chunk = await self._read(handle, min(self.chunk_size, remaining))
                 if not chunk:
-                    break
+                    # The declared range length can no longer be fulfilled.
+                    # Explicitly terminate the ASGI body; the close header
+                    # prevents a client from waiting for missing bytes.
+                    await send({'type': 'http.response.body', 'body': b'', 'more_body': False})
+                    return
                 remaining -= len(chunk)
                 await send({'type': 'http.response.body', 'body': chunk, 'more_body': bool(remaining)})
         finally:
@@ -223,6 +228,7 @@ class VerifiedFileResponse(FileResponse):
         headers = dict(self.raw_headers)
         headers[b'content-type'] = f'multipart/byteranges; boundary={boundary}'.encode()
         headers[b'content-length'] = str(content_length).encode()
+        headers[b'connection'] = b'close'
         if send_header_only:
             await send({'type': 'http.response.start', 'status': 206, 'headers': list(headers.items())})
             await send({'type': 'http.response.body', 'body': b'', 'more_body': False})
@@ -240,7 +246,8 @@ class VerifiedFileResponse(FileResponse):
                 while remaining:
                     chunk = await self._read(handle, min(self.chunk_size, remaining))
                     if not chunk:
-                        break
+                        await send({'type': 'http.response.body', 'body': b'', 'more_body': False})
+                        return
                     remaining -= len(chunk)
                     await send({'type': 'http.response.body', 'body': chunk, 'more_body': True})
                 await send({'type': 'http.response.body', 'body': b'\r\n', 'more_body': True})

@@ -108,6 +108,45 @@ async def test_verified_response_multiple_ranges_streams_each_chunk(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_verified_response_single_range_terminates_after_short_read(tmp_path, monkeypatch):
+    path = tmp_path / 'range.bin'
+    path.write_bytes(b'x' * 64)
+    candidate, identity = checked_file(path)
+    response = VerifiedFileResponse(candidate, identity=identity, stat_result=candidate.stat())
+    response.chunk_size = 4
+    reads = iter((b'abcd', b''))
+
+    async def short_read(handle, size):
+        return next(reads)
+
+    monkeypatch.setattr(response, '_read', short_read)
+    messages = await _messages(response, range_header='bytes=0-9')
+    assert dict(messages[0]['headers'])[b'connection'] == b'close'
+    assert messages[-1] == {'type': 'http.response.body', 'body': b'', 'more_body': False}
+    assert [message['body'] for message in messages[1:] if message['type'] == 'http.response.body'] == [b'abcd', b'']
+
+
+@pytest.mark.anyio
+async def test_verified_response_multipart_range_terminates_after_short_read(tmp_path, monkeypatch):
+    path = tmp_path / 'range.bin'
+    path.write_bytes(b'x' * 64)
+    candidate, identity = checked_file(path)
+    response = VerifiedFileResponse(candidate, identity=identity, stat_result=candidate.stat())
+    response.chunk_size = 4
+    reads = iter((b'abcd', b''))
+
+    async def short_read(handle, size):
+        return next(reads)
+
+    monkeypatch.setattr(response, '_read', short_read)
+    messages = await _messages(response, range_header='bytes=0-9,20-29')
+    assert dict(messages[0]['headers'])[b'connection'] == b'close'
+    assert messages[-1] == {'type': 'http.response.body', 'body': b'', 'more_body': False}
+    body = b''.join(message['body'] for message in messages[1:] if message['type'] == 'http.response.body')
+    assert body.endswith(b'abcd')
+
+
+@pytest.mark.anyio
 async def test_verified_response_rejects_excessive_ranges(tmp_path):
     path = tmp_path / 'range.bin'
     path.write_bytes(b'x' * 64)
