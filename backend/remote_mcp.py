@@ -34,7 +34,7 @@ REMOTE_TOOLS = (
     # Generation, keyframes, speech, assembly, and task receipts/stopping.
     'submit_shot', 'submit_batch', 'get_keyframe_capability', 'submit_assembly',
     'read_assembly_edit', 'review_assembly_join', 'set_assembly_sound',
-    'preflight_assembly_edit', 'submit_keyframe', 'get_speech_capability',
+    'preflight_assembly_edit', 'check_assembly_continuity', 'submit_keyframe', 'get_speech_capability',
     'submit_speech', 'get_submission_receipt', 'reconcile_generation',
     'stop_generation',
     # CPU media capability and project-owned candidate tasks.
