@@ -6,10 +6,11 @@ module owns and prunes.  Both ways in are bounded:
 * Under the suite harness the caller exports ``DIRECTOR_TEST_RUNTIME``, that run's run
   root.  Scratch directories land inside it and go away with the run root, which
   ``tools/run_project_tests.py`` prunes as a unit.
-* A hand-run interpreter has no run root, so scratch lands in a directory of this
-  module's own under the system temporary directory.  It deliberately does not land in
-  the machine runtime tree: that tree holds live roots — accounts, the checkout's
-  relocation backup — and a hand-run pytest would leave its scratch sitting beside them.
+* A hand-run interpreter has no run root, so scratch lands in the checkout's ignored
+  ``.t`` directory. Test output belongs to the project domain: it must stay locatable
+  and cleanable with the checkout, not drift into the OS temp dir or a drive root.
+  The published tree is still protected: scratch may only use ``.t``, never another
+  checkout path.
 
 Pruning touches entries whose name starts with the caller's prefix, so anything else
 dropped in the same directory — and any entry another run created moments ago — is
@@ -21,7 +22,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import sys
-import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -32,7 +32,7 @@ from tools.remove_tree import remove_tree
 # pytest suite, where the scratch directories are a subset of that run's artifacts.
 OVERRIDE = 'DIRECTOR_TEST_RUNTIME'
 # Only ever used when no run root was exported; it is a name, not a root.
-FALLBACK_DIRNAME = 'director-workbench-test-runtime'
+FALLBACK_DIRNAME = '.t'
 KEEP = 4
 # Long enough to outlive one case rather than one session: this only has to protect a
 # directory another run created seconds ago, and every minute it covers is another run's
@@ -42,22 +42,21 @@ MIN_AGE_SECONDS = 60.0
 
 
 def base_root() -> Path:
-    """Where scratch directories go: this run's run root, else a temporary directory.
+    """Where scratch directories go: this run's run root, else the checkout's .t.
 
     The fallback is resolved now rather than frozen at import so an exported location is
-    honoured whenever the variable was set, and the machine runtime tree is never a
-    fallback: a hand-run pytest has no run root and would otherwise leave its scratch in
-    among the live roots the operator keeps there.
-
-    The checkout is refused because test artifacts must never enter the published tree,
-    and a stray exported variable is a cheap way for them to do exactly that.
+    honoured whenever the variable was set. Test output is project-owned: the fallback
+    lives in the ignored ``.t`` directory under the checkout, not the OS temp dir or the
+    machine runtime tree. Only ``.t`` is allowed inside the checkout; any other checkout
+    path is refused because test artifacts must never enter the published tree.
     """
     value = os.environ.get(OVERRIDE)
-    root = Path(value).resolve() if value else (Path(tempfile.gettempdir()) / FALLBACK_DIRNAME).resolve()
     checkout = Path(paths.PROJECT_ROOT).resolve()
-    if root == checkout or root.is_relative_to(checkout):
+    allowed = (checkout / FALLBACK_DIRNAME).resolve()
+    root = Path(value).resolve() if value else allowed
+    if root == checkout or (root.is_relative_to(checkout) and not root.is_relative_to(allowed)):
         raise ValueError(f'scratch root {root} is inside the checkout ({checkout}); '
-                         'test artifacts must not enter the published tree')
+                         'only the ignored .t test directory may own scratch output')
     return root
 
 
