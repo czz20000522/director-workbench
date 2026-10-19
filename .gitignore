@@ -23,6 +23,7 @@
 /.agents/skills/aigc-video-production/scripts/*
 !/backend/
 /backend/*
+!/backend/secure_files.py
 !/backend/routers/
 /backend/routers/*
 !/backend/routers/__init__.py
@@ -62,6 +63,7 @@
 !/src/app/hooks.ts
 !/tests/
 /tests/*
+!/tests/test_secure_files.py
 !/tests/conftest.py
 !/tests/support.py
 !/tools/

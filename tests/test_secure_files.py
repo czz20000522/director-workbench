@@ -8,7 +8,7 @@ def test_open_checked_rejects_a_replaced_file(tmp_path):
     path = tmp_path / 'asset.bin'
     path.write_bytes(b'old')
     _, identity = checked_file(path)
-    path.write_bytes(b'new')
+    path.write_bytes(b'new-content')
     with pytest.raises(AccessDenied):
         open_checked(path, identity)
 
