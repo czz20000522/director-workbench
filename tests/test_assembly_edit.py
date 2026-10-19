@@ -272,3 +272,26 @@ def test_mcp_assembly_edit_matches_http_contract(edit_client):
             assert any(item['code'] == 'adoption_required' for item in checked['data']['blockers'])
 
     asyncio.run(verify())
+
+
+def test_join_signature_normalizes_equivalent_media_paths():
+    from backend import assembly_edit
+    document = {
+        'segments': [
+            {'id': 'S01', 'start_seconds': 0, 'end_seconds': 4, 'duration_seconds': 4,
+             'video': {'path': 'E:/workspaces/user/series/work/tasks/a/00.mp4'}, 'current_version_task_id': 'a'},
+            {'id': 'S02', 'start_seconds': 4, 'end_seconds': 8, 'duration_seconds': 4,
+             'video': {'path': 'E:/workspaces/user/series/work/tasks/b/00.mp4'}, 'current_version_task_id': 'b'},
+        ],
+        'assembly_edit': {'joins': {'S01>S02': {
+            'status': 'approved',
+            'signature': {'left_video': r'E:\workspaces\user\series\work\tasks\a\00.mp4',
+                          'right_video': 'E:/workspaces/user/series/work/tasks/b/00.mp4',
+                          'left_version': 'a', 'right_version': 'b',
+                          'left_duration': 4, 'right_duration': 4},
+        }}},
+    }
+    rows = assembly_edit.joins(document)
+    assert rows[0]['review_completed'] is True
+    assert assembly_edit.blocking_joins(document) == []
+
