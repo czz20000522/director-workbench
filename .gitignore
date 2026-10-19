@@ -78,6 +78,11 @@
 !/tools/
 /tools/*
 !/tools/qwen_image_t2i.py
+# Test-impact selection: the tool, its impact map and their contract tests. The map
+# names only repository-relative public paths.
+!/tools/select_tests.py
+!/tools/test_impact.toml
+!/tests/test_test_impact.py
 !/src/quick-create.css
 !/.agents/skills/aigc-video-production/assets/workflows/
 /.agents/skills/aigc-video-production/assets/workflows/*
