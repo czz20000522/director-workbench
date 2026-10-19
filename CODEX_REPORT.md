@@ -16,7 +16,7 @@
 - 目标 pytest：`11 passed, 3 skipped`；跳过项均因本机 FFmpeg/ffprobe 不可用，未伪造媒体结果。
 - Core gate：`run_tests.ps1 -Suite core -Check` → `core=passed`。
 - Ruff：`python -m ruff check` → passed。
-- Public source：`tools/export_public_source.py --check` → 307 files checked；`tools/check_public_docs.py` → 45 links passed。
+- Public source：`tools/export_public_source.py --check` → 308 files checked；`tools/check_public_docs.py` → 45 links passed。
 - 前端：`npm run build` → TypeScript 检查与 Vite build passed。
 - Browser：`node tests/assembly_edit.browser.mjs` → join review、音轨选择、预检和“已测量”状态通过。
 - 未执行：push、合并、服务启停、真实 GPU 或作品生成。
