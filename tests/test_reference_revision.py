@@ -34,14 +34,17 @@ def test_stale_conversion_has_no_plan_seed_or_archive_writes(reverse_client):
     before = path.read_bytes()
     records = backend.project_records('project-a')
     files = set(path.parent.rglob('*'))
-    response = client.post(url + '/convert', json={'expected_revision': 0})
+    # 显式合同：转换必须提交调用方分镜；旧版本靠时间线推导，会被 422 拒绝而不是写计划。
+    shots = [{'segment_id': 'R01', 'start_seconds': 0, 'end_seconds': 5,
+              'fields': {'performance': '另一位导演的新校订'}}]
+    response = client.post(url + '/convert', json={'expected_revision': 0, 'shots': shots})
     assert response.status_code == 409
     assert response.json()['detail']['current_revision'] == 1
     assert path.read_bytes() == before
     assert set(path.parent.rglob('*')) == files
     assert not Path(manifest['plan_path']).exists()
     assert backend.project_records('project-a') == records
-    converted = client.post(url + '/convert', json={'expected_revision': 1})
+    converted = client.post(url + '/convert', json={'expected_revision': 1, 'shots': shots})
     assert converted.status_code == 200
     assert converted.json()['created_segments'][0]['performance'] == '另一位导演的新校订'
     assert converted.json()['created_segments'][0]['source_revision'] == 1

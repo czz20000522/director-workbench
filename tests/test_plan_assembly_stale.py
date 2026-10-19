@@ -30,7 +30,12 @@ def test_plan_edits_stale_assembly_preserving_candidate_and_review_history(prese
         analysis = backend.resolve_registered_path(manifest['workspace_root']) / 'reference-analysis/ref-test/analysis.json'
         analysis.parent.mkdir(parents=True)
         analysis.write_text(json.dumps({'id': 'ref-test', 'project_id': 'preset-test', 'timeline': [{'id': 'R01', 'start_seconds': 0, 'end_seconds': 5}], 'artifacts': {}, 'stages': []}), encoding='utf-8')
-        response = client.post(BASE + '/reverse-analyses/ref-test/convert')
+        # 显式合同：调用方必须提交分镜；参考时间线本身不能当镜头。
+        response = client.post(BASE + '/reverse-analyses/ref-test/convert', json={
+            'expected_revision': 0,
+            'shots': [{'segment_id': 'R01', 'start_seconds': 0, 'end_seconds': 5,
+                       'fields': {'performance': '显式提交的表演'}}],
+        })
     else:
         response = client.post(BASE + '/plan/segments/S01/operate', json={'operation': operation, 'expected_revision': revision, 'before_id': '__end__', 'target_id': 'S02', 'split_at_seconds': 2})
     assert response.status_code == 200, response.text

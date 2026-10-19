@@ -116,16 +116,22 @@ def test_conversion_is_repeatable_and_preserves_director_edits(reverse_client) -
     endpoint = "/api/projects/project-a/reverse-analyses/ref-test"
     corrected = client.patch(endpoint + "/timeline/R01", json={"user_note": "本作改为回头微笑", "status": "reviewed"})
     assert corrected.status_code == 200
-    first = client.post(endpoint + "/convert")
+    revision = corrected.json()['analysis']['revision']
+    # 显式合同：制作分镜字段必须由调用方提交，参考时间线/采样不能自动成为镜头。
+    shots = [{'segment_id': 'R01', 'start_seconds': 0, 'end_seconds': 5,
+              'fields': {'performance': '本作改为回头微笑',
+                         'source_observation': '模型观察',
+                         'source_user_note': '本作改为回头微笑'}}]
+    first = client.post(endpoint + "/convert", json={'expected_revision': revision, 'shots': shots})
     assert first.status_code == 200, first.text
     segment = first.json()["created_segments"][0]
     assert segment["performance"] == "本作改为回头微笑"
-    assert segment["source_revision"] == corrected.json()['analysis']['revision']
+    assert segment["source_revision"] == revision
     assert segment["source_range_seconds"] == [0, 5]
-    assert segment["source_note_status"] == 'reviewed'
+    assert segment["source_note_status"] == 'pending_review'
     assert segment['source_observation'] == '模型观察'
     assert segment['source_user_note'] == '本作改为回头微笑'
-    assert segment["reference_frame"] == "source/frame.jpg"
+    assert 'reference_frame' not in segment
     assert segment["keyframes"]["first"] is None
     assert segment["workflow"] is None
     plan_path = Path(manifest["plan_path"])
@@ -134,7 +140,8 @@ def test_conversion_is_repeatable_and_preserves_director_edits(reverse_client) -
     plan["segments"][0]["workflow"] = "approved-workflow.json"
     plan_path.write_text(json.dumps(plan), encoding="utf-8")
     revision = plan["revision"]
-    second = client.post(endpoint + "/convert")
+    second = client.post(endpoint + "/convert",
+                         json={'expected_revision': first.json()['analysis']['revision'], 'shots': shots})
     assert second.status_code == 200
     assert second.json()["created_segments"] == []
     assert second.json()["plan"]["segments"][0]["performance"] == "导演已在制作页修改"
@@ -155,7 +162,9 @@ def test_reconversion_preserves_nested_merges_of_reference_samples(reverse_clien
     ]
     path.write_text(json.dumps(document), encoding='utf-8')
     endpoint = '/api/projects/project-a/reverse-analyses/ref-test'
-    converted = client.post(endpoint + '/convert').json()
+    shots = [{'segment_id': f'R{index:02d}', 'start_seconds': index - 1, 'end_seconds': index,
+              'fields': {'performance': f'显式样本 {index}'}} for index in range(1, 4)]
+    converted = client.post(endpoint + '/convert', json={'expected_revision': 0, 'shots': shots}).json()
     ids = [item['id'] for item in converted['created_segments']]
     plan = converted['plan']
     # Merge the tail first, then merge that combined shot into the head.
@@ -168,7 +177,7 @@ def test_reconversion_preserves_nested_merges_of_reference_samples(reverse_clien
     assert len(plan['segments']) == 1
     assert plan['segments'][0]['duration_seconds'] == 3
     revision = client.get(endpoint).json()['revision']
-    repeated = client.post(endpoint + '/convert', json={'expected_revision': revision})
+    repeated = client.post(endpoint + '/convert', json={'expected_revision': revision, 'shots': shots})
     assert repeated.status_code == 200, repeated.text
     assert repeated.json()['created_segments'] == []
     assert repeated.json()['plan'] == plan
@@ -178,7 +187,11 @@ def test_series_adaptation_changes_require_review_again(reverse_client) -> None:
     client, _, _ = reverse_client
     first = client.post("/api/project-state/creative", json={"values": {"creation_mode": "reference-series", "reference_series": "参考系列", "adaptation": "保留节奏"}})
     assert first.status_code == 200
-    converted = client.post("/api/projects/project-a/reverse-analyses/ref-test/convert").json()
+    converted = client.post("/api/projects/project-a/reverse-analyses/ref-test/convert", json={
+        'expected_revision': 0,
+        'shots': [{'segment_id': 'R01', 'start_seconds': 0, 'end_seconds': 5,
+                   'fields': {'performance': '参考系列的表演'}}],
+    }).json()
     segment_id = converted["created_segments"][0]["id"]
     review = client.post("/api/project-state/reviews", json={"asset_id": segment_id, "stage": "sample", "status": "approved"})
     assert review.status_code == 200
@@ -205,13 +218,18 @@ def test_human_correction_retains_original_evidence(reverse_client) -> None:
 
 def test_new_analysis_only_appends_its_own_drafts(reverse_client) -> None:
     client, manifest, analysis_path = reverse_client
-    client.post("/api/projects/project-a/reverse-analyses/ref-test/convert")
+    shots = [{'segment_id': 'R01', 'start_seconds': 0, 'end_seconds': 5,
+              'fields': {'performance': '显式来源分镜'}}]
+    first = client.post("/api/projects/project-a/reverse-analyses/ref-test/convert",
+                        json={'expected_revision': 0, 'shots': shots})
+    assert first.status_code == 200, first.text
     document = json.loads(analysis_path.read_text(encoding="utf-8"))
     document["id"] = "ref-second"
     second_path = analysis_path.parent.parent / "ref-second" / "analysis.json"
     second_path.parent.mkdir()
     second_path.write_text(json.dumps(document), encoding="utf-8")
-    response = client.post("/api/projects/project-a/reverse-analyses/ref-second/convert")
+    response = client.post("/api/projects/project-a/reverse-analyses/ref-second/convert",
+                           json={'expected_revision': document.get('revision', 0), 'shots': shots})
     assert response.status_code == 200
     segments = response.json()["plan"]["segments"]
     assert len(segments) == 2
@@ -263,7 +281,11 @@ def test_background_analysis_returns_receipt_deduplicates_and_survives_client_re
         release.set()
         assert finished.wait(3)
     assert client.get(endpoint + '/current').json()['job']['status'] == 'succeeded'
-    assert json.loads(analysis_path.read_text(encoding='utf-8'))['artifacts']['story']['summary'] == '后台结果'
+    saved = json.loads(analysis_path.read_text(encoding='utf-8'))
+    # 模型结果只登记为待校订候选；不能覆盖人工确认的工件摘要。
+    assert saved['artifacts']['story']['summary'] == '模型猜测'
+    assert saved['artifacts']['story']['model_candidate']['summary'] == '后台结果'
+    assert saved['artifacts']['story']['model_candidate']['user_status'] == 'unreviewed'
     assert not backend.REVERSE_SEMANTIC_LOCK.locked()
 
 
