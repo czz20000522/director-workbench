@@ -182,24 +182,28 @@ def test_b_user_http_submission_during_a_running_batch_gets_next_turn(queued_pri
     assert executed == [('user001', 'S01'), ('user002', 'S01'), ('user001', 'S02'), ('user002', 'S02'), ('user001', 'S03')]
 
 
-def test_uploaded_reference_is_persistently_queued_without_gpu_work(queued_private_app, monkeypatch):
+def test_uploaded_reference_registers_without_task_or_gpu_work(queued_private_app, monkeypatch):
     a, _, _, scheduler, executed = queued_private_app
     _, base = prepare(a, ['S01'])
     def must_not_execute(*args, **kwargs):
         raise AssertionError('Reference upload must not start model work')
     monkeypatch.setattr(backend, 'run_tracked_reference_decomposition', must_not_execute)
+    monkeypatch.setattr('tools.reference_decompose.media_facts', lambda source: {
+        'duration_seconds': 5.0, 'width': 640, 'height': 360, 'fps': 24.0,
+        'has_video': True, 'has_audio': True, 'audio_channels': 2, 'sample_rate': 48000,
+    })
     uploaded = a.post(base + '/reverse-analyses', files={'file': ('reference.mp4', b'isolated-video', 'video/mp4')})
     assert uploaded.status_code == 202, uploaded.text
     document = uploaded.json()
-    task_id = document['import_task_id']
-    task = a.get(base + '/tasks/' + task_id).json()
-    assert task['status'] == 'scheduler_waiting'
-    assert task['payload']['kind'] == 'reference_decomposition'
-    assert task['payload']['owner_user'] == 'user001'
-    assert task['queue']['resource'] == 'gpu'
+    # 显式合同：上传只登记素材；不自动拆解、不建任务、不占用 GPU。
+    assert document['status'] == 'registered'
+    assert document['observations'] == [] and document['timeline'] == []
+    assert 'import_task_id' not in document
+    assert a.get(base + '/tasks').json()['tasks'] == []
+    with backend.db() as connection:
+        assert connection.execute('SELECT COUNT(*) FROM tasks').fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM tasks WHERE payload LIKE '%reference_decomposition%'").fetchone()[0] == 0
     assert executed == []
-    stopped = a.post(base + '/tasks/' + task_id + '/stop')
-    assert stopped.status_code == 200 and stopped.json()['status'] == 'stopped'
     assert scheduler.tick(threaded=False) == []
 
 

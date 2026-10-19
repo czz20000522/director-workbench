@@ -222,7 +222,7 @@ def _has_explicit_frame_observation(document: dict[str, Any]) -> bool:
 def extract_reference_range(project_id: str, analysis_id: str, request: ReferenceRangeExtractRequest) -> dict[str, Any]:
     with backend.REVERSE_DOCUMENT_LOCK:
         document, path = backend.read_reverse_analysis(project_id, analysis_id)
-        source = _reference_source(document)
+        source = backend._reference_source(document)
         facts = document.get('source') if isinstance(document.get('source'), dict) else {}
         observation_id = f"range-{uuid.uuid4().hex[:10]}"
         try:
@@ -240,7 +240,7 @@ def extract_reference_range(project_id: str, analysis_id: str, request: Referenc
             'provenance': 'observable_fact', 'status': 'pending_review', 'user_status': 'unreviewed',
             'is_shot_cut': False, 'conversion_source': 'caller_must_submit_shot_list',
         }
-        _append_observation(document, observation)
+        backend._append_observation(document, observation)
         backend.write_reverse_analysis(document, path)
         return {'observation': observation, 'analysis': document}
 
@@ -249,7 +249,7 @@ def extract_reference_range(project_id: str, analysis_id: str, request: Referenc
 def sample_reference_frames(project_id: str, analysis_id: str, request: ReferenceSampleRequest) -> dict[str, Any]:
     with backend.REVERSE_DOCUMENT_LOCK:
         document, path = backend.read_reverse_analysis(project_id, analysis_id)
-        source = _reference_source(document)
+        source = backend._reference_source(document)
         facts = document.get('source') if isinstance(document.get('source'), dict) else {}
         observation_id = f"sample-{uuid.uuid4().hex[:10]}"
         try:
@@ -266,7 +266,7 @@ def sample_reference_frames(project_id: str, analysis_id: str, request: Referenc
             'is_shot_cut': False, 'review_label': '等距采样/待确认范围',
             'conversion_source': 'caller_must_submit_shot_list',
         }
-        _append_observation(document, observation)
+        backend._append_observation(document, observation)
         backend.write_reverse_analysis(document, path)
         return {'observation': observation, 'analysis': document}
 
@@ -276,7 +276,7 @@ def extract_reference_audio(project_id: str, analysis_id: str, request: Referenc
     """提取调用方明确指定范围的音频观察，不运行 ASR 或模型。"""
     with backend.REVERSE_DOCUMENT_LOCK:
         document, path = backend.read_reverse_analysis(project_id, analysis_id)
-        source = _reference_source(document)
+        source = backend._reference_source(document)
         facts = document.get('source') if isinstance(document.get('source'), dict) else {}
         if not facts.get('has_audio'):
             raise HTTPException(422, '参考素材没有可提取的音轨')
@@ -295,7 +295,7 @@ def extract_reference_audio(project_id: str, analysis_id: str, request: Referenc
             'status': 'pending_review', 'user_status': 'unreviewed',
             'review_label': '明确范围音频/待确认', 'conversion_source': 'caller_must_submit_shot_list',
         }
-        _append_observation(document, observation)
+        backend._append_observation(document, observation)
         backend.write_reverse_analysis(document, path)
         return {'observation': observation, 'analysis': document}
 
@@ -304,7 +304,7 @@ def extract_reference_audio(project_id: str, analysis_id: str, request: Referenc
 def transcribe_reference(project_id: str, analysis_id: str, _request: ReferenceAsrRequest) -> dict[str, Any]:
     with backend.REVERSE_DOCUMENT_LOCK:
         document, path = backend.read_reverse_analysis(project_id, analysis_id)
-        source = _reference_source(document)
+        source = backend._reference_source(document)
         facts = document.get('source') if isinstance(document.get('source'), dict) else {}
         if not facts.get('has_audio'):
             raise HTTPException(422, '参考素材没有可供 ASR 使用的音轨')
@@ -323,7 +323,7 @@ def transcribe_reference(project_id: str, analysis_id: str, _request: ReferenceA
             'transcript': transcript, 'provenance': 'model_inference', 'status': 'candidate_needs_review',
             'user_status': 'unreviewed', 'review_label': '模型候选/待校订',
         }
-        _append_observation(document, observation)
+        backend._append_observation(document, observation)
         transcript_artifact = document.setdefault('artifacts', {}).setdefault('transcript', {
             'title': '台词与歌词候选', 'evidence': [],
         })
@@ -495,7 +495,7 @@ def current_semantic_job(project_id: str, analysis_id: str) -> dict[str, Any]:
 @ROUTER.post("/api/projects/{project_id}/reverse-analyses/{analysis_id}/semantic-jobs", status_code=202)
 def start_semantic_job(project_id: str, analysis_id: str) -> dict[str, Any]:
     document, path = backend.read_reverse_analysis(project_id, analysis_id)
-    if not _has_explicit_frame_observation(document):
+    if not backend._has_explicit_frame_observation(document):
         raise HTTPException(422, {
             'code': 'explicit_observation_required',
             'message': '请先通过显式范围或采样工具提取至少一帧，再运行模型观察',
