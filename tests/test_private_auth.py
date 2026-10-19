@@ -57,6 +57,20 @@ def test_cookie_login_context_and_logout(private_client):
     assert client.get('/api/probe').status_code == 401
 
 
+def test_agent_token_login_returns_bearer_without_cookie(private_client):
+    client, sessions, _ = private_client
+    response = client.post('/api/auth/agent-token',
+                           json={'username': 'user001', 'password': 'test-one'})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['username'] == 'user001'
+    assert payload['token']
+    assert 'set-cookie' not in response.headers
+    assert client.cookies.get(COOKIE) is None
+    assert client.get('/api/probe', headers={'authorization': 'Bearer ' + payload['token']}).json() == {'username': 'user001'}
+    assert client.post('/api/auth/agent-token', json={'username': 'user001', 'password': 'wrong'}).status_code == 401
+
+
 def test_invalid_credentials_and_no_cookie_fallback(private_client):
     client, _, _ = private_client
     assert login(client, password='wrong').status_code == 401

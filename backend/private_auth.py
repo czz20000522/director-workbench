@@ -372,6 +372,38 @@ class PrivateAuth:
             return await Response(status_code=204, headers=headers)(scope, receive, send)
         if path == '/api/auth/config' and method == 'GET':
             return await JSONResponse({'enabled': True}, headers=response_headers())(scope, receive, send)
+        if path == '/api/auth/agent-token' and method == 'POST':
+            if request.headers.get('content-type', '').split(';')[0].strip() != 'application/json':
+                return await respond(415, '登录请求需要 JSON')
+            body = bytearray()
+            async for chunk in request.stream():
+                body.extend(chunk)
+                if len(body) > 8192:
+                    return await respond(413, '登录请求过大')
+            try:
+                values = json.loads(body)
+                if not isinstance(values, dict) or set(values) != {'username', 'password'}:
+                    raise ValueError()
+            except (ValueError, TypeError, UnicodeError):
+                return await respond(401, '用户名或密码错误')
+            source = request.client.host if request.client is not None else ''
+            username = values['username'] if isinstance(values['username'], str) else ''
+            if not self.login_allowed(username, source):
+                return await respond(429, '登录尝试过多，请稍后再试')
+            try:
+                token = self.sessions.login(values['username'], values['password'])
+            except (ValueError, TypeError, UnicodeError, AuthenticationError):
+                self.record_login_failure(username, source)
+                return await respond(401, '用户名或密码错误')
+            self.clear_login_failures(username, source)
+            identity = self.sessions.lookup(token)
+            principal = Principal(identity, token, identity.username in self.administrators)
+            payload = self.public_identity(principal)
+            payload['token'] = token
+            headers = response_headers()
+            headers['Cache-Control'] = 'no-store'
+            return await JSONResponse(payload, headers=headers)(scope, receive, send)
+
         if path == '/api/auth/login' and method == 'POST':
             if request.headers.get('content-type', '').split(';')[0].strip() != 'application/json':
                 return await respond(415, '登录请求需要 JSON')
