@@ -170,14 +170,36 @@ function Start-ManagedTunnel {
     Write-Host "反向隧道已启动：PID $($process.Id) -> $tunnelTarget（远端 127.0.0.1:${tunnelRemotePort}）" -ForegroundColor Green
 }
 
+function Invoke-ComfyControl([string]$Path, $Body) {
+    if (-not (Test-TcpPort '127.0.0.1' $ComfyPort)) { return }
+    try {
+        if ($null -ne $Body) {
+            $payload = $Body | ConvertTo-Json -Compress
+            Invoke-RestMethod -Uri "http://127.0.0.1:$ComfyPort$Path" -Method Post -ContentType 'application/json' -Body $payload -TimeoutSec 3 | Out-Null
+        } else {
+            Invoke-RestMethod -Uri "http://127.0.0.1:$ComfyPort$Path" -Method Post -TimeoutSec 3 | Out-Null
+        }
+    } catch { }
+}
+
+function Release-ComfyResources {
+    if (-not (Test-TcpPort '127.0.0.1' $ComfyPort)) { return }
+    Write-Host '正在取消当前生成并请求 ComfyUI 卸载模型、释放显存……' -ForegroundColor Yellow
+    Invoke-ComfyControl '/interrupt' $null
+    Invoke-ComfyControl '/free' @{ unload_models = $true; free_memory = $true }
+    Start-Sleep -Seconds 2
+}
+
 function Stop-DirectorServices {
     if ($publicEnabled) { Stop-ManagedTunnel }
+    Release-ComfyResources
+
     $workbench = Get-ListenerProcess $WorkbenchPort
     if ($workbench) {
         if ($workbench.CommandLine -notmatch 'director-workbench') {
             throw "端口 $WorkbenchPort 由未知进程占用，未停止：PID $($workbench.ProcessId)。"
         }
-        Stop-Process -Id $workbench.ProcessId -Force
+        & taskkill.exe /PID $($workbench.ProcessId) /T /F 2>$null | Out-Null
         $parent = Get-CimInstance Win32_Process -Filter "ProcessId = $($workbench.ParentProcessId)" -ErrorAction SilentlyContinue
         if ($parent -and $parent.CommandLine -match 'start_private_workbench\.ps1') {
             Stop-Process -Id $parent.ProcessId -Force -ErrorAction SilentlyContinue
@@ -193,12 +215,27 @@ function Stop-DirectorServices {
         if ($comfy.CommandLine -notmatch 'ComfyUI.*main\.py') {
             throw "端口 $ComfyPort 由未知进程占用，未停止：PID $($comfy.ProcessId)。"
         }
-        Stop-Process -Id $comfy.ProcessId -Force
+        & taskkill.exe /PID $($comfy.ProcessId) /T /F 2>$null | Out-Null
         Wait-PortClosed $ComfyPort 15
         Write-Host "ComfyUI 已停止：端口 $ComfyPort" -ForegroundColor Green
     } else {
         Write-Host "ComfyUI 未运行：端口 $ComfyPort" -ForegroundColor DarkGray
     }
+
+    # Defensive cleanup: renderer/builder children can outlive a force-killed parent on Windows.
+    $leftover = Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match 'director-workbench|h3_render\.py|build_assembly_workflow\.py|build_video_finish_workflow\.py' }
+    foreach ($process in $leftover) {
+        & taskkill.exe /PID $($process.ProcessId) /T /F 2>$null | Out-Null
+    }
+    if ($leftover) { Write-Host '已清理残留的渲染/构建子进程。' -ForegroundColor Green }
+
+    Start-Sleep -Seconds 1
+    $gpuUsed = & nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>$null
+    if ($LASTEXITCODE -eq 0 -and $gpuUsed) {
+        Write-Host "当前显存占用：$gpuUsed MiB（工作台与引擎进程已结束，驱动会回收其余占用）" -ForegroundColor Green
+    }
+    Write-Host '工作台内存与显存资源已释放。' -ForegroundColor Green
 }
 
 function Show-DirectorServiceStatus {
