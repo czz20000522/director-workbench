@@ -12,6 +12,8 @@ export type PipelineStage = {
   outputs: string[];
   recipe: string;
   generation_mode?: 'text_to_video' | 'image_to_video';
+  preset_id?: string;
+  aspect_ratio?: '16:9' | '1:1' | '9:16';
   note: string;
   inputSpecs?: PipelineInput[];
   outputSpecs?: PipelineOutput[];

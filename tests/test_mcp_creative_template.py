@@ -29,7 +29,7 @@ def test_mcp_series_snapshot_creates_independent_unapproved_draft(preset_client,
                 return result['data']
             template = await call('read_project', {'project_id': 'preset-test', 'section': 'creative-template'})
             assert template['source']['revision'] == before['creative']['revision']
-            created = await call('create_project', {'series': '系列副本', 'title': '下一集', 'project_id': 'next-episode'})
+            created = await call('create_project', {'series': '系列副本', 'title': '下一集', 'project_id': 'next-episode', 'creation_mode': 'advanced'})
             target = created['project']['id']
             await call('save_creative_draft', {'project_id': target, 'expected_revision': 0, 'values': template['values']})
             state = await call('read_project', {'project_id': target, 'section': 'state'})

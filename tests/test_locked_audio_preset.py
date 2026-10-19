@@ -60,7 +60,8 @@ def test_install_locked_preserves_existing_stages_and_freezes_source_audio_route
     validation = client.post('/api/projects/preset-test/pipeline/' + presets.stage_id(presets.LOCKED_PRESET_ID) + '/validate',
                              json={'asset_id': 'S01', 'values': {}})
     assert validation.status_code == 200 and validation.json()['valid'], validation.text
-    submitted = client.post('/api/projects/preset-test/tasks', json={'asset_id': 'S01'})
+    submitted = client.post('/api/projects/preset-test/tasks', json={
+        'asset_id': 'S01', 'pipeline_stage_id': presets.stage_id(presets.LOCKED_PRESET_ID)})
     assert submitted.status_code == 200, submitted.text
     graph = json.loads(Path(submitted.json()['payload']['workflow']).read_text(encoding='utf-8'))
     assert graph['105:104']['inputs']['audio_mode'] == 'lock_source'

@@ -6,7 +6,7 @@ def setup(client, project):
     install(client)
     add_shot(client, project, 'S01')
     add_shot(client, project, 'S02')
-    assert client.post('/api/projects/create', json={'series': '测试', 'title': 'other', 'project_id': 'other'}).status_code == 200
+    assert client.post('/api/projects/create', json={'creation_mode': 'advanced', 'series': '测试', 'title': 'other', 'project_id': 'other'}).status_code == 200
 
 
 def test_target_batch_stop_and_resume_keep_frozen_inputs(preset_client):

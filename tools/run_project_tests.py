@@ -17,7 +17,7 @@ from tools.remove_tree import remove_tree
 
 PROJECT = paths.PROJECT_ROOT
 BROWSER_TESTS = (
-    'assembly_edit', 'automatic_creation', 'client_restore', 'enhancement',
+    'assembly_edit', 'explicit_creation', 'client_restore', 'enhancement',
     'generation_stage', 'guide_queue', 'guide_review', 'media_tools_panel',
     'queued_panels', 'reference_queue', 'speech_panel',
     'quick_generation', 'media_qc', 'guide_joins', 'creative_review',

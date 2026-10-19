@@ -12,12 +12,29 @@ from pathlib import Path
 import time
 from typing import Any
 from fastapi import APIRouter, HTTPException
-from .. import creative_inspection, h3_duration, production_presets
-from ..schemas import PipelineStageCreateRequest, PlanSegmentCreateRequest, PlanSegmentOperationRequest, PlanSegmentUpdateRequest, SegmentDeleteRequest, ShotGenerationRequest
+from .. import creative_inspection, h3_duration, production_presets, shot_creation
+from ..schemas import PipelineStageCreateRequest, PlanSegmentCreateRequest, PlanSegmentOperationRequest, PlanSegmentUpdateRequest, SegmentDeleteRequest
 from .. import app as backend
 
 
 ROUTER = APIRouter()
+
+
+def plan_selection_error(project_id: str, manifest: dict[str, Any], exc: Exception) -> HTTPException:
+    """Turn a missing or unsupported explicit plan into a structured 422."""
+    selection = shot_creation.creation_options(manifest)
+    return HTTPException(422, {
+        'code': getattr(exc, 'code', 'creation_plan_required'),
+        'message': str(exc),
+        'options': selection,
+        'blockers': [{
+            'code': getattr(exc, 'code', 'creation_plan_required'),
+            'message': str(exc),
+            'object': {'kind': 'project', 'id': project_id},
+            'action': {'id': 'choose_plan', 'label': '显式选择制作方案或工作流', 'method': 'POST',
+                       'path': f'/api/projects/{project_id}/production-presets/{{preset_id}}'},
+        }],
+    })
 
 
 @ROUTER.post("/api/projects/{project_id}/pipeline/stages")
@@ -86,8 +103,10 @@ def create_plan_segment(project_id: str, request: PlanSegmentCreateRequest) -> d
         raise HTTPException(404, str(exc)) from exc
     principal = backend.current_principal.get()
     if principal and not principal.administrator and request.workflow:
-        if request.workflow != (manifest.get('production_preset') or {}).get('workflow'):
-            raise HTTPException(403, '工作流由管理员维护，请选择已配置的制作方案')
+        installed = {str(ref) for stage in manifest.get('pipeline', [])
+                     for ref in ((stage.get('execution') or {}).get('references') or []) if ref}
+        if request.workflow not in installed:
+            raise HTTPException(403, '工作流由管理员维护，请选择已安装的制作方案')
     plan_value = manifest.get("plan_path")
     if not plan_value:
         raise HTTPException(422, "项目没有可写入的计划路径")
@@ -104,8 +123,23 @@ def create_plan_segment(project_id: str, request: PlanSegmentCreateRequest) -> d
         except (OSError, ValueError) as exc:
             raise HTTPException(422, f"计划文件无法读取: {plan_path}") from exc
     backend.check_plan_revision(document, request.expected_revision)
-    if request.generation is not None:
-        backend.validate_creative_prompt(request.prompt, request.generation.creative_profile)
+    try:
+        workflow, preset_id = shot_creation.resolve_plan(manifest, request.workflow, request.preset_id)
+    except shot_creation.PlanSelectionError as exc:
+        raise backend.plan_selection_error(project_id, manifest, exc) from exc
+    first_frame = request.first_frame.strip() if request.first_frame else None
+    last_frame = request.last_frame.strip() if request.last_frame else None
+    audio_guide = request.audio_guide.strip() if request.audio_guide else None
+    try:
+        generation = shot_creation.normalize_generation(
+            preset_id,
+            request.generation.model_dump(exclude_unset=True) if request.generation else {},
+            explicit_fields=request.generation.model_fields_set if request.generation else set(),
+            first=first_frame, last=last_frame, guide=audio_guide,
+        )
+    except shot_creation.UnsupportedCombination as exc:
+        raise backend.plan_selection_error(project_id, manifest, exc) from exc
+    backend.validate_creative_prompt(request.prompt, generation['creative_profile'])
     segments = document.get("segments") if isinstance(document.get("segments"), list) else []
     next_start = sum(float(item.get("duration_seconds", 0) or 0) for item in segments if isinstance(item, dict))
     base_id = request.segment_id or f"S{len(segments) + 1:02d}"
@@ -123,8 +157,8 @@ def create_plan_segment(project_id: str, request: PlanSegmentCreateRequest) -> d
         "id": segment_id, "start_seconds": round(next_start, 3), "end_seconds": round(next_start + request.duration_seconds, 3),
         "duration_seconds": request.duration_seconds, "status": "planned", "location": request.location.strip(),
         "shot_size": request.shot_size.strip(), "camera": request.camera.strip(), "wardrobe": request.wardrobe.strip(),
-        "performance": request.performance.strip(), "prompt": (request.prompt or "").strip() or None, "workflow": (request.workflow or "").strip() or None,
-        "keyframes": {"first": request.first_frame.strip() if request.first_frame else None, "last": request.last_frame.strip() if request.last_frame else None},
+        "performance": request.performance.strip(), "prompt": (request.prompt or "").strip() or None, "workflow": workflow,
+        "keyframes": {"first": first_frame, "last": last_frame},
     }
     if request.script_scene_id is not None:
         segment.update(backend.validate_script_link(project_id, request.script_scene_id.strip(), request.expected_script_revision))
@@ -132,13 +166,8 @@ def create_plan_segment(project_id: str, request: PlanSegmentCreateRequest) -> d
         segment['audio'] = {key: value.strip() for key, value in (
             ('guide', request.audio_guide), ('delivery_master', request.delivery_master)
         ) if value and value.strip()}
-    if request.generation is not None:
-        if request.workflow and request.generation.mode == 'auto':
-            raise HTTPException(422, '自动创作不接受技术工作流，请清除引用或明确使用高级模式。')
-        segment['generation'] = request.generation.model_dump()
-    elif manifest.get('default_creation_mode') == 'auto' and not request.workflow:
-        segment['generation'] = ShotGenerationRequest().model_dump()
-    backend.resolve_automatic_shot(manifest, segment)
+    if request.generation is not None or preset_id is not None:
+        segment['generation'] = generation
     backend.validate_h3_plan_duration(manifest, segment)
     segments.append(segment)
     document["segments"] = segments
@@ -369,17 +398,22 @@ def update_plan_segment(project_id: str, segment_id: str, request: PlanSegmentUp
         raise HTTPException(404, "分镜不存在")
     principal = backend.current_principal.get()
     if principal and not principal.administrator and request.workflow is not None and request.workflow != segment.get('workflow', ''):
-        raise HTTPException(403, '工作流由管理员维护，请调整制作方案提供的参数')
+        installed = {str(ref) for stage in backend.require_project_manifest(project_id).get('pipeline', [])
+                     for ref in ((stage.get('execution') or {}).get('references') or []) if ref}
+        if request.workflow not in installed:
+            raise HTTPException(403, '工作流由管理员维护，请选择已安装的制作方案')
     if request.reference_asset_id:
         backend.shot_reference(backend.require_project_manifest(project_id), {'reference_asset_id': request.reference_asset_id})
     updates = request.model_dump(exclude_unset=True)
+    requested_preset = updates.pop('preset_id', None)
     if 'generation' in updates:
         if request.generation is None:
-            raise HTTPException(422, '请明确选择自动或高级创作，不能清除创作设置。')
-        updates['generation'] = ShotGenerationRequest(**{
-            **(segment.get('generation') or {}),
+            raise HTTPException(422, '请明确提供创作参数，不能清除创作设置。')
+        previous_generation = {key: value for key, value in (segment.get('generation') or {}).items() if key != 'mode'}
+        updates['generation'] = {
+            **previous_generation,
             **request.generation.model_dump(exclude_unset=True),
-        }).model_dump()
+        }
     updates.pop('expected_revision', None)
     updates.pop('expected_script_revision', None)
     updates.pop('script_scene_id', None)
@@ -412,12 +446,35 @@ def update_plan_segment(project_id: str, segment_id: str, request: PlanSegmentUp
         segment["audio"] = audio
     for key, value in updates.items():
         segment[key] = value.strip() if isinstance(value, str) else value
-    if request.workflow and (segment.get('generation') or {}).get('mode') == 'auto':
-        raise HTTPException(422, '自动创作不接受技术工作流，请明确切换高级模式。')
-    backend.validate_creative_prompt(str(segment.get('prompt') or ''), str((segment.get('generation') or {}).get('creative_profile', 'general')))
-    backend.resolve_automatic_shot(backend.require_project_manifest(project_id), segment)
-    if request.duration_seconds is not None or request.workflow is not None:
-        backend.validate_h3_plan_duration(backend.require_project_manifest(project_id), segment)
+    manifest = backend.require_project_manifest(project_id)
+    needs_plan = bool(requested_preset or 'workflow' in updates or 'generation' in updates or segment.get('workflow'))
+    if needs_plan:
+        try:
+            workflow, preset_id = shot_creation.resolve_plan(manifest, segment.get('workflow'), requested_preset)
+        except shot_creation.PlanSelectionError as exc:
+            raise backend.plan_selection_error(project_id, manifest, exc) from exc
+        segment['workflow'] = workflow
+        frames = segment.get('keyframes') if isinstance(segment.get('keyframes'), dict) else {}
+        audio = segment.get('audio') if isinstance(segment.get('audio'), dict) else {}
+        try:
+            generation = shot_creation.normalize_generation(
+                preset_id,
+                updates.get('generation') if 'generation' in updates else segment.get('generation'),
+                explicit_fields=request.generation.model_fields_set if request.generation is not None else set(),
+                first=frames.get('first'), last=frames.get('last'), guide=audio.get('guide'),
+            )
+        except shot_creation.UnsupportedCombination as exc:
+            raise backend.plan_selection_error(project_id, manifest, exc) from exc
+        if 'generation' in updates or preset_id is not None:
+            segment['generation'] = generation
+    else:
+        # Reference-derived drafts may not have a production plan yet. Editing
+        # their prompt or scene does not require selecting one; adding plan,
+        # workflow or generation fields does.
+        generation = segment.get('generation') if isinstance(segment.get('generation'), dict) else {}
+    backend.validate_creative_prompt(str(segment.get('prompt') or ''), str(generation.get('creative_profile', 'general')))
+    if needs_plan and (request.duration_seconds is not None or request.workflow is not None or requested_preset is not None):
+        backend.validate_h3_plan_duration(manifest, segment)
     backend.persist_plan_edit(project_id, document, plan_path)
     backend.record_segment_artifacts(project_id, segment)
     backend.mark_segment_checkpoints_stale(project_id, segment_id, "分镜内容已修改，需要重新确认受影响阶段")

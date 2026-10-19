@@ -9,13 +9,12 @@ from backend.keyframes import capability, prepare_text
 from tools.qwen_image_t2i import graph
 
 
-def test_adult_video_profiles_select_safe_recipes():
-    selected = shot_creation.resolve({
-        'aspect_ratio': '16:9', 'sound_mode': 'performance_reference',
-        'speed_profile': 'standard', 'creative_profile': 'adult-realism',
-    })
-    assert selected['preset_id'] == production_presets.ADULT_REALISM_TEXT_PRESET_ID
-    recipe = production_presets.load_recipe(selected['preset_id'])
+def test_adult_video_preset_is_explicit_and_loads_the_safe_recipe():
+    preset_id = production_presets.ADULT_REALISM_TEXT_PRESET_ID
+    settings = shot_creation.normalize_generation(preset_id, {'creative_profile': 'adult-realism'},
+                                                  explicit_fields={'creative_profile'})
+    assert settings['creative_profile'] == 'adult-realism'
+    recipe = production_presets.load_recipe(preset_id)
     assert recipe['105:121']['inputs']['lora_name'] == r'adult-safe\h3-realism-people-t2v-i2v-r2v.safetensors'
     assert recipe['105:126']['inputs']['value'] is False
 
@@ -56,72 +55,28 @@ def test_adult_prompt_boundary_rejects_prohibited_requests(prompt):
         backend.validate_creative_prompt(prompt, 'adult-realism')
 
 
-APPLIED_COMBINATIONS = [
-    ('general', '16:9', 'standard', True),
-    ('general', '9:16', 'standard', True),
-    ('adult-realism', '16:9', 'standard', True),
-    ('adult-realism', '16:9', 'fast', False),
-    ('adult-realism', '1:1', 'standard', False),
-    ('adult-realism', '9:16', 'standard', False),
-    ('adult-anime', '16:9', 'standard', False),
-    ('adult-anime', '16:9', 'fast', False),
-    ('adult-anime', '1:1', 'standard', False),
-    ('adult-anime', '9:16', 'standard', False),
-]
+def test_adult_preset_requires_explicit_adult_profile():
+    with pytest.raises(shot_creation.UnsupportedCombination, match='adult-realism'):
+        shot_creation.normalize_generation(production_presets.ADULT_REALISM_TEXT_PRESET_ID,
+                                           {'creative_profile': 'general'},
+                                           explicit_fields={'creative_profile'})
 
 
-@pytest.mark.parametrize('creative,aspect,speed,applied', APPLIED_COMBINATIONS)
-def test_video_reports_whether_requested_profile_was_applied(creative, aspect, speed, applied):
-    selected = shot_creation.resolve({'aspect_ratio': aspect, 'sound_mode': 'native',
-                                      'speed_profile': speed, 'creative_profile': creative})
-    assert selected['creative_profile'] == creative
-    assert selected['creative_profile_applied'] is applied
-    if applied:
-        assert selected['creative_profile_note'] == ''
-    else:
-        assert selected['creative_profile_note']
-        assert selected['preset_id'] not in production_presets.ADULT_PRESET_IDS
+@pytest.mark.parametrize('preset_id', [
+    production_presets.TEXT_LANDSCAPE_PRESET_ID,
+    production_presets.NATIVE_LANDSCAPE_PRESET_ID,
+    production_presets.END_PRESET_IDS[0],
+    production_presets.FAST_TEXT_LANDSCAPE_PRESET_ID,
+    production_presets.FAST_IMAGE_LANDSCAPE_PRESET_ID,
+])
+@pytest.mark.parametrize('profile', ['adult-realism', 'adult-anime'])
+def test_non_adult_presets_block_adult_profiles_instead_of_falling_back(preset_id, profile):
+    with pytest.raises(shot_creation.UnsupportedCombination, match='成人向'):
+        shot_creation.normalize_generation(preset_id, {'creative_profile': profile},
+                                           explicit_fields={'creative_profile'})
 
 
-def test_fallback_note_names_the_recipe_that_is_actually_used():
-    """DW-034: the note must describe the selected recipe, not a native one.
-
-    The fast profile and a bound performance audio both leave the adult recipe
-    family, so claiming a native recipe there would be false."""
-    for creative, aspect, speed in (('adult-realism', '16:9', 'fast'), ('adult-realism', '1:1', 'standard'),
-                                    ('adult-realism', '9:16', 'standard'), ('adult-anime', '16:9', 'fast'),
-                                    ('adult-anime', '1:1', 'standard'), ('adult-anime', '9:16', 'standard')):
-        selected = shot_creation.resolve({'aspect_ratio': aspect, 'sound_mode': 'native',
-                                          'speed_profile': speed, 'creative_profile': creative})
-        note = selected['creative_profile_note']
-        assert selected['creative_profile_applied'] is False
-        assert production_presets.title(selected['preset_id']) in note
-        if speed == 'fast':
-            assert '原生' not in production_presets.title(selected['preset_id'])
-            assert '原生配方' not in note
-
-
-def test_bound_performance_audio_reports_the_audio_recipe():
-    selected = shot_creation.resolve({'aspect_ratio': '9:16', 'sound_mode': 'performance_reference',
-                                      'speed_profile': 'standard', 'creative_profile': 'adult-realism'},
-                                     first='first', guide='guide')
-    assert selected['preset_id'] == production_presets.FIRST_PRESET_ID
-    assert selected['creative_profile_applied'] is False
-    assert production_presets.title(selected['preset_id']) in selected['creative_profile_note']
-
-
-def test_adult_anime_video_never_promises_an_adult_recipe():
-    for aspect in ('16:9', '1:1', '9:16'):
-        for first, last in ((None, None), ('first', None), ('first', 'last')):
-            shared = {'aspect_ratio': aspect, 'sound_mode': 'native', 'speed_profile': 'standard'}
-            anime = shot_creation.resolve({**shared, 'creative_profile': 'adult-anime'}, first=first, last=last)
-            plain = shot_creation.resolve({**shared, 'creative_profile': 'general'}, first=first, last=last)
-            assert anime['preset_id'] == plain['preset_id']
-            assert anime['creative_profile_applied'] is False
-            assert 'Qwen Anime Consistency' in anime['creative_profile_note']
-
-
-def test_fallback_recipes_load_no_adult_adapter():
+def test_non_adult_presets_load_no_adult_adapter():
     for preset_id in (production_presets.TEXT_LANDSCAPE_PRESET_ID, production_presets.NATIVE_LANDSCAPE_PRESET_ID,
                       production_presets.END_PRESET_IDS[0], production_presets.FAST_TEXT_LANDSCAPE_PRESET_ID,
                       production_presets.FAST_IMAGE_LANDSCAPE_PRESET_ID):

@@ -4,8 +4,12 @@ from backend import app as backend
 
 
 def prepare(client, project, monkeypatch, status='needs_reconcile'):
-    assert client.post('/api/projects/preset-test/plan/segments', json={'segment_id': 'S01', 'duration_seconds': 5, 'prompt': 'keep this edit'}).status_code == 200
-    assert client.post('/api/projects/create', json={'series': '测试', 'title': 'other', 'project_id': 'other'}).status_code == 200
+    installed = client.post('/api/projects/preset-test/production-presets/h3-guided')
+    assert installed.status_code == 200, installed.text
+    workflow = installed.json()['project']['production_preset']['workflow']
+    assert client.post('/api/projects/preset-test/plan/segments', json={
+        'segment_id': 'S01', 'duration_seconds': 5, 'prompt': 'keep this edit', 'workflow': workflow}).status_code == 200
+    assert client.post('/api/projects/create', json={'creation_mode': 'advanced', 'series': '测试', 'title': 'other', 'project_id': 'other'}).status_code == 200
     plan = project / 'workspaces/preset-test/plans/plan.json'
     output = project / 'output'
     output.mkdir()

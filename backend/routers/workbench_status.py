@@ -204,6 +204,8 @@ def pipeline_contract(stage: dict[str, Any], manifest: dict[str, Any] | None = N
                       and stage.get('recipe', '').startswith('H3 ')), None)
     if preset_id:
         value['input_specs'] = production_presets.input_specs(preset_id)
+        value['preset_id'] = preset_id
+        value['aspect_ratio'] = production_presets.aspect_ratio(preset_id)
     output_state = "待接入" if stage.get("status") == "待接入" else "待生成"
     value["output_specs"] = stage["output_specs"] if isinstance(stage.get("output_specs"), list) else [
         {"id": f"output-{index}", "label": label, "kind": backend.pipeline_value_kind(label),
@@ -245,15 +247,8 @@ def public_validate_pipeline(stage_id, request, manifest=None):
     project = manifest or backend.CURRENT_PROJECT
     try:
         if stage_id == 'auto':
-            document, _ = backend.load_project_plan(str(project['id']))
-            segment = next((row for row in document.get('segments', []) if row.get('id') == request.asset_id), None)
-            if not segment:
-                raise HTTPException(404, '分镜不存在')
-            _, selected = backend.select_preset_execution(project, segment.get('workflow'), None)
-            if not selected:
-                raise HTTPException(422, {'code': 'creation_recipe_unresolved',
-                    'message': '当前制作方式无法与已保存输入对应。请核对执行回执并修复配方身份；预检未修改作品。'})
-            stage_id = selected
+            raise HTTPException(422, {'code': 'explicit_stage_required',
+                                      'message': '自动制作方案已移除；请显式选择制作步骤后再预检。'})
         return backend.validate_project_pipeline(stage_id, request, manifest)
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, dict) else {'code': 'validation_failed', 'message': str(exc.detail)}
@@ -287,7 +282,7 @@ def validate_project_pipeline(stage_id: str, request: PipelineValidateRequest, m
     segment = next((item for item in document.get("segments", []) if isinstance(item, dict) and item.get("id") == request.asset_id), None)
     if isinstance(segment, dict) and segment.get("workflow") and not payload.get("workflow"):
         payload["workflow"] = str(segment["workflow"])
-    if not payload.get('workflow') and stage_id not in (None, 'auto'):
+    if not payload.get('workflow'):
         payload['workflow'], _ = backend.select_preset_execution(project, None, stage_id)
     if not payload.get('workflow'):
         raise HTTPException(422, {
@@ -307,8 +302,6 @@ def validate_project_pipeline(stage_id: str, request: PipelineValidateRequest, m
         result['h3_duration'] = prepared['h3_duration']
     if prepared.get('creative_inspection'):
         result['creative_inspection'] = prepared['creative_inspection']
-    if prepared.get('resolved_generation'):
-        result['resolved_generation'] = prepared['resolved_generation']
     blockers = backend.segment_dependency_blockers(document, segment or {})
     result['valid'] = not blockers
     result['blockers'] = blockers
@@ -353,7 +346,7 @@ def project_readiness(project_id: str, state: dict[str, Any]) -> dict[str, Any]:
     def select_stage(segment, available):
         workflow = segment.get('workflow')
         if not workflow:
-            return (available[0].get('id') if len(available) == 1 else None)
+            return None
         _, selected = backend.select_preset_execution(manifest, workflow, None)
         if selected:
             return selected
@@ -367,7 +360,6 @@ def project_readiness(project_id: str, state: dict[str, Any]) -> dict[str, Any]:
         validate=lambda stage, asset, values: backend.validate_project_pipeline(stage, PipelineValidateRequest(asset_id=asset, values=values), manifest),
         assembly_preflight=lambda: backend.preflight_project_assembly(project_id))
     result['installed_stages'] = [{'id': stage['id'], 'title': stage.get('title', stage['id'])} for stage in stages]
-    result['creation_mode'] = 'auto' if ((not document.get('segments') and manifest.get('default_creation_mode') == 'auto') or result['segments'] and all((segment.get('generation') or {}).get('mode') == 'auto' for segment in document.get('segments', []))) else 'advanced'
     selected_stages = {row.get('stage_id') for row in result['segments']}
     if not selected_stages:
         selected_stages = {select_stage({}, stages)}

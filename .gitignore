@@ -196,7 +196,7 @@
 !/start_backend.ps1
 !/start_private_workbench.ps1
 !/start_workbench.ps1
-!/tests/automatic_creation_bridge.py
+!/tests/explicit_creation_bridge.py
 !/tests/test_mcp_access_config.py
 !/tests/test_remote_mcp.py
 !/tests/test_analysis_recovery.py
@@ -208,7 +208,7 @@
 !/tests/test_audio_edit.py
 !/tests/test_audio_edit_api.py
 !/tests/test_audio_edit_tasks.py
-!/tests/test_automatic_creation.py
+!/tests/test_explicit_creation.py
 !/tests/test_backend_module_split.py
 !/tests/test_candidate_adoption.py
 !/tests/test_comfy_execution_reporting.py
@@ -349,12 +349,12 @@
 
 # Browser acceptance driven by tools/run_project_tests.py --suite browser.
 # Most listed drivers bundle the front end, intercept their own HTTP and use
-# isolated synthetic media. automatic_creation instead drives
+# isolated synthetic media. explicit_creation instead drives
 # the real local ASGI app through their bridge with seeded synthetic accounts
 # and fixtures, writing only under the runtime directory. None reads a private
 # path, personal account or work asset.
 !/tests/assembly_edit.browser.mjs
-!/tests/automatic_creation.browser.mjs
+!/tests/explicit_creation.browser.mjs
 !/tests/generation_stage.browser.mjs
 !/tests/guide_queue.browser.mjs
 !/tests/guide_review.browser.mjs

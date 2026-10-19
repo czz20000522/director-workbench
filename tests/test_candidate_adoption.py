@@ -13,7 +13,7 @@ BASE='/api/projects/preset-test'
 def candidate_fixture(client, project, *, stage='sample', kind=None):
     asset='MASTER' if stage=='final' else 'S01'
     if not kind and stage!='final':
-        assert client.post(BASE+'/plan/segments',json={'segment_id':asset,'duration_seconds':5}).status_code==200
+        assert client.post(BASE+'/plan/segments',json={'segment_id':asset,'duration_seconds':5,'workflow':'workflows/adoption.json'}).status_code==200
     manifest=backend.load_project_manifest('preset-test')
     document,path=backend.load_project_plan('preset-test')
     media=project/'workspaces/preset-test/assets/candidate.bin'
@@ -153,7 +153,10 @@ def test_private_frozen_task_owner_mismatch_cannot_adopt(private_workbench):
     from backend.user_context import UserContext
     a,_,ownership,_=private_workbench
     project=create(a);pid=project['id'];base='/api/projects/'+pid
-    assert a.post(base+'/plan/segments',json={'segment_id':'S01','duration_seconds':5}).status_code==200
+    installed=a.post(base+'/production-presets/h3-guided')
+    assert installed.status_code==200, installed.text
+    workflow=installed.json()['project']['production_preset']['workflow']
+    assert a.post(base+'/plan/segments',json={'segment_id':'S01','duration_seconds':5,'workflow':workflow}).status_code==200
     workspace=UserContext('user001',ownership.layout).project(pid)
     path=workspace/'plans/plan.json';document=json.loads(path.read_text(encoding='utf-8'))
     media=workspace/'assets/candidate.bin';media.write_bytes(b'private candidate')

@@ -13,7 +13,7 @@ CASES = [('reviews', {'asset_id': 'S01', 'stage': 'sample'}),
 @pytest.mark.parametrize('route,payload', CASES)
 def test_record_scope_and_conflict(preset_client, route, payload):
     client, _ = preset_client
-    assert client.post('/api/projects/create', json={'series': '测试', 'title': 'second', 'project_id': 'second'}).status_code == 200
+    assert client.post('/api/projects/create', json={'creation_mode': 'advanced', 'series': '测试', 'title': 'second', 'project_id': 'second'}).status_code == 200
     url = f'/api/projects/preset-test/{route}'
     assert client.post(url, json=payload).status_code == 422
     body = {**payload, 'expected_revision': 0, 'status': 'approved', 'source': 'test-agent'}

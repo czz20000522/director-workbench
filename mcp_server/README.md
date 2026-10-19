@@ -65,6 +65,7 @@ stdio 供服务器本机客户端或主动诊断使用，需要项目 Python 环
 - 写入使用工具要求的当前版本：计划、剧本、参考分析和审核各有 revision。409 后重读比较，不自动提高版本覆盖。MCP 与工作台随同发布，不探测/静默回退旧软件流程。
 - 提交生成前保存请求键。相同作品、键和参数返回原任务；不同参数冲突。写入超时可能标记 `outcome_unknown`，先查询原回执或保存内容，不盲目重发。创建、上传和新增分镜没有通用幂等保证，先读取核对。
 - `stop_requested` 不等于停止完成；`reconcile_generation` 核对原执行，不自动重试。`resume_generation` 可能返回原成功任务或创建新尝试，使用实际返回 ID 接续。`resolve_missing_execution` 要求先核实旧执行已结束、检查输出并提供说明，不能仅凭超时调用。
+- `create_project` 必须显式传 `creation_mode="advanced"`；`preflight` 必须传实际 `stage_id`；`create_shot`／`update_shot` 可传 `workflow` 或已安装的 `preset_id`。自动方案、`stage_id="auto"` 和 `generation.mode` 已移除；缺省或未安装时 HTTP 返回结构化阻塞和可选项，不写计划。
 - `submit_shot` 必须显式提供 `asset_id`；`submit_batch` 必须提供至少一个 `asset_ids`，不会隐式选择默认或全部分镜。分镜还必须绑定明确 workflow/制作方案，缺失时 HTTP 返回结构化 `workflow_required` blocker。`approve_candidate` 需要真实候选、当前计划/审核版本、非空说明和严格布尔 `confirm_adoption=true`。任务成功或技术检查不自动批准画面、音色、表演、采用或交付；明确采用也不表示用户亲自验收。
 
 可分发创作 Skill 位于 [director-workbench/SKILL.md](../.agents/skills/director-workbench/SKILL.md)。它描述业务使用方法，不含凭据或服务器部署地址，不自动安装到用户全局目录。

@@ -124,13 +124,13 @@ def test_image_history_and_result_validation_without_touching_plan(monkeypatch):
 
 def test_general_enhancement_requires_owned_project_and_files(private_workbench, monkeypatch, tmp_path):
     owner, other, _, _ = private_workbench
-    project = owner.post('/api/projects/create', json={'title': 'HD', 'series': '测试', 'creation_mode': 'auto'}).json()['project']
+    project = owner.post('/api/projects/create', json={'title': 'HD', 'series': '测试', 'creation_mode': 'advanced'}).json()['project']
     pid = project['id']
     source = register_image(owner, pid, tmp_path)
     for suffix in ('enhancements', 'enhancement-capability'):
         assert other.get(f'/api/projects/{pid}/{suffix}').status_code in (403, 404)
     assert other.post(f'/api/projects/{pid}/enhancement-tasks', json={'source': source, 'idempotency_key': 'other'}).status_code in (403, 404)
-    other_project = other.post('/api/projects/create', json={'title': 'Other', 'series': '测试', 'creation_mode': 'auto'}).json()['project']
+    other_project = other.post('/api/projects/create', json={'title': 'Other', 'series': '测试', 'creation_mode': 'advanced'}).json()['project']
     assert other.post(f"/api/projects/{other_project['id']}/enhancement-tasks", json={'source': source, 'idempotency_key': 'foreign-file'}).status_code in (403, 422)
 
 

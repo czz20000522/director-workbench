@@ -60,7 +60,9 @@ class ProjectImportRequest(BaseModel):
 
 
 class ProjectCreateRequest(BaseModel):
-    creation_mode: Literal['auto', 'advanced'] = 'auto'
+    # Creation mode is explicit and no longer has an implicit default.  `auto`
+    # was removed by Issue #116; only the explicit advanced contract remains.
+    creation_mode: Literal['advanced']
     series: str = Field(min_length=1, max_length=120)
     title: str = Field(min_length=1, max_length=160)
     project_id: str | None = None
@@ -112,6 +114,7 @@ class PlanSegmentCreateRequest(BaseModel):
     performance: str = Field(default="", max_length=1000)
     prompt: str = Field(default="", max_length=100000)
     workflow: str | None = Field(default=None, max_length=500)
+    preset_id: str | None = Field(default=None, max_length=120)
     first_frame: str | None = Field(default=None, max_length=500)
     last_frame: str | None = Field(default=None, max_length=500)
     audio_guide: str | None = Field(default=None, max_length=500)
@@ -304,6 +307,7 @@ class PlanSegmentUpdateRequest(BaseModel):
     performance: str | None = Field(default=None, max_length=1000)
     prompt: str | None = Field(default=None, max_length=100000)
     workflow: str | None = Field(default=None, max_length=500)
+    preset_id: str | None = Field(default=None, max_length=120)
     first_frame: str | None = Field(default=None, max_length=500)
     last_frame: str | None = Field(default=None, max_length=500)
     audio_guide: str | None = Field(default=None, max_length=500)

@@ -7,6 +7,7 @@ import pytest
 pytest.importorskip('mcp')
 from mcp import Client
 from mcp_server.server import create_server
+from support import install
 import threading
 
 REAL_THREAD = threading.Thread
@@ -96,6 +97,7 @@ def test_association_without_script_revision_does_not_reach_http(tool):
 def test_mcp_script_and_linked_shot_round_trip_to_real_backend(preset_client, monkeypatch):
     from backend import app as backend
     http, _ = preset_client
+    install(http)
     monkeypatch.setattr(threading, 'Thread', REAL_THREAD)
     async def verify():
         async with Client(create_server('http://localhost', httpx.ASGITransport(app=backend.app))) as client:
