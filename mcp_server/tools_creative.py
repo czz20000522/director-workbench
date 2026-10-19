@@ -12,14 +12,28 @@ from pydantic import Field, StrictBool
 if __package__:
     from .creation_inputs import GenerationSettings
     from .models import ScriptScene, ShotChanges, ShotMaterials
+    from . import media
 else:
     from creation_inputs import GenerationSettings
     from models import ScriptScene, ShotChanges, ShotMaterials
+    import media
 
 def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, write_record: ToolAnnotations) -> None:
     request = client.request
     project_path = client.project_path
     path_id = client.path_id
+
+    async def shape_tasks_result(result: dict[str, Any], project_id: str) -> dict[str, Any]:
+        if not client.remote or not result.get('ok') or not isinstance(result.get('data'), dict):
+            return result
+        result['data'] = await media.shape_tasks(client, project_id, result['data'])
+        return result
+
+    async def shape_task_result(result: dict[str, Any], project_id: str) -> dict[str, Any]:
+        if not client.remote or not result.get('ok') or not isinstance(result.get('data'), dict):
+            return result
+        result['data'] = await media.shape_task(client, project_id, result['data'])
+        return result
 
     @server.tool(annotations=read_only)
     async def list_projects() -> dict[str, Any]:
@@ -104,15 +118,21 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
 
     @server.tool(annotations=read_only)
     async def list_tasks(project_id: str, limit: int = 50, offset: int = 0) -> dict[str, Any]:
-        """分页读取指定作品的任务。使用 next_offset 继续；未知状态不等于失败。"""
-        return await request('GET', project_path(project_id) + '/tasks', params={'limit': limit, 'offset': offset})
+        """分页读取指定作品的任务。使用 next_offset 继续；未知状态不等于失败。
+        远程回执保留任务/素材 ID 和状态，以受控 media 引用替代服务器路径。
+        """
+        result = await request('GET', project_path(project_id) + '/tasks', params={'limit': limit, 'offset': offset})
+        return await shape_tasks_result(result, project_id)
 
     @server.tool(annotations=read_only)
     async def get_task(project_id: str, task_id: str) -> dict[str, Any]:
-        """读取一个任务的状态、冻结输入与结果；任务必须属于指定作品。"""
+        """读取一个任务的状态、冻结输入与结果；任务必须属于指定作品。
+        远程回执保留任务/素材 ID 和状态，以受控 media 引用替代服务器路径。
+        """
         if not task_id or '/' in task_id or '\\' in task_id or task_id in {'.', '..'}:
             raise ValueError('必须提供有效任务 ID')
-        return await request('GET', project_path(project_id) + '/tasks/' + quote(task_id, safe=''))
+        result = await request('GET', project_path(project_id) + '/tasks/' + quote(task_id, safe=''))
+        return await shape_task_result(result, project_id)
 
     @server.tool(annotations=read_only)
     async def list_shot_versions(
@@ -120,9 +140,14 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         limit: Annotated[int, Field(strict=True, ge=1, le=100)] = 20,
         offset: Annotated[int, Field(strict=True, ge=0)] = 0,
     ) -> dict[str, Any]:
-        """分页读取分镜生成历史及同源inspection/参考差异、实际时长、comparison_sources和change_impact。generated_at为生成完成时间UTC，snapshot_complete=false表示旧任务部分记录；技术探测不等于审核采用，读取不生成。"""
+        """分页读取分镜生成历史及同源inspection/参考差异、实际时长、comparison_sources和change_impact。generated_at为生成完成时间UTC，snapshot_complete=false表示旧任务部分记录；技术探测不等于审核采用，读取不生成。
+        远程候选以 media/candidate_ref 受控引用返回；采用时把该 candidate_ref 传给 approve_candidate，不传服务器路径。
+        """
         path = project_path(project_id) + '/segments/' + path_id(segment_id, '分镜') + '/versions'
-        return await request('GET', path, params={'limit': limit, 'offset': offset})
+        result = await request('GET', path, params={'limit': limit, 'offset': offset})
+        if client.remote and result.get('ok') and isinstance(result.get('data'), dict):
+            result['data'] = await media.shape_versions(client, project_id, result['data'])
+        return result
 
     @server.tool(annotations=write_record)
     async def restore_shot_version(

@@ -30,7 +30,8 @@ EXPECTED_REMOTE_TOOLS = (
     'read_project', 'read_script', 'save_script', 'list_tasks', 'get_task',
     'list_shot_versions', 'preflight', 'save_creative_draft', 'record_review',
     'approve_candidate', 'update_shot', 'arrange_shot', 'create_shot',
-    'reuse_materials', 'extract_reference_range', 'extract_reference_audio',
+    'reuse_materials', 'import_reference_from_material', 'import_reference_content',
+    'extract_reference_range', 'extract_reference_audio',
     'sample_reference_frames', 'transcribe_reference',
     'list_references', 'read_reference', 'start_reference_analysis',
     'reconcile_reference_analysis',
@@ -40,7 +41,8 @@ EXPECTED_REMOTE_TOOLS = (
     'read_assembly_edit', 'review_assembly_join', 'set_assembly_sound',
     'preflight_assembly_edit', 'check_assembly_continuity', 'submit_keyframe', 'get_speech_capability',
     'submit_speech', 'get_submission_receipt', 'reconcile_generation',
-    'stop_generation', 'submit_audio_edit', 'submit_audio_master', 'get_media_capability',
+    'stop_generation', 'list_media', 'get_media_url', 'download_media',
+    'submit_audio_edit', 'submit_audio_master', 'get_media_capability',
     'create_silence', 'inspect_video', 'transcribe_audio', 'export_silent_video',
 )
 FORBIDDEN_REMOTE_TOOLS = {

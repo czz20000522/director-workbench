@@ -12,16 +12,24 @@ MCP 是工作台 HTTP 业务的薄适配。账号权限、版本检查、任务�
 
 服务器使用已固定的 `mcp==2.2.0`，远程接口为 stateless、JSON 响应，生命周期由私人工作台进程管理。首批支持可配置 Bearer 的 Streamable HTTP 客户端；没有 OAuth 登录发现，只能 OAuth 且不能配置现有 Bearer 的宿主尚未支持。远程客户端无需 Windows Python 或 SSH 管理员凭据。服务仍使用维护者已配置的私人网络或隧道。
 
-**远程工具范围：**当前远程入口由 [remote_mcp.py](../backend/remote_mcp.py) 的固定名单过滤，开放 **54** 个工具；本机 stdio 全量工具为 **61** 个。远程工具按能力覆盖：
+**远程工具范围：**当前远程入口由 [remote_mcp.py](../backend/remote_mcp.py) 的固定名单过滤，开放 **60** 个工具；本机 stdio 全量工具为 **67** 个。远程工具按能力覆盖：
 
 - 作品、剧本、计划、分镜、素材复用、审核、预检、队列/任务/历史、请求停止与原键回执；
-- 参考拆解的列表/详情、显式范围/采样/音频观察、ASR、模型观察与回执、校订和转制作草案；
+- 参考拆解的列表/详情、从已上传素材或 base64 内容登记参考、显式范围/采样/音频观察、ASR、模型观察与回执、校订和转制作草案；
 - 单段与批次生成、关键帧/语音/音频编辑/全片音频后期、视频技术检查、无声审片与媒体能力；
-- 装配编辑读取、接点审核、音轨选择、装配预检与提交。
-
-远程入口不暴露的 7 个工具是 `update_guide_settings`、`import_reference`、`restore_shot_version`、`repair_shot_recipe_identity`、`control_batch`、`resolve_missing_execution`、`resume_generation`；其中参考原始文件登记在远程通过 HTTP `POST /api/projects/{project_id}/reverse-analyses` multipart 完成，其余按需使用认证 HTTP 原业务入口。完整 stdio 工具集合不会自动全部暴露到远程入口。远程入口不提供页面呈现类工具，也不提供 MCP resources 或 prompts；Skill 需由客户端自行安装。
+- 装配编辑读取、跨分镜连续性检查、接点审核、音轨选择、装配预检与提交；
+- 受控媒体列表、短期 URL 重新签发、小文件内联读取/大文件 URL 交付。
 
 `upload_material` 接受素材内容的 base64，解码后单文件至多 16 MiB；较大素材走原 HTTP multipart。远程素材应上传实际内容，不能把客户端路径传给服务器本地路径导入工具。上传不自动把图片绑定为首帧。
+
+远程参考导入有两种远程安全方式，都不接受服务器路径：
+
+1. 先 `upload_material` 上传音频/视频，再 `import_reference_from_material` 用返回的素材 ID 登记参考拆解；同一素材已有拆解时返回原拆解（`created=false`），可安全核对。
+2. `import_reference_content` 直接提交参考素材的 base64 内容并登记。单文件同样至多 16 MiB；超限返回 `reference_too_large` 并提示改用 HTTP multipart（`POST /api/projects/{project_id}/reverse-analyses` 的 `file` 字段）。
+
+登记只保存媒体事实，不自动拆分、抽帧、运行 ASR 或转分镜。显式观察（`extract_reference_range`、`extract_reference_audio`、`sample_reference_frames`、`transcribe_reference`）的远程回执保留观察/分析/工件身份，但把服务器路径换成受控媒体引用。
+
+**受控媒体与交付：**`list_media` 分页列出本作品可读取的素材、分镜候选、成片、审片和参考观察媒体；每项返回稳定 `media_ref`（如 `asset:...`、`task:...:video:0`、`reference:...:frame_0`）和短期受控 `url`，不返回服务器路径。`get_media_url` 为已有 `media_ref` 重新签发 URL；`download_media` 在文件不超过内联预算（默认 1 MiB，可调到 4 MiB）时返回 base64 内容，大文件只返回 URL，不把大文件塞进 JSON。URL 仍要求同一 Bearer 会话，默认 15 分钟过期；未认证 401、其他账号作品 404/403。任务与候选回执（`get_task`、`list_tasks`、`get_submission_receipt`、提交回执）保留任务/素材/版本 ID 和状态，以受控 `media` 引用替代路径。`list_shot_versions` 返回的 `candidate_ref` 是稳定媒体引用，可直接传给 `approve_candidate`；采用门禁仍核对真实文件、任务和计划版本，不因引用形式改变而放宽。
 
 ## 本机 stdio
 
@@ -57,14 +65,14 @@ stdio 供服务器本机客户端或主动诊断使用，需要项目 Python 环
 | 停止、核对与恢复 | `stop_generation`、`reconcile_generation`、`resume_generation` |
 | 候选历史和显式采用 | `list_shot_versions`、`restore_shot_version`、`record_review`、`approve_candidate` |
 | 图片、声音与音频编辑 | `get_keyframe_capability`、`submit_keyframe`、`get_speech_capability`、`submit_speech`、`submit_audio_edit`、`submit_audio_master` |
-| 参考素材登记与显式观察 | `import_reference`、`read_reference`、`extract_reference_range`、`extract_reference_audio`、`sample_reference_frames`、`transcribe_reference` |
+| 参考素材登记与显式观察 | `import_reference`（本机路径）、`import_reference_content`、`import_reference_from_material`、`read_reference`、`extract_reference_range`、`extract_reference_audio`、`sample_reference_frames`、`transcribe_reference` |
 | 参考分析与人工校订 | `start_reference_analysis`、`correct_reference_artifact`、`correct_reference_classification`、`convert_reference_to_shots` |
 | 装配接点、声音和成片 | `read_assembly_edit`、`check_assembly_continuity`、`review_assembly_join`、`set_assembly_sound`、`preflight_assembly_edit`、`submit_assembly` |
-| 媒体加工和检查 | `get_media_capability`、`create_silence`、`inspect_video`、`transcribe_audio`、`export_silent_video` |
+| 媒体加工、检查与受控交付 | `get_media_capability`、`create_silence`、`inspect_video`、`transcribe_audio`、`export_silent_video`、`list_media`、`get_media_url`、`download_media` |
 
-`import_reference` 读取 stdio 进程所在机器的绝对音视频路径，再 multipart 上传；不是读取远程客户机的文件。创作、媒体加工和审核应通过工作台入口完成，客户端不临时直跑 FFmpeg/Whisper 代替产品能力。
+`import_reference` 读取 stdio 进程所在机器的绝对音视频路径，再 multipart 上传；不是读取远程客户机的文件，也不在远程入口开放。远程客户端改用 `upload_material` + `import_reference_from_material` 或 `import_reference_content`。创作、媒体加工和审核应通过工作台入口完成，客户端不临时直跑 FFmpeg/Whisper 代替产品能力。
 
-`import_reference` 只登记文件和原始媒体事实，不创建拆分/ASR 任务。Agent 需要先调用 `extract_reference_range`、`extract_reference_audio` 或 `sample_reference_frames` 生成明确范围观察，再按需调用 `transcribe_reference` 或 `start_reference_analysis`。采样结果是“等距采样/待确认范围”，模型内容和 ASR 都标为“模型候选/待校订”。`convert_reference_to_shots` 只接受调用方明确提交的非空分镜列表、参考时间段和制作字段；它不会从观察时间轴自动生成分镜。
+`import_reference`、`import_reference_content`、`import_reference_from_material` 都只登记文件和原始媒体事实，不创建拆分/ASR 任务。Agent 需要先调用 `extract_reference_range`、`extract_reference_audio` 或 `sample_reference_frames` 生成明确范围观察，再按需调用 `transcribe_reference` 或 `start_reference_analysis`。采样结果是“等距采样/待确认范围”，模型内容和 ASR 都标为“模型候选/待校订”。`convert_reference_to_shots` 只接受调用方明确提交的非空分镜列表、参考时间段和制作字段；它不会从观察时间轴自动生成分镜。受控媒体条目仍只是可查看/下载的事实，不代表已审核或已采用。
 
 ## 回执、版本与操作边界
 
@@ -76,7 +84,7 @@ stdio 供服务器本机客户端或主动诊断使用，需要项目 Python 环
 - `create_project` 必须显式传 `creation_mode="advanced"`；`preflight` 必须传实际 `stage_id`；`create_shot`／`update_shot` 可传 `workflow` 或已安装的 `preset_id`。自动方案、`stage_id="auto"` 和 `generation.mode` 已移除；缺省或未安装时 HTTP 返回结构化阻塞和可选项，不写计划。`read_project` 的 `section:"state"` 返回同一准备度（无显式方案时为 `stage_required`/`recipe_unresolved` 并带显式方案事实），`section:"reusable-templates"` 返回 `available_templates` 事实清单，不含 `recommended` 或默认选择。
 - `submit_shot` 必须显式提供 `asset_id`；`submit_batch` 必须提供至少一个 `asset_ids`，不会隐式选择默认或全部分镜。分镜还必须绑定明确 workflow/制作方案，缺失时 HTTP 返回结构化 `workflow_required` blocker。`approve_candidate` 需要真实候选、当前计划/审核版本、非空说明和严格布尔 `confirm_adoption=true`。任务成功或技术检查不自动批准画面、音色、表演、采用或交付；明确采用也不表示用户亲自验收。
 
-可分发创作 Skill 位于 [director-workbench/SKILL.md](../.agents/skills/director-workbench/SKILL.md)。它描述外部 Agent 从认证到交付的执行阶段、必须询问用户的选择、显式方案/采用边界、错误/分页/长任务处理和最小验收清单，不含凭据或服务器部署地址。外部客户端从公开源代码快照或维护者提供的 Skill 目录取得该文件，按自己的项目级/用户级 Skill 机制安装；工作台不会自动写入任何客户端目录。当前 MCP 服务只注册 tools，没有注册 resources 或 prompts，因此不能通过 MCP 资源接口拉取 Skill；这是当前限制。Skill 版本与远程/全量工具数量会随合同更新，当前快照为远程 54 / stdio 61。
+可分发创作 Skill 位于 [director-workbench/SKILL.md](../.agents/skills/director-workbench/SKILL.md)。它描述外部 Agent 从认证到交付的执行阶段、必须询问用户的选择、显式方案/采用边界、错误/分页/长任务处理和最小验收清单，不含凭据或服务器部署地址。外部客户端从公开源代码快照或维护者提供的 Skill 目录取得该文件，按自己的项目级/用户级 Skill 机制安装；工作台不会自动写入任何客户端目录。当前 MCP 服务只注册 tools，没有注册 resources 或 prompts，因此不能通过 MCP 资源接口拉取 Skill；这是当前限制。Skill 版本与远程/全量工具数量会随合同更新，当前快照为远程 60 / stdio 67。
 
 ## 验证与反馈
 

@@ -101,7 +101,7 @@ def start_finish_task(project_id: str, request: FinishRequest) -> dict[str, Any]
     if not source_ref:
         raise HTTPException(409, '当前样片缺少可处理的视频文件')
     try:
-        source = backend.adoption_candidate_path(str(source_ref))
+        source = backend.adoption_candidate_path(str(source_ref), project_id)
     except HTTPException:
         raise
     if not source.is_file() or not backend.same_registered_media(str(video.get('path') or ''), str(source)):

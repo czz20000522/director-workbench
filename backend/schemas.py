@@ -514,3 +514,21 @@ class AssemblyRequest(BaseModel):
 class MissingExecutionResolution(BaseModel):
     confirm_execution_ended: Literal[True]
     note: str = Field(min_length=1, max_length=2000)
+
+
+class ReferenceFromMaterialRequest(BaseModel):
+    """Register an existing project-owned audio/video material as reference input.
+
+    The request names a material already registered in the work; it never accepts
+    a server path or client path. Uploading the bytes remains the separate
+    multipart/base64 material-upload entry.
+    """
+    model_config = ConfigDict(extra='forbid')
+    asset_id: str = Field(min_length=1, max_length=160)
+
+
+class MediaRefsRequest(BaseModel):
+    """Issue short-lived signed download URLs for stable media references."""
+    model_config = ConfigDict(extra='forbid')
+    media_refs: list[str] = Field(min_length=1, max_length=100)
+    ttl_seconds: int = Field(default=900, ge=60, le=3600, strict=True)

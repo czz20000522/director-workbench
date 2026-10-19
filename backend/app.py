@@ -37,7 +37,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictInt, field_validator, model_validator
 from . import production_presets, background_jobs, speech, keyframes, audio_edit_tasks, audio_master_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, assembly_continuity, assembly_continuity_check, guide, readiness, task_scheduler, creative_inspection
-from . import output_resolution, enhancement, task_store
+from . import output_resolution, enhancement, task_store, media_refs
 import av
 import paths
 from .private_auth import SecurityHeaders, current_principal
@@ -1360,9 +1360,9 @@ def segment_candidate_identity(segment: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def segment_review_binding(segment: dict[str, Any], reference: str) -> dict[str, Any]:
+def segment_review_binding(segment: dict[str, Any], reference: str, project_id: str | None = None) -> dict[str, Any]:
     """Bind the explicitly selected, visible candidate to its current task."""
-    candidate = adoption_candidate_path(reference)
+    candidate = adoption_candidate_path(reference, project_id)
     video = segment.get('video') or {}
     selected = {'path': video.get('path'), 'prompt_id': segment.get('comfyui_task_id'),
                 'version_task_id': segment.get('current_version_task_id')}
@@ -1411,14 +1411,15 @@ def adoption_segment_signature(document: dict[str, Any], asset_id: str) -> str |
 
 
 def adoption_binding_for_review(document: dict[str, Any], asset_id: str, candidate_ref: str,
-                                plan_revision: int, assembly_asset_id: str = 'MASTER') -> dict[str, Any]:
-    candidate = adoption_candidate_path(candidate_ref)
+                                plan_revision: int, assembly_asset_id: str = 'MASTER',
+                                project_id: str | None = None) -> dict[str, Any]:
+    candidate = adoption_candidate_path(candidate_ref, project_id)
     if not candidate.is_file():
         raise HTTPException(409, '采用候选文件不存在，请重新读取当前作品')
     segment = next((item for item in document.get('segments', [])
                     if isinstance(item, dict) and str(item.get('id')) == asset_id), None)
     if segment is not None:
-        binding = segment_review_binding(segment, candidate_ref)
+        binding = segment_review_binding(segment, candidate_ref, project_id)
         selected = binding['selected']
         version_task_id = selected.get('version_task_id')
         task_id = version_task_id or selected.get('prompt_id')
@@ -1505,7 +1506,7 @@ def bind_explicit_assembly_candidates(document: dict[str, Any], manifest: dict[s
                        and isinstance(records[stage].get('adoption_binding'), dict)), None)
         if not review or not review.get('candidate_ref'):
             continue
-        candidate = adoption_candidate_path(str(review['candidate_ref']))
+        candidate = adoption_candidate_path(str(review['candidate_ref']), str(manifest.get('id') or '') or None)
         segment['video'] = {**(segment.get('video') or {}), 'path': str(candidate)}
 
 
@@ -2273,7 +2274,7 @@ def build_project_state(project_id: str | None = None) -> dict[str, Any]:
                 if not review or review.get('status') != 'approved':
                     continue
                 try:
-                    binding = segment_review_binding(segment, str(review.get('candidate_ref') or ''))
+                    binding = segment_review_binding(segment, str(review.get('candidate_ref') or ''), target_project)
                     valid = bool(review.get('candidate_binding')) and review['candidate_binding'] == binding
                 except (HTTPException, ValueError, OSError):
                     valid = False
@@ -2524,23 +2525,31 @@ def persist_review(request: ReviewRecordRequest, project_id: str | None = None) 
             data.update(status='stale', requested_status='approved',
                         stale_reason='缺少明确候选引用或计划版本，请重新读取候选后确认审核')
         else:
-            data['candidate_binding'] = segment_review_binding(segment, request.candidate_ref)
+            data['candidate_binding'] = segment_review_binding(segment, request.candidate_ref, owner_id)
     if request.status == 'approved' and request.source == 'explicit-adoption' and request.candidate_ref:
         owner_manifest = load_project_manifest(owner_id)
         data['adoption_binding'] = adoption_binding_for_review(
             document, request.asset_id, request.candidate_ref, int(document.get('revision', 0) or 0),
-            str(owner_manifest.get('assembly_asset_id') or 'MASTER'))
+            str(owner_manifest.get('assembly_asset_id') or 'MASTER'), owner_id)
     record = append_project_record(f"review:{request.stage}", data, asset_id=request.asset_id, source=request.source, project_id=project_id, expected_revision=request.expected_revision)
     return {**data, "asset_id": request.asset_id, "revision": record["revision"], "source": record["source"], "created_at": record["created_at_iso"]}
 
 
-def adoption_candidate_path(reference: str) -> Path:
+def adoption_candidate_path(reference: str, project_id: str | None = None) -> Path:
     if reference.startswith('/media-file?'):
         parsed = urlsplit(reference)
         query = parse_qs(parsed.query)
         if parsed.fragment or set(query) != {'path'} or len(query['path']) != 1:
             raise HTTPException(422, '候选链接必须包含唯一素材路径')
         reference = query['path'][0]
+    elif reference.split(':', 1)[0] in {'task', 'asset', 'segment', 'assembly'}:
+        if not project_id:
+            raise HTTPException(422, '受控候选引用需要明确的当前作品')
+        try:
+            target = media_refs.decode_media_ref(reference)
+            return media_refs.resolve_target(project_id, target)['path']
+        except media_refs.MediaRefError as exc:
+            raise HTTPException(422, str(exc)) from exc
     try:
         return resolve_registered_path(reference)
     except (ValueError, OSError) as exc:
@@ -2557,7 +2566,7 @@ def adopt_project_candidate(project_id: str, request: AdoptionRequest) -> dict[s
     registered = None
     material_kind_expected = None
     adopted_variant = 'A'
-    candidate = adoption_candidate_path(request.candidate_ref)
+    candidate = adoption_candidate_path(request.candidate_ref, project_id)
     if request.asset_id == str(manifest.get('assembly_asset_id') or 'MASTER'):
         assembly = document.get('assembly') or {}
         blocking = assembly_edit.blocking_joins(document)
@@ -3691,6 +3700,7 @@ from .routers.reverse_analysis import (
     convert_reverse_analysis,
     correct_reverse_classification,
     create_reverse_analysis,
+    create_reverse_analysis_from_material,
     current_semantic_job,
     execute_reverse_semantic,
     extract_reference_audio,
@@ -3700,6 +3710,8 @@ from .routers.reverse_analysis import (
     merge_semantic_result,
     read_reverse_analysis,
     reconcile_semantic_job,
+    registered_document,
+    registration_failure_document,
     reserve_reverse_semantic,
     reverse_analysis_path,
     reverse_analysis_root,
@@ -3710,6 +3722,7 @@ from .routers.reverse_analysis import (
     transcribe_reference,
     update_reverse_artifact,
     update_reverse_timeline,
+    write_registered_analysis,
     write_reverse_analysis,
 )
 
@@ -3922,6 +3935,18 @@ from .routers.events_media import (
     media_file,
     project_events,
     workflow_file,
+)
+
+
+# 受控媒体引用领域已拆到 backend/routers/media_access.py。
+# 远程 Agent 只拿稳定 media_ref 与短期签名 URL；文件仍由本作品 manifest/
+# 计划/参考拆解解析，不提供任意服务器路径下载。
+from .routers.media_access import ROUTER as _media_access_router
+app.include_router(_media_access_router)
+from .routers.media_access import (
+    issue_media_refs,
+    list_media,
+    read_media,
 )
 
 

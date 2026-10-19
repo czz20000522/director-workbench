@@ -24,7 +24,9 @@ REMOTE_TOOLS = (
     'list_shot_versions', 'preflight', 'save_creative_draft', 'record_review',
     'approve_candidate', 'update_shot', 'arrange_shot', 'create_shot',
     'reuse_materials',
-    # Reference analysis and its bounded, project-owned corrections.
+    # Reference import uses uploaded content/material identity, never a server path.
+    # Observation reads return controlled media refs; ASR and analysis stay explicit.
+    'import_reference_from_material', 'import_reference_content',
     'extract_reference_range', 'extract_reference_audio', 'sample_reference_frames',
     'transcribe_reference', 'list_references', 'read_reference',
     'start_reference_analysis',
@@ -37,9 +39,10 @@ REMOTE_TOOLS = (
     'preflight_assembly_edit', 'check_assembly_continuity', 'submit_keyframe', 'get_speech_capability',
     'submit_speech', 'get_submission_receipt', 'reconcile_generation',
     'stop_generation',
-    # CPU media capability and project-owned candidate tasks.
-    'submit_audio_edit', 'submit_audio_master', 'get_media_capability', 'create_silence', 'inspect_video',
-    'transcribe_audio', 'export_silent_video',
+    # CPU media capability, project-owned candidate tasks, and controlled media delivery.
+    'list_media', 'get_media_url', 'download_media',
+    'submit_audio_edit', 'submit_audio_master', 'get_media_capability', 'create_silence',
+    'inspect_video', 'transcribe_audio', 'export_silent_video',
 )
 
 
@@ -57,7 +60,8 @@ async def prepare(remote):
 def install(app, *, http_app_provider, token_provider, environ=None):
     remote = create_server('http://localhost', httpx.ASGITransport(app=http_app_provider()),
                            session_token_provider=token_provider,
-                           transport_provider=lambda: httpx.ASGITransport(app=http_app_provider()))
+                           transport_provider=lambda: httpx.ASGITransport(app=http_app_provider()),
+                           remote=True)
     mcp_app = remote.streamable_http_app(streamable_http_path='/', stateless_http=True, json_response=True,
                                          max_request_body_size=24 * 1024 * 1024,
                                          transport_security=transport_security(environ))
