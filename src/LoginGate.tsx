@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Clapperboard } from 'lucide-react';
 import App from './App';
+import StudioFlowLive from './StudioFlowLive';
 import './login.css';
 import { bindSessionUser } from './sessionFetch';
 
@@ -78,7 +79,12 @@ export default function LoginGate() {
 
   if (checking) return <main className="workspace-login"><p role="status" aria-live="polite">正在连接工作台…</p></main>;
 
-  if (user) return <App key={user.username} privateMode onLogout={logout} logoutBusy={busy} sessionError={error} />;
+  if (user) {
+    if (new URLSearchParams(window.location.search).get('ui') === 'flow') {
+      return <StudioFlowLive key={user.username} username={user.username} onLogout={logout} />;
+    }
+    return <App key={user.username} privateMode onLogout={logout} logoutBusy={busy} sessionError={error} />;
+  }
 
   return <main className="workspace-login">
     <section className="workspace-login-card" aria-labelledby="workspace-login-title">

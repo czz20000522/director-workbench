@@ -1,7 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
-import StudioFlowPrototype from './StudioFlowPrototype';
 import LoginGate from './LoginGate';
 import './styles.css';
 
@@ -46,7 +45,6 @@ function installRandomUuidFallback() {
 installRandomUuidFallback();
 
 function WorkbenchEntry() {
-  if (new URLSearchParams(window.location.search).get('ui') === 'flow') return <StudioFlowPrototype />;
   const [privateMode, setPrivateMode] = React.useState<boolean | null>(null);
   const [failed, setFailed] = React.useState(false);
   React.useEffect(() => {
