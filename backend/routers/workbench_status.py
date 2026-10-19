@@ -273,7 +273,6 @@ def validate_project_pipeline(stage_id: str, request: PipelineValidateRequest, m
     stages = project.get('pipeline', []) if manifest is not None else backend.PIPELINE_STAGES
     templates = project.get('task_templates', {}) if manifest is not None else backend.TASK_TEMPLATES
     plan_path = backend.resolve_registered_path(str(project['plan_path'])) if manifest is not None else backend.PLAN_PATH
-    default_workflow = (project.get('production_preset') or {}).get('workflow')
     stage = next((item for item in stages if item["id"] == stage_id), None)
     if stage is None:
         raise HTTPException(404, "制作步骤不存在")
@@ -288,8 +287,16 @@ def validate_project_pipeline(stage_id: str, request: PipelineValidateRequest, m
     segment = next((item for item in document.get("segments", []) if isinstance(item, dict) and item.get("id") == request.asset_id), None)
     if isinstance(segment, dict) and segment.get("workflow") and not payload.get("workflow"):
         payload["workflow"] = str(segment["workflow"])
-    if not payload.get("workflow") and not payload.get("prompt") and default_workflow:
-        payload["workflow"] = default_workflow
+    if not payload.get('workflow') and stage_id not in (None, 'auto'):
+        payload['workflow'], _ = backend.select_preset_execution(project, None, stage_id)
+    if not payload.get('workflow'):
+        raise HTTPException(422, {
+            'code': 'workflow_required',
+            'message': f'{request.asset_id} 尚未明确绑定可执行工作流或制作方案。',
+            'blockers': [{'code': 'workflow_required', 'object': {'kind': 'segment', 'id': request.asset_id},
+                          'action': {'id': 'choose_workflow', 'label': '选择制作方案', 'method': 'PATCH',
+                                     'path': f'/api/projects/{project["id"]}/plan/segments/{request.asset_id}'}}],
+        })
     payload['workflow'], stage_id = backend.select_preset_execution(project, payload.get('workflow'), stage_id)
     prepared = backend.prepare_pipeline_payload(payload, stage_id, request.values, manifest)
     result = backend.validate_pipeline_values(stage, prepared["pipeline_values"], manifest)

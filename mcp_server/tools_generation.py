@@ -28,6 +28,8 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
                            pipeline_stage_id: str | None = None, pipeline_values_by_asset: dict[str, dict[str, Any]] | None = None,
                            expected_revision: Annotated[int | None, Field(strict=True, ge=0)] = None) -> dict[str, Any]:
         """按同一公开批次接口冻结并排队，每个分镜在任务边界参与用户轮换；不会自动采用候选。断线先查询请求回执。"""
+        if not asset_ids or any(not isinstance(asset_id, str) or not asset_id.strip() for asset_id in asset_ids):
+            raise ValueError('批次必须明确提供至少一个非空分镜 asset_id')
         return await request('POST', project_path(project_id) + '/batches', json={'asset_ids': asset_ids,
             'idempotency_key': idempotency_key, 'pipeline_stage_id': pipeline_stage_id,
             'pipeline_values_by_asset': pipeline_values_by_asset or {},

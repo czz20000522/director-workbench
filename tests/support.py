@@ -30,7 +30,9 @@ def add_shot(client, project, shot_id, with_audio=True):
     for name in (f'{shot_id}.png', f'{shot_id}.wav'):
         (assets / name).write_bytes(b'test asset')
     image = str(assets / f'{shot_id}.png')
-    response = client.post('/api/projects/preset-test/plan/segments', json={'segment_id': shot_id, 'duration_seconds': 5, 'prompt': f'{shot_id} waves', 'first_frame': image, 'last_frame': image})
+    manifest = backend.load_project_manifest('preset-test')
+    workflow = next((ref for stage in manifest.get('pipeline', []) for ref in (stage.get('execution') or {}).get('references', []) if ref), None)
+    response = client.post('/api/projects/preset-test/plan/segments', json={'segment_id': shot_id, 'duration_seconds': 5, 'prompt': f'{shot_id} waves', 'first_frame': image, 'last_frame': image, 'workflow': workflow})
     assert response.status_code == 200, response.text
     if with_audio:
         assert client.patch(f'/api/projects/preset-test/plan/segments/{shot_id}', json={'audio_guide': str(assets / f'{shot_id}.wav')}).status_code == 200

@@ -132,6 +132,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
   }, [project?.id]);
   const [batchId, setBatchId] = useState('');
   const [batchTasks, setBatchTasks] = useState<BatchTask[]>([]);
+  const [selectedBatchAssetIds, setSelectedBatchAssetIds] = useState<string[]>([]);
   const [pipeline, setPipeline] = useState<PipelineStage[]>(defaultPipelineStages);
   const [pipelineStageId, setPipelineStageId] = useState('');
   const [pipelineOpen, setPipelineOpen] = useState(false);
@@ -1177,7 +1178,8 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
 
   async function startCurrentTask(overrides: Record<string, string | number | boolean | string[]> = {}, target?: { assetId: string; prompt: string; automatic: boolean }) {
     if (!project?.id || submittingShot.current) return;
-    const assetId = target?.assetId ?? (current.id || project.default_task_asset_id || '');
+    const assetId = target?.assetId ?? current.id;
+    if (!assetId) { setNotice('请先明确选择一个分镜，再提交生成。'); return; }
     const prompt = target?.prompt ?? currentPrompt;
     const automatic = target?.automatic ?? generationEdit.mode === 'auto';
     const storageKey = `director-workbench:${project.id}:${assetId}:pending-submission:v1`;
@@ -1388,8 +1390,8 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
 
   async function startBatch() {
     if (!project?.id) return;
-    const assetIds = planSegments.filter(segment => segment.workflow || project?.production_preset?.workflow).map(segment => segment.id);
-    if (!assetIds.length) { setNotice('当前计划还没有可提交的分段工作流。'); return; }
+    const assetIds = selectedBatchAssetIds.filter(assetId => planSegments.some(segment => segment.id === assetId));
+    if (!assetIds.length) { setNotice('请先明确选择要加入批次的分镜。'); return; }
     try {
       const generationStage = selectVideoGenerationStage(pipeline, project.production_preset?.workflow);
       if (!generationStage) { setNotice('当前项目没有可批量执行的视频制作步骤。'); return; }
@@ -1398,7 +1400,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
       if (!response.ok) throw new Error(data.detail || '批次提交失败');
       setBatchId(data.batch_id ?? '');
       setBatchTasks((data.task_ids ?? []).map((id: string, index: number) => ({ id, asset_id: assetIds[index], status: 'batch_waiting', sequence: index + 1, batch_id: data.batch_id })));
-      setNotice(`已提交 ${assetIds.length} 个片段；每段按自己的计划和源工作流冻结参数，当前片段修改不会隐式覆盖其他片段。`);
+      setNotice(`已提交明确选择的 ${assetIds.length} 个片段；每段按自己的计划和源工作流冻结参数。`);
     } catch (error) { setNotice(error instanceof Error ? error.message : '全片段批次提交失败。'); }
   }
 
@@ -1733,7 +1735,7 @@ export default function App({ privateMode = false, onLogout, logoutBusy = false,
               {pipelineValidation?.stage_id === activePipelineStage.id && <div className="director-validation"><strong>预检通过 · {pipelineValidation.binding_count ?? 0} 项会写入 API 图</strong><code>{pipelineValidation.args.join(' ') || 'ComfyUI 节点绑定已确认'}</code></div>}
             </article>}
 
-            <article className="director-operation-panel director-delivery-panel"><div className="director-panel-title"><div><h3>批次与装配</h3><small>停止保留已完成片段；恢复从原冻结快照的新尝试开始</small></div><span>{batchTasks.length ? `${batchTasks.filter(task => task.status === 'succeeded').length}/${batchTasks.length}` : '未运行批次'}</span></div><div className="director-panel-actions"><button className="button secondary compact" disabled={batchActive} onClick={startBatch}><Play size={13} />启动可执行片段批次</button>{batchActive && <button className="button secondary compact" onClick={stopBatch}><Square size={13} />停止批次</button>}{batchId && !batchActive && batchTasks.some(task => task.status !== 'succeeded') && <button className="button secondary compact" onClick={resumeBatch}><Play size={13} />恢复批次</button>}<button className="button primary compact" disabled={assemblySubmitting || (!hasPendingAssembly && (!assemblyReady || activeTaskStates.includes(assemblyTaskState)))} onClick={() => void startAssembly()}><Layers3 size={13} />{hasPendingAssembly ? '沿用装配凭据重试' : assemblyTaskState === 'succeeded' ? '重新装配' : '启动装配'}</button>{hasPendingAssembly && <button className="button secondary compact" disabled={assemblySubmitting} onClick={() => void startAssembly(true)}>核对装配提交</button>}{activeTaskStates.includes(assemblyTaskState) && <button className="button secondary compact" onClick={stopAssembly}><Square size={13} />停止装配</button>}{!hasPendingAssembly && ['stopped', 'failed', 'needs_reconcile'].includes(assemblyTaskState) && <button className="button secondary compact" onClick={resumeAssembly}><Play size={13} />{assemblyTaskState === 'needs_reconcile' ? '核对装配结果' : '恢复装配'}</button>}</div><div className="director-review-facts"><span>已有视频 {planSegments.filter(segment => Boolean(segment.video?.path)).length}/{planSegments.length}</span><span>装配使用各分镜的当前版本</span><span>装配任务：{assemblyIsStale ? '历史成片 · 需重新装配' : assemblyTaskState ? taskStateLabel(assemblyTaskState) : '无'}</span></div></article>
+            <article className="director-operation-panel director-delivery-panel"><div className="director-panel-title"><div><h3>批次与装配</h3><small>停止保留已完成片段；恢复从原冻结快照的新尝试开始</small></div><span>{batchTasks.length ? `${batchTasks.filter(task => task.status === 'succeeded').length}/${batchTasks.length}` : '未运行批次'}</span></div><fieldset className="director-batch-selection"><legend>明确选择批次分镜</legend>{planSegments.length ? planSegments.map(segment => <label key={segment.id}><input type="checkbox" checked={selectedBatchAssetIds.includes(segment.id)} onChange={event => setSelectedBatchAssetIds(current => event.target.checked ? [...current, segment.id] : current.filter(id => id !== segment.id))} />{segment.id} · {segment.location}</label>) : <span>尚无分镜</span>}</fieldset><div className="director-panel-actions"><button className="button secondary compact" disabled={batchActive} onClick={startBatch}><Play size={13} />提交已选择分镜批次</button>{batchActive && <button className="button secondary compact" onClick={stopBatch}><Square size={13} />停止批次</button>}{batchId && !batchActive && batchTasks.some(task => task.status !== 'succeeded') && <button className="button secondary compact" onClick={resumeBatch}><Play size={13} />恢复批次</button>}<button className="button primary compact" disabled={assemblySubmitting || (!hasPendingAssembly && (!assemblyReady || activeTaskStates.includes(assemblyTaskState)))} onClick={() => void startAssembly()}><Layers3 size={13} />{hasPendingAssembly ? '沿用装配凭据重试' : assemblyTaskState === 'succeeded' ? '重新装配' : '启动装配'}</button>{hasPendingAssembly && <button className="button secondary compact" disabled={assemblySubmitting} onClick={() => void startAssembly(true)}>核对装配提交</button>}{activeTaskStates.includes(assemblyTaskState) && <button className="button secondary compact" onClick={stopAssembly}><Square size={13} />停止装配</button>}{!hasPendingAssembly && ['stopped', 'failed', 'needs_reconcile'].includes(assemblyTaskState) && <button className="button secondary compact" onClick={resumeAssembly}><Play size={13} />{assemblyTaskState === 'needs_reconcile' ? '核对装配结果' : '恢复装配'}</button>}</div><div className="director-review-facts"><span>已有视频 {planSegments.filter(segment => Boolean(segment.video?.path)).length}/{planSegments.length}</span><span>装配使用各分镜的当前版本</span><span>装配任务：{assemblyIsStale ? '历史成片 · 需重新装配' : assemblyTaskState ? taskStateLabel(assemblyTaskState) : '无'}</span></div></article>
 
             <details className="director-operation-panel director-execution-record"><summary className="director-panel-title"><div><h3>本次实际执行档案</h3><small>查看实际使用的参数与执行记录</small></div><span>{currentTask ? `${currentTask.status} · ${currentTask.id.slice(0, 8)}` : '尚无任务'}</span></summary>{currentTask?.payload?.execution_snapshot ? <dl><div><dt>实际步骤</dt><dd>{currentTask.payload.execution_snapshot.pipeline_stage_id || '旧任务 · 未登记步骤'} · 已写入 {currentTask.payload.execution_snapshot.applied_bindings?.length ?? 0} 项节点输入</dd></div><div><dt>实际提示词</dt><dd>{currentTask.payload.execution_snapshot.prompt || '工作流未声明提示词覆盖'}</dd></div><div><dt>API 图</dt><dd><a href={workflowUrl(currentTask.payload.execution_snapshot.api_graph ?? '')}>{currentTask.payload.execution_snapshot.api_graph}</a></dd></div><div><dt>来源图</dt><dd>{currentTask.payload.execution_snapshot.source_workflow}</dd></div><div><dt>参数</dt><dd><code>{JSON.stringify(currentTask.payload.execution_snapshot.parameters ?? {})}</code></dd></div><div><dt>素材</dt><dd><code>{JSON.stringify(currentTask.payload.execution_snapshot.materials ?? {})}</code></dd></div></dl> : <p className="director-muted">提交后，这里会显示真正执行的提示词、素材、参数和冻结 API 图。</p>}{currentTask?.error && <p className="director-error">{currentTask.error}</p>}</details>
           </div>

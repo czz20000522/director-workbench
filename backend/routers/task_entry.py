@@ -324,9 +324,8 @@ def submit_project_task(request: StartRequest, manifest: dict[str, Any] | None =
             return existing
     plan_path = backend.resolve_registered_path(str(project['plan_path'])) if manifest is not None else backend.PLAN_PATH
     templates = project.get('task_templates', {}) if manifest is not None else backend.TASK_TEMPLATES
-    default_workflow = (project.get('production_preset') or {}).get('workflow')
     backend.require_submission_capacity()
-    asset_id = request.asset_id or str(project.get("default_task_asset_id", ""))
+    asset_id = request.asset_id
     backend.ensure_asset_not_pending(project_id, asset_id)
     if not asset_id or asset_id == str(project.get("assembly_asset_id", "")):
         raise HTTPException(400, "当前素材不能作为单段生成任务；完整版请使用装配入口")
@@ -345,11 +344,17 @@ def submit_project_task(request: StartRequest, manifest: dict[str, Any] | None =
             raise HTTPException(422, '自动创作方式由已保存输入决定；使用不同技术方案前请明确切换高级模式。')
     if isinstance(segment, dict) and segment.get("workflow") and not payload.get("workflow"):
         payload["workflow"] = str(segment["workflow"])
-    if not payload.get("workflow") and not payload.get("prompt") and default_workflow:
-        payload["workflow"] = default_workflow
     payload['workflow'], stage_id = backend.select_preset_execution(project, payload.get('workflow'), request.pipeline_stage_id)
-    if not payload.get("workflow") and not payload.get("prompt"):
-        raise HTTPException(400, f"项目没有登记 {asset_id} 的可执行工作流或任务模板")
+    if not payload.get("workflow"):
+        raise HTTPException(422, {
+            'code': 'workflow_required',
+            'message': f'{asset_id} 尚未明确绑定可执行工作流或制作方案；请先保存分镜方案后再提交。',
+            'blockers': [{
+                'code': 'workflow_required', 'object': {'kind': 'segment', 'id': asset_id},
+                'action': {'id': 'choose_workflow', 'label': '选择制作方案', 'method': 'PATCH',
+                           'path': f'/api/projects/{project_id if manifest is not None else backend.CURRENT_PROJECT_ID}/plan/segments/{asset_id}'},
+            }],
+        })
     if stage_id:
         values = dict(request.pipeline_values)
         if request.prompt is not None:
