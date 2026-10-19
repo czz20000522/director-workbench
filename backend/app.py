@@ -35,7 +35,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictInt, field_validator, model_validator
-from . import production_presets, background_jobs, speech, keyframes, audio_edit_tasks, audio_master_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, assembly_continuity, guide, readiness, task_scheduler, creative_inspection, shot_creation
+from . import production_presets, background_jobs, speech, keyframes, audio_edit_tasks, audio_master_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, assembly_continuity, guide, readiness, task_scheduler, creative_inspection
 from . import output_resolution, enhancement, task_store
 import av
 import paths
@@ -1063,16 +1063,6 @@ def prepare_pipeline_payload(payload: dict[str, Any], stage_id: str, values: dic
         segment = next((item for item in document.get("segments", []) if item.get("id") == payload.get("asset_id")), None)
         if segment is None:
             raise HTTPException(422, "请先保存分镜，再配置生成参数")
-        if (segment.get('generation') or {}).get('mode') == 'auto':
-            _, selected_stage = select_preset_execution(project, segment.get('workflow'), None)
-            if stage_id != selected_stage:
-                raise HTTPException(422, '自动创作方式由已保存输入决定；请预检当前创作输入。')
-            capability = production_presets.catalog(SHARED_ROOT / 'models', h3_preset_id)
-            if not capability.get('available') or capability.get('missing_models'):
-                raise HTTPException(422, {'code': 'creation_resources_missing',
-                    'message': '当前创作所需模型或制作文件不可用，请联系管理员补齐；分镜已保存，不会自动下载。',
-                    'missing_models': capability.get('missing_models', []),
-                    'blockers': [{'code': 'creation_resources_missing', 'message': '所需制作资源不可用，请联系管理员补齐后重试。', 'action': 'contact_administrator'}]})
         defaults = {"first-frame": (segment.get("keyframes") or {}).get("first"), "last-frame": (segment.get("keyframes") or {}).get("last"),
                     "guide": (segment.get("audio") or {}).get("guide"), "prompt": segment.get("prompt"),
                     "duration": segment.get("duration_seconds"), "seed": (segment.get('generation') or {}).get('seed', 42),
@@ -1154,8 +1144,7 @@ def prepare_pipeline_payload(payload: dict[str, Any], stage_id: str, values: dic
     prepared["parameters"] = parameters
     prepared["materials"] = materials
     prepared["executed_prompt"] = executed_prompt
-    if 'segment' in locals() and segment.get('resolved_generation'):
-        prepared['resolved_generation'] = segment['resolved_generation']
+    if 'segment' in locals() and isinstance(segment, dict):
         settings = segment.get('generation') or {}
         resolution = settings.get('output_resolution', 'native')
         if resolution != 'native':
@@ -1163,7 +1152,7 @@ def prepare_pipeline_payload(payload: dict[str, Any], stage_id: str, values: dic
                 output_resolution.require_available(resolution)
             except ValueError as exc:
                 raise HTTPException(422, str(exc)) from exc
-            prepared['output_size'] = {'resolution': resolution, 'aspect_ratio': settings['aspect_ratio']}
+            prepared['output_size'] = {'resolution': resolution, 'aspect_ratio': settings.get('aspect_ratio', '16:9')}
     prepared["_graph_bindings"] = bindings
     if h3_preset_id:
         prepared['h3_duration'] = {
@@ -1252,7 +1241,6 @@ def freeze_task_payload(payload: dict[str, Any], *, project_id: str) -> dict[str
             "parameters": dict(frozen.get("parameters") or {}),
             "materials": dict(frozen.get("materials") or {}),
             "h3_duration": frozen.get("h3_duration"),
-            "resolved_generation": frozen.get("resolved_generation"),
             "output_size": frozen.get("output_size"),
             "creative_inspection": frozen.get("creative_inspection"),
             "pipeline_stage_id": frozen.get("pipeline_stage_id"),
@@ -2963,9 +2951,9 @@ def restore_project_segment_version(
         for key in SEGMENT_GENERATION_FIELDS:
             if key in snapshot:
                 segment[key] = json.loads(json.dumps(snapshot[key], ensure_ascii=False))
-            elif key in ('generation', 'resolved_generation'):
-                # Older candidates predate automatic creation. Restoring one
-                # must not retain settings from a later automatic version.
+            elif key == 'generation':
+                # Older candidates predate explicit creation settings. Restoring
+                # one must not retain settings written by a later version.
                 segment.pop(key, None)
     timestamp = time.time()
     segment.update(
@@ -3084,7 +3072,7 @@ def create_project(request: ProjectCreateRequest) -> dict[str, Any]:
             for folder in ('plans', 'assets/image', 'assets/audio', 'assets/video', 'workflows/ui', 'workflows/api', 'records/prompts', 'records/tasks', 'records/reviews'):
                 (workspace / folder).mkdir(parents=True, exist_ok=True)
             manifest = blank_project_manifest(project_id, request.series, request.title, workspace)
-            manifest['default_creation_mode'] = request.creation_mode
+            manifest['creation_mode'] = request.creation_mode
             write_json_atomic(workspace / 'director.project.json', manifest)
             persist_project_manifest(manifest, make_default=False)
             if request.select:
@@ -3103,7 +3091,7 @@ def create_project(request: ProjectCreateRequest) -> dict[str, Any]:
     for folder in ("plans", "assets/image", "assets/audio", "assets/video", "workflows/ui", "workflows/api", "records/prompts", "records/tasks", "records/reviews"):
         (workspace / folder).mkdir(parents=True, exist_ok=True)
     manifest = blank_project_manifest(project_id, request.series, request.title, workspace)
-    manifest['default_creation_mode'] = request.creation_mode
+    manifest['creation_mode'] = request.creation_mode
     write_json_atomic(workspace / "director.project.json", manifest)
     persist_project_manifest(manifest, make_default=request.select)
     if request.select:
@@ -3149,26 +3137,24 @@ def reusable_template_catalog(project_id: str) -> dict[str, Any]:
 @app.post("/api/projects/{project_id}/production-presets/{preset_id}")
 @gpu_admission
 def install_production_preset(project_id: str, preset_id: str) -> dict[str, Any]:
+    """Explicitly install one reviewed production recipe into the project manifest.
+
+    This is the only path that installs a preset.  Creating or editing a shot
+    never installs or switches a recipe.
+    """
     ensure_no_release_blocking_tasks("配置制作方案", project_id=project_id)
     if preset_id not in production_presets.PRESET_IDS:
         raise HTTPException(404, "制作方案不存在")
     manifest = require_project_manifest(project_id)
-    result = configure_production_preset(manifest, preset_id)
-    if manifest.get('default_creation_mode') == 'auto':
-        manifest['default_creation_mode'] = 'advanced'
-        save_project_manifest(manifest)
-        result['project'] = public_project(manifest)
-    return result
+    return configure_production_preset(manifest, preset_id)
 
 
-def configure_production_preset(manifest: dict[str, Any], preset_id: str, *, automatic=False) -> dict[str, Any]:
-    """Reuse recipe configuration; automatic additions never overwrite an installed stage."""
+def configure_production_preset(manifest: dict[str, Any], preset_id: str) -> dict[str, Any]:
+    """Reuse recipe configuration; an explicit install never overwrites an installed stage."""
     project_id = str(manifest['id'])
     if (manifest.get("production_preset") or {}).get("id") == preset_id:
         return {"project": public_project(manifest), "already_installed": True}
     stages = manifest.get("pipeline") or []
-    if automatic and any(item.get('id') == production_presets.stage_id(preset_id) for item in stages):
-        return {'project': public_project(manifest), 'already_installed': True}
     if any(item.get("id") == production_presets.preset_stage_id(preset_id) for item in stages):
         raise HTTPException(409, "项目已有视频制作步骤，不能覆盖其执行配置")
     try:
@@ -3188,48 +3174,24 @@ def configure_production_preset(manifest: dict[str, Any], preset_id: str, *, aut
     write_json_atomic(destination, graph)
     workflow = root_relative_path(destination)
     manifest["pipeline"] = [*stages, production_presets.stage(workflow, len(stages) + 1, preset_id)]
-    if not automatic or not manifest.get('production_preset'):
-        manifest["production_preset"] = {"id": preset_id, "title": production_presets.title(preset_id), "workflow": workflow}
+    manifest["production_preset"] = {"id": preset_id, "title": production_presets.title(preset_id), "workflow": workflow}
     save_project_manifest(manifest)
     if project_id == CURRENT_PROJECT_ID:
         apply_project_manifest(manifest)
     return {"project": public_project(manifest), "already_installed": False}
 
 
-def resolve_automatic_shot(manifest, segment):
-    settings = segment.get('generation') or {}
-    if settings.get('mode') != 'auto':
-        segment.pop('resolved_generation', None)
-        return
-    try:
-        h3_duration.plan(segment.get('duration_seconds'), settings['aspect_ratio'])
-        if not str(segment.get('prompt') or '').strip():
-            raise ValueError('请填写画面与动作描述。')
-        frames, audio = dict(segment.get('keyframes') or {}), dict(segment.get('audio') or {})
-        selected = shot_creation.resolve(settings, first=frames.get('first'), last=frames.get('last'), guide=audio.get('guide'))
-        # Resolve only explicitly bound controls, under the existing owner checks.
-        for key in ('first', 'last'):
-            if frames.get(key):
-                frames[key] = resolve_pipeline_material(frames[key], '图片', manifest)
-        if audio.get('guide'):
-            audio['guide'] = resolve_pipeline_material(audio['guide'], '音频', manifest)
-    except (ValueError, KeyError) as exc:
-        raise HTTPException(422, {'code': 'unsupported_creation_inputs', 'message': str(exc)}) from exc
-    configure_production_preset(manifest, selected['preset_id'], automatic=True)
-    stage = next(row for row in manifest['pipeline'] if row['id'] == production_presets.stage_id(selected['preset_id']))
-    segment.update(keyframes=frames, audio=audio, workflow=stage['execution']['references'][0], resolved_generation=selected)
-
-
 def select_preset_execution(project: dict[str, Any], workflow: str | None, requested_stage: str | None) -> tuple[str | None, str | None]:
     """Keep installed first-only and first/last recipes independently selectable."""
+    if requested_stage == 'auto':
+        raise HTTPException(422, {'code': 'explicit_stage_required',
+                                  'message': '自动制作方案已移除；请显式选择制作步骤或工作流。'})
     known_stages = {production_presets.preset_stage_id(key) for key in production_presets.PRESET_IDS}
-    if requested_stage in (None, 'auto') and workflow:
+    if requested_stage is None and workflow:
         matched = next((stage for stage in project.get('pipeline', []) if stage.get('id') in known_stages and
                         workflow in ((stage.get('execution') or {}).get('references') or [])), None)
         if matched:
             return workflow, str(matched['id'])
-    if requested_stage == 'auto':
-        raise HTTPException(422, '请先保存描述、剧情时长和画幅。')
     if requested_stage in known_stages:
         stage = next((item for item in project.get('pipeline', []) if item.get('id') == requested_stage), None)
         if stage:
@@ -3259,6 +3221,7 @@ from .routers.plan_editing import (
     mark_segment_checkpoints_stale,
     operate_plan_segment,
     persist_plan_edit,
+    plan_selection_error,
     recalculate_segment_timeline,
     record_segment_artifacts,
     shot_reference,

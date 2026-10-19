@@ -33,11 +33,6 @@ def steps(readiness=None, *, has_project=False):
                  action=key, applicable=(len(segments) > 1 if key == 'joins' and has_project else True),
                  completed=bool(completed.get(key)))
             for key, title, purpose, prepare, result, action in STEPS]
-    if readiness.get('creation_mode') == 'auto':
-        preset_step = next(item for item in rows if item['id'] == 'preset')
-        preset_step.update(title='描述你想要的画面', applicable=False, completed=False,
-                           prepare='填写描述、剧情时长和目标画幅；开始画面与表演声音按需展开。',
-                           state_label='制作方式由已保存的明确输入决定，无需选择或安装工作流。')
     join_step = next(item for item in rows if item['id'] == 'joins')
     join_state = join_review.get('state', 'unavailable' if len(segments) > 1 else 'not_applicable')
     join_step.update(state=join_state, state_label={

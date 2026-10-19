@@ -73,6 +73,9 @@ def submit_project_batch(request: BatchRequest, manifest: dict[str, Any] | None 
                                       'action': 'reorder_batch'})
     for asset_id in requested_ids:
         backend.ensure_asset_not_pending(project_id, asset_id)
+    if request.pipeline_stage_id == 'auto':
+        raise HTTPException(422, {'code': 'explicit_stage_required',
+                                  'message': '自动制作方案已移除；请显式选择制作步骤或工作流后再提交批次。'})
     batch_id = str(uuid.uuid4())
     now = time.time()
     task_ids: list[str] = []
@@ -81,12 +84,8 @@ def submit_project_batch(request: BatchRequest, manifest: dict[str, Any] | None 
         backend.check_queue_limits(connection, backend.settings_owner(), len(requested_ids))
         for sequence, asset_id in enumerate(requested_ids, start=1):
             segment = plan_segments[asset_id]
-            if (segment.get('generation') or {}).get('mode') == 'auto':
-                _, resolved_stage = backend.select_preset_execution(project, segment.get('workflow'), None)
-                if request.pipeline_stage_id not in (None, 'auto', resolved_stage):
-                    raise HTTPException(422, '自动分镜需按已保存输入生成；更换技术步骤前请切换高级模式。')
             workflow = segment.get("workflow")
-            if not workflow and request.pipeline_stage_id not in (None, 'auto'):
+            if not workflow and request.pipeline_stage_id is not None:
                 workflow, _ = backend.select_preset_execution(project, None, request.pipeline_stage_id)
             if not workflow:
                 raise HTTPException(422, {

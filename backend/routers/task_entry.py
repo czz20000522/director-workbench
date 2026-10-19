@@ -336,12 +336,10 @@ def submit_project_task(request: StartRequest, manifest: dict[str, Any] | None =
     except (OSError, ValueError):
         document = {"segments": []}
     backend.check_plan_revision(document, request.expected_revision)
+    if request.pipeline_stage_id == 'auto':
+        raise HTTPException(422, {'code': 'explicit_stage_required',
+                                  'message': '自动制作方案已移除；请显式选择制作步骤或工作流后再提交。'})
     segment = next((item for item in document.get("segments", []) if isinstance(item, dict) and item.get("id") == asset_id), None)
-    if isinstance(segment, dict) and (segment.get('generation') or {}).get('mode') == 'auto':
-        payload['workflow'] = segment['workflow']
-        _, resolved_stage = backend.select_preset_execution(project, segment['workflow'], None)
-        if request.pipeline_stage_id not in (None, 'auto', resolved_stage):
-            raise HTTPException(422, '自动创作方式由已保存输入决定；使用不同技术方案前请明确切换高级模式。')
     if isinstance(segment, dict) and segment.get("workflow") and not payload.get("workflow"):
         payload["workflow"] = str(segment["workflow"])
     payload['workflow'], stage_id = backend.select_preset_execution(project, payload.get('workflow'), request.pipeline_stage_id)
