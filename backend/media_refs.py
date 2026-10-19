@@ -558,6 +558,7 @@ def list_project_media(project_id: str, *, category: str = 'all', kind: str = 'a
         raise MediaRefError('媒体列表分页无效')
     if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
         raise MediaRefError('媒体列表分页无效')
+    ttl = _ttl(ttl_seconds)
     manifest = _manifest(project_id)
     targets: list[dict[str, Any]] = []
     if category in {'all', 'assets'}:
@@ -606,7 +607,7 @@ def list_project_media(project_id: str, *, category: str = 'all', kind: str = 'a
         seen.add(ref)
         try:
             described = resolve_target(project_id, target)
-            issued = issue(project_id, target, ttl_seconds=ttl_seconds)
+            issued = issue(project_id, target, ttl_seconds=ttl)
         except MediaRefError:
             continue
         resolved.append({'media_ref': ref, 'url': issued['url'], 'expires_at': issued['expires_at'],
