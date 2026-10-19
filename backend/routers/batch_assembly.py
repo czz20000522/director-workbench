@@ -139,6 +139,17 @@ def get_project_assembly_edit(project_id: str) -> dict[str, Any]:
         raise HTTPException(422, str(exc)) from exc
 
 
+@ROUTER.get('/api/projects/{project_id}/assembly/continuity-check')
+def check_project_assembly_continuity(project_id: str) -> dict[str, Any]:
+    """Read-only cross-shot continuity check; never writes the plan or adopts a candidate."""
+    manifest = backend.require_project_manifest(project_id)
+    document, _ = backend.load_project_plan(project_id)
+    try:
+        return backend.assembly_continuity_check_view(manifest, document)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 @ROUTER.put('/api/projects/{project_id}/assembly/joins/{left_id}/{right_id}')
 @backend.plan_transaction
 def save_project_assembly_join(project_id: str, left_id: str, right_id: str,
@@ -272,16 +283,19 @@ def submit_project_assembly(manifest: dict[str, Any] | None = None, request: Ass
     segment_ids = [str(item.get("id")) for item in plan_document.get("segments", []) if isinstance(item, dict) and item.get("id")]
     if not segment_ids:
         raise HTTPException(422, "装配需要至少一个分镜")
-    missing_video = [asset_id for asset_id in segment_ids if not next(
-        ((item.get("video") or {}).get("path") for item in plan_document["segments"]
-         if isinstance(item, dict) and str(item.get("id")) == asset_id), None
-    )]
-    if missing_video:
-        raise HTTPException(409, f"{len(missing_video)} 个分镜尚无当前生成视频")
+    continuity = backend.assembly_continuity_check_view(project, plan_document)
+    if continuity['blockers']:
+        raise HTTPException(409, {
+            'code': 'assembly_continuity_blocked',
+            'message': '跨分镜连续性检查存在阻断项；请按 blockers 逐项人工处理后重新检查。',
+            'blockers': continuity['blockers'],
+        })
     try:
         workflow_path = (backend.build_assembly_snapshot(manifest, bind_adoptions=True)
                          if manifest is not None else backend.build_assembly_snapshot())
-    except (OSError, ValueError, RuntimeError) as exc:
+    except ValueError as exc:
+        raise HTTPException(409, {'code': 'assembly_snapshot_invalid', 'message': str(exc)}) from exc
+    except (OSError, RuntimeError) as exc:
         raise HTTPException(500, f"无法根据最新分段计划生成装配工作流: {exc}") from exc
     active_statuses = tuple(task_scheduler.WAITING | task_scheduler.EXECUTING)
     assembly_asset_id = str(project.get("assembly_asset_id", "MASTER"))

@@ -36,7 +36,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictInt, field_validator, model_validator
-from . import production_presets, background_jobs, speech, keyframes, audio_edit_tasks, audio_master_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, assembly_continuity, guide, readiness, task_scheduler, creative_inspection
+from . import production_presets, background_jobs, speech, keyframes, audio_edit_tasks, audio_master_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, assembly_continuity, assembly_continuity_check, guide, readiness, task_scheduler, creative_inspection
 from . import output_resolution, enhancement, task_store
 import av
 import paths
@@ -3282,16 +3282,38 @@ def assembly_trim_summary(manifest, document):
         return None
 
 
+def assembly_sound_selection_state(manifest: dict[str, Any], document: dict[str, Any]) -> dict[str, Any]:
+    """Report whether the sound policy is an explicit record, without choosing one."""
+    edit = document.get('assembly_edit')
+    saved = edit.get('sound') if isinstance(edit, dict) and isinstance(edit.get('sound'), dict) else None
+    if saved and saved.get('policy'):
+        return {'selected': True, 'selection_source': 'assembly_edit'}
+    legacy = (manifest.get('assembly') or {}).get('audio')
+    if legacy:
+        return {'selected': True, 'selection_source': 'legacy_master'}
+    return {'selected': False, 'selection_source': None}
+
+
 def assembly_sound_selection(manifest: dict[str, Any], document: dict[str, Any]) -> dict[str, Any]:
+    state = assembly_sound_selection_state(manifest, document)
     edit = document.get('assembly_edit') or {}
     sound = edit.get('sound') if isinstance(edit, dict) else None
     if not isinstance(sound, dict):
         legacy = (manifest.get('assembly') or {}).get('audio')
-        return {'policy': 'legacy_master' if legacy else 'segment_native', 'audio_asset_id': None,
-                'path': str(resolve_registered_path(str(legacy))) if legacy else None,
-                'duration_seconds': None}
+        if not legacy:
+            return {'policy': 'segment_native', 'audio_asset_id': None, 'path': None,
+                    'duration_seconds': None, **state}
+        try:
+            path = resolve_registered_path(str(legacy))
+        except (HTTPException, ValueError, OSError) as exc:
+            raise ValueError('作品登记的全片音轨路径不可用') from exc
+        if not path.is_file():
+            raise ValueError('作品登记的全片音轨文件不存在')
+        return {'policy': 'legacy_master', 'audio_asset_id': None, 'path': str(path),
+                'duration_seconds': None, **state}
     if sound.get('policy') in {'segment_native', 'mute'}:
-        return {'policy': sound['policy'], 'audio_asset_id': None, 'path': None, 'duration_seconds': None}
+        return {'policy': sound['policy'], 'audio_asset_id': None, 'path': None,
+                'duration_seconds': None, **state}
     if sound.get('policy') != 'complete_master' or not sound.get('audio_asset_id'):
         raise ValueError('全片音轨设置无效')
     asset_id = str(sound['audio_asset_id'])
@@ -3323,7 +3345,68 @@ def assembly_sound_selection(manifest: dict[str, Any], document: dict[str, Any])
         raise ValueError(f'全片音轨仅 {duration} 秒，短于分镜总时长 {round(target, 3)} 秒；请先用全片母版后期明确补静音，或在Mac制作完整母版后上传')
     return {'policy': 'complete_master', 'audio_asset_id': asset_id, 'path': str(path),
             'duration_seconds': duration, 'size_bytes': path.stat().st_size,
-            'modified_ns': path.stat().st_mtime_ns}
+            'modified_ns': path.stat().st_mtime_ns, **state}
+
+
+def assembly_sound_view(manifest: dict[str, Any], document: dict[str, Any], *, include_continuity: bool,
+                        sound_override: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return the saved/validated sound view plus its explicit-selection metadata."""
+    if sound_override is not None:
+        sound = dict(sound_override)
+    elif include_continuity:
+        try:
+            sound = assembly_sound_selection(manifest, document)
+        except ValueError as exc:
+            saved = ((document.get('assembly_edit') or {}).get('sound') or {})
+            legacy = (manifest.get('assembly') or {}).get('audio')
+            sound = {'policy': saved.get('policy', 'legacy_master' if legacy else 'segment_native'),
+                     'audio_asset_id': saved.get('audio_asset_id'), 'path': None,
+                     'duration_seconds': None, 'error': str(exc)}
+    else:
+        saved = ((document.get('assembly_edit') or {}).get('sound') or {})
+        legacy = (manifest.get('assembly') or {}).get('audio')
+        sound = {'policy': saved.get('policy', 'legacy_master' if legacy else 'segment_native'),
+                 'audio_asset_id': saved.get('audio_asset_id'), 'path': None,
+                 'duration_seconds': None}
+    state = assembly_sound_selection_state(manifest, document)
+    sound['selected'] = state['selected']
+    sound['selection_source'] = state['selection_source']
+    return sound
+
+
+def assembly_sound_blockers(manifest: dict[str, Any], document: dict[str, Any],
+                            sound: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Explicit sound policy is required before assembly; invalid selections block too."""
+    project_id = str(manifest.get('id') or '')
+    action = {'id': 'set_assembly_sound', 'label': '显式选择音轨方式', 'method': 'PUT',
+              'path': f'/api/projects/{project_id}/assembly/sound'}
+    state = assembly_sound_selection_state(manifest, document)
+    blockers: list[dict[str, Any]] = []
+    if not state['selected']:
+        blockers.append({
+            'code': 'sound_policy_required',
+            'category': 'sound',
+            'message': '装配前须显式选择音轨方式：保留各段原音、统一完整音轨或全片静音。',
+            'object': {'kind': 'assembly', 'id': 'sound'},
+            'evidence': {'selected': False, 'policy': (sound or {}).get('policy')},
+            'action': action,
+        })
+    error = (sound or {}).get('error')
+    if error:
+        blockers.append({
+            'code': 'sound_policy_invalid',
+            'category': 'sound',
+            'message': str(error),
+            'object': {'kind': 'assembly', 'id': 'sound'},
+            'evidence': {'selected': state['selected'], 'policy': (sound or {}).get('policy'),
+                         'selection_source': state['selection_source']},
+            'action': action,
+        })
+    return blockers
+
+
+def assembly_join_tracking(document: dict[str, Any]) -> str:
+    return 'tracked' if isinstance(document.get('assembly_edit'), dict) else 'legacy_untracked'
 
 
 def assembly_continuity_view(manifest: dict[str, Any], document: dict[str, Any]) -> dict[str, Any]:
@@ -3332,6 +3415,20 @@ def assembly_continuity_view(manifest: dict[str, Any], document: dict[str, Any])
     result['project_id'] = manifest['id']
     result['revision'] = int(document.get('revision', 0) or 0)
     return result
+
+
+def assembly_continuity_check_view(manifest: dict[str, Any], document: dict[str, Any]) -> dict[str, Any]:
+    """Return the read-only explicit-input cross-shot check (no plan writes)."""
+    video_blockers = assembly_video_blockers(document)
+    adoption_blockers = assembly_adoption_blockers(manifest, document)
+    join_rows = assembly_edit.joins(document, missing_videos=[item['dependency'] for item in video_blockers])
+    sound = assembly_sound_view(manifest, document, include_continuity=True)
+    sound_blockers = assembly_sound_blockers(manifest, document, sound)
+    return assembly_continuity_check.build_report(
+        manifest, document, video_blockers=video_blockers, adoption_blockers=adoption_blockers,
+        joins=join_rows, sound=sound, sound_blockers=sound_blockers,
+        join_tracking=assembly_join_tracking(document),
+        reference_resolver=shot_reference, media_facts=authorized_media_facts)
 
 
 def assembly_edit_view(manifest: dict[str, Any], document: dict[str, Any], *, include_continuity: bool = True,
@@ -3351,30 +3448,24 @@ def assembly_edit_view(manifest: dict[str, Any], document: dict[str, Any], *, in
     ]
     missing_videos = [item['dependency'] for item in video_blockers if item['code'] == 'video_required']
     join_rows = assembly_edit.joins(document, missing_videos=[item['dependency'] for item in video_blockers])
-    if sound_override is not None:
-        sound = sound_override
-    elif include_continuity:
-        try:
-            sound = assembly_sound_selection(manifest, document)
-        except ValueError as exc:
-            saved = ((document.get('assembly_edit') or {}).get('sound') or {})
-            sound = {'policy': saved.get('policy', 'legacy_master'),
-                     'audio_asset_id': saved.get('audio_asset_id'), 'path': None,
-                     'duration_seconds': None, 'error': str(exc)}
-    else:
-        saved = ((document.get('assembly_edit') or {}).get('sound') or {})
-        legacy = (manifest.get('assembly') or {}).get('audio')
-        sound = {'policy': saved.get('policy', 'legacy_master' if legacy else 'segment_native'),
-                 'audio_asset_id': saved.get('audio_asset_id'), 'path': None,
-                 'duration_seconds': None}
+    blocking_joins = assembly_edit.blocking_joins(document)
+    sound = assembly_sound_view(manifest, document, include_continuity=include_continuity,
+                                sound_override=sound_override)
+    sound_blockers = assembly_sound_blockers(manifest, document, sound)
+    blockers = [*video_blockers, *adoption_blockers, *sound_blockers]
     warnings = ['非 WAV 完整母版的时长尚未验证，成片后须核对尾部声音'] if (
         sound.get('policy') == 'complete_master' and sound.get('duration_seconds') is None and not sound.get('error')) else []
     continuity = assembly_continuity_view(manifest, document) if include_continuity else None
+    continuity_check = assembly_continuity_check.build_report(
+        manifest, document, video_blockers=video_blockers, adoption_blockers=adoption_blockers,
+        joins=join_rows, sound=sound, sound_blockers=sound_blockers,
+        join_tracking=assembly_join_tracking(document),
+        reference_resolver=shot_reference, media_facts=authorized_media_facts)
     return {'project_id': manifest['id'], 'revision': int(document.get('revision', 0) or 0),
-            'joins': join_rows, 'blocking_joins': assembly_edit.blocking_joins(document),
+            'joins': join_rows, 'blocking_joins': blocking_joins,
             'join_review': assembly_edit.review_readiness(join_rows),
-            'continuity': continuity,
-            'missing_videos': missing_videos, 'blockers': [*video_blockers, *adoption_blockers],
+            'continuity': continuity, 'continuity_check': continuity_check,
+            'missing_videos': missing_videos, 'blockers': blockers,
             'adoption': {'ready': not adoption_blockers, 'blockers': adoption_blockers, 'segments': adoption_segments},
             'sound': sound, 'warnings': warnings, 'target_duration_seconds': round(sum(float(item.get('duration_seconds') or 0)
                        for item in document.get('segments', []) if isinstance(item, dict)), 3),
@@ -3389,8 +3480,8 @@ def assembly_edit_view(manifest: dict[str, Any], document: dict[str, Any], *, in
             'audio_assets': [{'id': item['id'], 'title': item.get('title', item['id'])}
                              for item in manifest.get('assets', []) if isinstance(item, dict)
                              and item.get('kind') == 'audio' and item.get('id')],
-            'ready': readiness_complete and bool(document.get('segments')) and not video_blockers and not adoption_blockers and
-                     not assembly_edit.blocking_joins(document) and not sound.get('error')}
+            'ready': readiness_complete and bool(document.get('segments')) and not blockers and
+                     not blocking_joins and not sound.get('error')}
 
 
 @app.post("/api/projects/{project_id}/upload")
@@ -3729,6 +3820,7 @@ app.include_router(_batch_assembly_router)
 # app.py、private_mode.py 与既有测试都以 backend.<名称> 取用它们。
 from .routers.batch_assembly import (
     assembly_video_blockers,
+    check_project_assembly_continuity,
     get_project_assembly_edit,
     preflight_project_assembly,
     resume_batch,
