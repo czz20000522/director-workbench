@@ -96,8 +96,47 @@ def open_checked(path: str | Path, expected: FileIdentity | None = None):
         raise
 
 
+def copy_checked(
+    source: str | Path,
+    destination: str | Path,
+    expected: FileIdentity | None = None,
+    *,
+    chunk_size: int = 1024 * 1024,
+) -> tuple[Path, FileIdentity]:
+    """Copy bytes from an identity-checked source and recheck it afterwards.
+
+    The source descriptor remains pinned to the file that was checked before
+    the copy.  A path replacement during the copy is detected by the final
+    identity check, so callers can reject the operation without registering a
+    different file under the requested name.
+    """
+    handle, candidate, captured = open_checked(source, expected)
+    destination_path = Path(destination)
+    try:
+        with destination_path.open('wb') as output:
+            while True:
+                chunk = handle.read(chunk_size)
+                if not chunk:
+                    break
+                output.write(chunk)
+        try:
+            verify_identity(candidate, captured)
+        except (FileNotFoundError, OSError) as exc:
+            raise AccessDenied('文件在复制期间发生变化，请重新读取后重试') from exc
+        if destination_path.stat().st_size != captured.size:
+            raise AccessDenied('素材复制结果大小不一致，请重新读取后重试')
+        return destination_path, captured
+    finally:
+        handle.close()
+
+
 class VerifiedFileResponse(FileResponse):
     """FileResponse variant that reads from the identity-checked open handle."""
+
+    # Keep multipart responses bounded even when a client sends a large Range
+    # header.  Single ranges remain streamable regardless of their size.
+    max_ranges = 8
+    max_total_range_bytes = 64 * 1024 * 1024
 
     def __init__(self, path: str | Path, *, identity: FileIdentity, **kwargs):
         super().__init__(path, **kwargs)
@@ -125,12 +164,13 @@ class VerifiedFileResponse(FileResponse):
             )(scope, receive, send)
 
     async def _handle_simple(self, send, send_header_only, send_pathsend):
+        if send_header_only:
+            await send({'type': 'http.response.start', 'status': self.status_code, 'headers': self.raw_headers})
+            await send({'type': 'http.response.body', 'body': b'', 'more_body': False})
+            return
         handle, _, _ = await self._open()
         try:
             await send({'type': 'http.response.start', 'status': self.status_code, 'headers': self.raw_headers})
-            if send_header_only:
-                await send({'type': 'http.response.body', 'body': b'', 'more_body': False})
-                return
             while True:
                 chunk = await self._read(handle, self.chunk_size)
                 more_body = len(chunk) == self.chunk_size
@@ -141,15 +181,16 @@ class VerifiedFileResponse(FileResponse):
             await self._close(handle)
 
     async def _handle_single_range(self, send, start, end, file_size, send_header_only):
+        headers = dict(self.raw_headers)
+        headers[b'content-range'] = f'bytes {start}-{end - 1}/{file_size}'.encode()
+        headers[b'content-length'] = str(end - start).encode()
+        if send_header_only:
+            await send({'type': 'http.response.start', 'status': 206, 'headers': list(headers.items())})
+            await send({'type': 'http.response.body', 'body': b'', 'more_body': False})
+            return
         handle, _, _ = await self._open()
         try:
-            headers = dict(self.raw_headers)
-            headers[b'content-range'] = f'bytes {start}-{end - 1}/{file_size}'.encode()
-            headers[b'content-length'] = str(end - start).encode()
             await send({'type': 'http.response.start', 'status': 206, 'headers': list(headers.items())})
-            if send_header_only:
-                await send({'type': 'http.response.body', 'body': b'', 'more_body': False})
-                return
             await self._seek(handle, start)
             remaining = end - start
             while remaining:
@@ -162,31 +203,46 @@ class VerifiedFileResponse(FileResponse):
             await self._close(handle)
 
     async def _handle_multiple_ranges(self, send, ranges, file_size, send_header_only):
-        # Multiple ranges are uncommon for the workbench UI; retain Starlette's
-        # framing while reading all bytes from one identity-checked descriptor.
+        boundary = 'director-' + os.urandom(13).hex()
+        content_type = self.headers['content-type']
+        content_length, header_generator = self.generate_multipart(ranges, boundary, file_size, content_type)
+        headers = dict(self.raw_headers)
+        headers[b'content-type'] = f'multipart/byteranges; boundary={boundary}'.encode()
+        headers[b'content-length'] = str(content_length).encode()
+        if send_header_only:
+            await send({'type': 'http.response.start', 'status': 206, 'headers': list(headers.items())})
+            await send({'type': 'http.response.body', 'body': b'', 'more_body': False})
+            return
+
+        # Open only after all headers have been calculated, then keep one
+        # identity-checked descriptor for the complete streamed response.
         handle, _, _ = await self._open()
         try:
-            boundary = 'director-' + os.urandom(13).hex()
-            content_type = self.headers['content-type']
-            parts = []
+            await send({'type': 'http.response.start', 'status': 206, 'headers': list(headers.items())})
             for start, end in ranges:
+                await send({'type': 'http.response.body', 'body': header_generator(start, end), 'more_body': True})
                 await self._seek(handle, start)
-                body = bytearray()
-                while len(body) < end - start:
-                    chunk = await self._read(handle, min(self.chunk_size, end - start - len(body)))
+                remaining = end - start
+                while remaining:
+                    chunk = await self._read(handle, min(self.chunk_size, remaining))
                     if not chunk:
                         break
-                    body.extend(chunk)
-                parts.append(
-                    f'--{boundary}\r\nContent-Type: {content_type}\r\n'
-                    f'Content-Range: bytes {start}-{end - 1}/{file_size}\r\n\r\n'.encode()
-                    + bytes(body) + b'\r\n'
-                )
-            payload = b''.join(parts) + f'--{boundary}--'.encode()
-            headers = dict(self.raw_headers)
-            headers[b'content-type'] = f'multipart/byteranges; boundary={boundary}'.encode()
-            headers[b'content-length'] = str(len(payload)).encode()
-            await send({'type': 'http.response.start', 'status': 206, 'headers': list(headers.items())})
-            await send({'type': 'http.response.body', 'body': b'' if send_header_only else payload, 'more_body': False})
+                    remaining -= len(chunk)
+                    await send({'type': 'http.response.body', 'body': chunk, 'more_body': True})
+                await send({'type': 'http.response.body', 'body': b'\r\n', 'more_body': True})
+            await send({'type': 'http.response.body', 'body': f'--{boundary}--'.encode(), 'more_body': False})
         finally:
             await self._close(handle)
+
+    @classmethod
+    def _parse_range_header(cls, http_range: str, file_size: int):
+        if http_range.count(',') + 1 > cls.max_ranges:
+            from starlette.responses import RangeNotSatisfiable
+
+            raise RangeNotSatisfiable(file_size)
+        ranges = super()._parse_range_header(http_range, file_size)
+        if len(ranges) > 1 and sum(end - start for start, end in ranges) > cls.max_total_range_bytes:
+            from starlette.responses import RangeNotSatisfiable
+
+            raise RangeNotSatisfiable(file_size)
+        return ranges
