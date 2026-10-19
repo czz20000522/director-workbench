@@ -53,6 +53,7 @@ def test_edit_source_scope_parameters_and_no_comfy(preset_client, monkeypatch):
     assert Path(task['payload']['request']['source']).read_bytes() == source.read_bytes()
 
 
+@pytest.mark.host_tool
 def test_audio_master_registers_long_candidate_and_reports_loudness(preset_client):
     client, project = preset_client
     register_audio(project)

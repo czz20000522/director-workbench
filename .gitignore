@@ -1,5 +1,7 @@
 # Source allowlist. New public files must be reviewed and added explicitly.
 /*
+# Test scratch is project-owned and local-only; never publish it.
+/.t/
 !/start-director-services.ps1
 !/start-director-services.cmd
 !/stop-director-services.cmd

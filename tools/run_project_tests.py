@@ -98,7 +98,7 @@ def suite_specs(project: Path, run_root: Path, desktop: Path | None = None) -> d
             'modules': ['fastapi', 'uvicorn', 'httpx', 'pytest', 'mcp', 'numpy', 'av'],
             'args': ['-m', 'pytest', 'tests', 'tools/test_build_video_finish_workflow.py',
                      '--ignore=tests/test_generate_auk_flash.py', '-q',
-                     '--basetemp', str(run_root / 'pytest')],
+                     '--basetemp', str(run_root / 'p')],
         },
         'auk': {
             'python': host / 'ComfyUI-Shared/tools/AuK/.venv/Scripts/python.exe',
@@ -243,7 +243,7 @@ def fast_suite(project: Path, run_root: Path, check: bool, host: Path,
     """The sub-minute local layer: pure unit/contract tests, no service or browser."""
     config = select_tests.load_config(impact_config_path(project, impact_config), project)
     args = ['-m', 'pytest', *config.fast_tests, '-q',
-            '--basetemp', str(run_root / 'pytest')]
+            '--basetemp', str(run_root / 'p')]
     result = interpreter_suite(name='fast', project=project, run_root=run_root,
                                interpreter=project / '.venv/Scripts/python.exe', args=args,
                                modules=FAST_MODULES, check=check, host=host,
@@ -327,7 +327,7 @@ def affected_suite(project: Path, run_root: Path, check: bool, host: Path, *,
         mode = 'full-core'
     elif selection.pytest:
         args = ['-m', 'pytest', *selection.pytest, '-q',
-                '--basetemp', str(run_root / 'pytest')]
+                '--basetemp', str(run_root / 'p')]
         mode = 'selected'
     else:
         args = None
@@ -460,7 +460,7 @@ def browser_suite(spec: dict, project: Path, run_root: Path, name: str, check: b
                 command.append(str(target))
             elif name in BROWSER_PYTEST_FIXTURES:
                 module, handed = BROWSER_PYTEST_FIXTURES[name]
-                basetemp = run_root / f'pytest-{name}'
+                basetemp = run_root / f'p-{name}'
                 # --basetemp creates its own directory but not the parent, and the run root
                 # already exists here. The producer's output is read-only in places (the
                 # ancestor-link fixtures hold a real .git), so retention removes it through
@@ -620,3 +620,4 @@ def main() -> int:
 
 if __name__ == '__main__':
     sys.exit(main())
+

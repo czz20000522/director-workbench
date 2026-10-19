@@ -9,6 +9,8 @@ import pytest
 
 from backend import audio_master_tasks
 
+pytestmark = pytest.mark.host_tool
+
 
 def write_wav(path: Path, values: np.ndarray, rate: int = 8000, channels: int = 1) -> None:
     values = np.asarray(values, dtype=np.float64).reshape(-1, channels)
