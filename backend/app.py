@@ -1401,7 +1401,7 @@ def adoption_segment_signature(document: dict[str, Any], asset_id: str) -> str |
     payload = {
         'id': asset_id,
         'duration_seconds': segment.get('duration_seconds'),
-        'start_seconds': segment.get('start_seconds'),
+        'start_seconds': float(segment.get('start_seconds') or 0),
         'video_path': video.get('path'),
         'current_version_task_id': segment.get('current_version_task_id') or segment.get('comfyui_task_id'),
         'alternate_path': alternate.get('path') if isinstance(alternate, dict) else None,
