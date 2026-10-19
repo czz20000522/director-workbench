@@ -90,7 +90,7 @@ from fastapi.testclient import TestClient
 from backend.private_sessions import AccountStore
 # The stripped checkout plays the host here, so its runtime root is the host machine
 # root's: account files must land inside the permitted server root.
-AccountStore(Path('ComfyUI-Workspace/runtime/accounts.json').resolve()).create_account('user001', 'synthetic-password')
+AccountStore(Path('runtime/accounts.json').resolve()).create_account('user001', 'synthetic-password')
 from backend import private_app
 from backend import app as backend
 assert backend.load_project_catalog() == {'projects': []}
@@ -110,9 +110,10 @@ print('empty private checkout passed')
     # The exported checkout is its own host here: without this the machine roots stay
     # pointed at the real Comfy-Desktop installation, and the account store's permitted
     # root no longer covers this temporary copy.
-    environment.update(DIRECTOR_ACCOUNTS_FILE=str(checkout / 'ComfyUI-Workspace/runtime/accounts.json'),
-                       DIRECTOR_DESKTOP_ROOT=str(checkout),
-                       DIRECTOR_ADMIN_USERS='user001', DIRECTOR_PRIVATE_ROOT=str(checkout / 'ComfyUI-Workspace/private-workspaces'))
+    environment.update(DIRECTOR_ACCOUNTS_FILE=str(checkout / 'runtime/accounts.json'),
+                       DIRECTOR_COMFY_ROOT=str(checkout / 'comfy'),
+                       DIRECTOR_DATA_ROOT=str(checkout),
+                       DIRECTOR_ADMIN_USERS='user001', DIRECTOR_PRIVATE_ROOT=str(checkout / 'private-workspaces'))
     result = subprocess.run([sys.executable, '-c', code], cwd=project, env=environment,
                             capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr

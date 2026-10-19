@@ -19,8 +19,10 @@ from .storage import storage_roots
 
 
 
-# 路径根：桌面根、项目根、运行目录与两个作品资产根。
-ROOT = paths.DESKTOP_ROOT
+# 路径根：工作台数据根、ComfyUI 机器根、项目根、运行目录与两个作品资产根。
+ROOT = paths.DATA_ROOT
+COMFY_ROOT = paths.COMFY_ROOT
+SHARED_ROOT = paths.SHARED_ROOT
 PROJECT = paths.PROJECT_ROOT
 RUNTIME = paths.RUNTIME_ROOT / "director-workbench"
 DB_PATH = RUNTIME / "director-workbench.sqlite3"
@@ -29,7 +31,7 @@ TASK_EXECUTION_TIMEOUT_SECONDS = float(os.environ.get("DIRECTOR_TASK_EXECUTION_T
 TASK_MONITOR_POLL_SECONDS = float(os.environ.get("DIRECTOR_TASK_MONITOR_POLL_SECONDS", "2"))
 RENDERER = paths.SKILLS_ROOT / "skills" / "aigc-video-production" / "scripts" / "h3_render.py"
 TEMPLATE = paths.SKILLS_ROOT / "skills" / "aigc-video-production" / "assets" / "workflows" / "minimax-h3-current-api.json"
-STORAGE_ROOTS = storage_roots(ROOT)
+STORAGE_ROOTS = storage_roots(ROOT, shared_root=SHARED_ROOT)
 INPUT_ROOT = STORAGE_ROOTS['input']
 OUTPUT_ROOT = STORAGE_ROOTS['output']
 FINISH_BUILDER = PROJECT / "tools" / "build_video_finish_workflow.py"
@@ -49,7 +51,7 @@ PROJECT_CATALOG_LOCK = threading.RLock()
 DB_LOCK = threading.Lock()
 
 # 本机模型与快照路径（只读；模型文件本身不进版本库）。
-MODEL_ROOT = ROOT / "ComfyUI-Shared" / "models" / "LLM"
+MODEL_ROOT = SHARED_ROOT / "models" / "LLM"
 PRIMARY_MODEL_ROOT = MODEL_ROOT / "Qwen3.8-27B-Uncensored"
 PRIMARY_MODEL = PRIMARY_MODEL_ROOT / "Qwen3.8-27B-Uncensored-Q4_K_M.gguf"
 PRIMARY_MMPROJ = PRIMARY_MODEL_ROOT / "mmproj-F16.gguf"

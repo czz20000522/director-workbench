@@ -9,24 +9,25 @@ from backend.user_context import Layout, UserContext, project_location
 
 
 def test_configured_roots_and_legacy_reference_are_distinct(tmp_path):
-    root = tmp_path / 'Comfy-Desktop'
-    config = root / 'ComfyUI-Workspace/config/storage.json'
+    data = tmp_path / 'workbench-data'
+    shared = tmp_path / 'comfy' / 'ComfyUI-Shared'
+    config = data / 'config/storage.json'
     config.parent.mkdir(parents=True)
     archive = tmp_path / 'DirectorWorkspaces/user001/series/Example/Work/input'
-    old = root / 'ComfyUI-Shared/input/Example/Work'
+    old = shared / 'input/Example/Work'
     config.write_text(json.dumps({'schema_version': 1, 'roots': {
         'input': str(tmp_path / 'Comfy-Assets/input'),
         'output': str(tmp_path / 'Comfy-Assets/output'),
         'workspaces': str(tmp_path / 'DirectorWorkspaces/user001/series'),
         'private': str(tmp_path / 'DirectorWorkspaces'),
     }, 'legacy_assets': [{'source': str(old), 'destination': str(archive)}]}), encoding='utf-8')
-    roots = storage_roots(root)
+    roots = storage_roots(data, shared_root=shared)
     assert roots['input'] == (tmp_path / 'Comfy-Assets/input').resolve()
-    assert relocate_asset(old / 'shot.png', root, roots) == archive / 'shot.png'
-    assert relocate_asset(root / 'ComfyUI-Shared/input/new.png', root, roots) == roots['input'] / 'new.png'
-    assert relocate_asset(root / 'ComfyUI-Shared/models/model.bin', root, roots) == root / 'ComfyUI-Shared/models/model.bin'
+    assert relocate_asset(old / 'shot.png', data, roots, shared_root=shared) == archive / 'shot.png'
+    assert relocate_asset(shared / 'input/new.png', data, roots, shared_root=shared) == roots['input'] / 'new.png'
+    assert relocate_asset(shared / 'models/model.bin', data, roots, shared_root=shared) == shared / 'models/model.bin'
     with pytest.raises(ValueError):
-        relocate_asset(old / '..' / 'other.png', root, roots)
+        relocate_asset(old / '..' / 'other.png', data, roots, shared_root=shared)
 
 
 def test_registered_series_work_location_stays_in_owner_tree(tmp_path):

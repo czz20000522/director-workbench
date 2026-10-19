@@ -82,7 +82,7 @@ def suite_specs(project: Path, run_root: Path, desktop: Path | None = None) -> d
     # The host installation is a machine root, not a property of the checkout, so it
     # arrives as an explicit argument instead of a depth derivation: a relocated
     # checkout still points at the real host, and a test can hand in a synthetic one.
-    host = paths.DESKTOP_ROOT if desktop is None else Path(desktop)
+    host = paths.COMFY_ROOT if desktop is None else Path(desktop)
     return {
         'core': {
             'python': project / '.venv/Scripts/python.exe',
@@ -318,7 +318,7 @@ def run(suite: str = 'all', check: bool = False, report_path: Path | None = None
     if keep_runs < 1:
         raise ValueError('keep_runs must be at least 1: the run in flight is one of the kept roots')
     project = project.resolve()
-    host = paths.DESKTOP_ROOT if desktop is None else Path(desktop).resolve()
+    host = paths.COMFY_ROOT if desktop is None else Path(desktop).resolve()
     runtime_root = paths.RUNTIME_ROOT if runtime is None else Path(runtime).resolve()
     # A short run-root token keeps room for the fixture roots below; see browser_suite().
     run_root = runtime_root / ('t-' + uuid.uuid4().hex[:8])

@@ -194,7 +194,7 @@ def test_private_empty_accounts_ownership_and_unbound_other_assets(private_workb
 def test_installed_node_no_image_branch_without_models_or_gpu():
     # Run the actual installed method body with fake clip/latent I/O only.
     # This proves branch wiring, not sampling or the real tensor latent.
-    source = backend.ROOT / 'ComfyUI-Installs/第一个comfyui配置/ComfyUI/comfy_extras/nodes_minimax_h3.py'
+    source = backend.COMFY_ROOT / 'ComfyUI-Installs/第一个comfyui配置/ComfyUI/comfy_extras/nodes_minimax_h3.py'
     if not source.is_file():
         pytest.skip('Host-specific H3 node probe requires the separate ComfyUI desktop installation')
     tree = ast.parse(source.read_text(encoding='utf-8-sig'))

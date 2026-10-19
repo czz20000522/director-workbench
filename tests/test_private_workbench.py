@@ -37,7 +37,8 @@ def private_workbench(tmp_path, monkeypatch):
     catalog.mkdir(parents=True)
     (catalog / 'catalog.json').write_text('{"projects": []}', encoding='utf-8')
     root = tmp_path / 'ComfyUI-Workspace' / 'private-workspaces'
-    for name, value in {'ROOT': tmp_path, 'PROJECT': project, 'PROJECTS_ROOT': catalog,
+    for name, value in {'ROOT': tmp_path, 'COMFY_ROOT': tmp_path, 'SHARED_ROOT': tmp_path / 'ComfyUI-Shared',
+                        'PROJECT': project, 'PROJECTS_ROOT': catalog,
                         'PROJECT_CATALOG_PATH': catalog / 'catalog.json', 'DIRECTOR_WORKSPACES_ROOT': project / 'workspaces',
                         'DB_PATH': tmp_path / 'tasks.sqlite3', 'RUNTIME': tmp_path / 'runtime', 'INPUT_ROOT': tmp_path / 'input',
                         'OUTPUT_ROOT': tmp_path / 'output', 'PRIVATE_WORKSPACES': None}.items():
@@ -420,7 +421,7 @@ def test_admin_legacy_registration_does_not_grant_other_private_files(private_wo
     unrelated = project / 'unregistered.json'
     unrelated.write_text('{"secret": true}')
     assert admin.get('/media-file', params={'path': str(unrelated)}).status_code == 403
-    output = backend.ROOT / 'ComfyUI-Shared/output/legacy-series/old.mp4'
+    output = backend.SHARED_ROOT / 'output/legacy-series/old.mp4'
     output.parent.mkdir(parents=True)
     output.write_bytes(b'legacy-result')
     snapshot = project / 'workflows/snapshots/old.json'

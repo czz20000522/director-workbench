@@ -12,7 +12,7 @@ import whisper
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import paths
 
-ROOT = paths.DESKTOP_ROOT
+ROOT = paths.DATA_ROOT
 DEFAULT_MODEL_ROOT = paths.SHARED_ROOT / "tools" / "index-tts" / "models" / "whisper"
 FFMPEG_DIR = paths.SHARED_ROOT / "tools" / "index-tts"
 

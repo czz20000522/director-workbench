@@ -48,6 +48,8 @@ from .secure_files import checked_directory, checked_file, verify_directory_iden
 # 模块级常量与共享锁集中在 workbench_config；这里重新导出，既有引用与 monkeypatch 不变。
 from .workbench_config import (
     ROOT,
+    COMFY_ROOT,
+    SHARED_ROOT,
     PROJECT,
     RUNTIME,
     DB_PATH,
@@ -357,13 +359,20 @@ def registered_candidate(value: str | Path) -> Path:
     text = str(value).replace('\\', '/')
     candidate = Path(text)
     if not candidate.is_absolute():
-        candidate = ROOT / text if text.startswith('ComfyUI-') else ROOT / 'ComfyUI-Shared' / text
+        if text.startswith('ComfyUI-Workspace/'):
+            candidate = ROOT / text[len('ComfyUI-Workspace/'):]
+        elif text.startswith('ComfyUI-Shared/'):
+            candidate = SHARED_ROOT / text[len('ComfyUI-Shared/'):]
+        elif text.startswith('ComfyUI-'):
+            candidate = COMFY_ROOT / text
+        else:
+            candidate = SHARED_ROOT / text
     if not paths.storage_config(ROOT).is_file():
         return candidate
     return relocate_asset(candidate, ROOT, {
         'input': INPUT_ROOT, 'output': OUTPUT_ROOT, 'workspaces': DIRECTOR_WORKSPACES_ROOT,
         'private': PRIVATE_WORKSPACES.layout.root if PRIVATE_WORKSPACES else STORAGE_ROOTS['private'],
-    })
+    }, shared_root=SHARED_ROOT)
 
 
 def resolve_registered_path(value: str | Path) -> Path:
@@ -902,7 +911,7 @@ def resolve_workflow_path(value: str | Path) -> Path:
     candidate = Path(value)
     if not candidate.is_absolute():
         raw = str(value).replace("\\", "/")
-        candidate = ROOT / raw if raw.startswith("ComfyUI-Workspace/") else PROJECT / raw
+        candidate = ROOT / raw[len("ComfyUI-Workspace/"):] if raw.startswith("ComfyUI-Workspace/") else PROJECT / raw
     candidate = registered_candidate(candidate)
     if PRIVATE_WORKSPACES is not None and current_principal.get() is not None:
         resolved = PRIVATE_WORKSPACES.file(candidate)
@@ -915,7 +924,7 @@ def resolve_workflow_path(value: str | Path) -> Path:
             raise ValueError('工作流 JSON 不存在')
         return resolved
     workflow_roots = [PROJECT.resolve(), DIRECTOR_WORKSPACES_ROOT.resolve()]
-    workflow_roots.extend(destination for source, destination in legacy_mappings(ROOT) if source == ROOT / 'ComfyUI-Workspace/projects/director-workbench/workspaces')
+    workflow_roots.extend(destination for source, destination in legacy_mappings(ROOT) if source == COMFY_ROOT / 'ComfyUI-Workspace/projects/director-workbench/workspaces')
     if not any(resolved.is_relative_to(root) for root in workflow_roots):
         raise ValueError("工作流必须位于导演台项目或作品目录内")
     if resolved.suffix.lower() != ".json" or not resolved.is_file():
@@ -1057,7 +1066,7 @@ def prepare_pipeline_payload(payload: dict[str, Any], stage_id: str, values: dic
             _, selected_stage = select_preset_execution(project, segment.get('workflow'), None)
             if stage_id != selected_stage:
                 raise HTTPException(422, '自动创作方式由已保存输入决定；请预检当前创作输入。')
-            capability = production_presets.catalog(ROOT / 'ComfyUI-Shared' / 'models', h3_preset_id)
+            capability = production_presets.catalog(SHARED_ROOT / 'models', h3_preset_id)
             if not capability.get('available') or capability.get('missing_models'):
                 raise HTTPException(422, {'code': 'creation_resources_missing',
                     'message': '当前创作所需模型或制作文件不可用，请联系管理员补齐；分镜已保存，不会自动下载。',
@@ -3005,7 +3014,7 @@ def save_project_manifest(manifest: dict[str, Any]) -> None:
 
 @app.get("/api/production-presets")
 def production_preset_catalog() -> dict[str, Any]:
-    return {"presets": [production_presets.catalog(ROOT / "ComfyUI-Shared" / "models", preset_id) for preset_id in production_presets.PRESET_IDS]}
+    return {"presets": [production_presets.catalog(SHARED_ROOT / "models", preset_id) for preset_id in production_presets.PRESET_IDS]}
 
 
 @app.get('/api/projects/{project_id}/reusable-templates')
@@ -3013,7 +3022,7 @@ def reusable_template_catalog(project_id: str) -> dict[str, Any]:
     """Expose the small, safe template set used by the simplified entry point."""
     manifest = require_project_manifest(project_id)
     installed = (manifest.get('production_preset') or {}).get('id')
-    presets = [production_presets.catalog(ROOT / 'ComfyUI-Shared' / 'models', preset_id)
+    presets = [production_presets.catalog(SHARED_ROOT / 'models', preset_id)
                for preset_id in production_presets.PRESET_IDS]
     by_id = {item['id']: item for item in presets}
     return {'templates': [
