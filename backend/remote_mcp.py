@@ -12,13 +12,32 @@ import httpx
 from mcp_server.server import create_server
 from .mcp_access_config import transport_security
 
-# The remote entry stays deliberately smaller than the stdio tool set: the
-# creation path plus read-only guide settings. Everything else stays reachable
-# through the authenticated HTTP API; publishing more means naming it here.
+# The remote entry is an explicit safety boundary over the complete stdio
+# adapter. Every name below maps to an existing authenticated HTTP business
+# route; tools that accept server paths, mutate global settings, restore or
+# resume work, or perform potentially destructive control actions stay local.
 REMOTE_TOOLS = (
-    'create_project', 'list_projects', 'read_project', 'create_shot', 'update_shot',
-    'upload_material', 'preflight', 'submit_shot', 'get_submission_receipt', 'read_queue',
-    'get_task', 'list_shot_versions', 'stop_generation', 'read_guide_settings',
+    # Creative projects, scripts, plans, registered materials, and reviews.
+    'list_projects', 'upload_material', 'read_guide_settings', 'read_queue',
+    'list_production_presets', 'configure_production_preset', 'create_project',
+    'read_project', 'read_script', 'save_script', 'list_tasks', 'get_task',
+    'list_shot_versions', 'preflight', 'save_creative_draft', 'record_review',
+    'approve_candidate', 'update_shot', 'arrange_shot', 'create_shot',
+    'reuse_materials',
+    # Reference analysis and its bounded, project-owned corrections.
+    'list_references', 'read_reference', 'start_reference_analysis',
+    'reconcile_reference_analysis', 'annotate_reference_timeline',
+    'correct_reference_artifact', 'correct_reference_classification',
+    'convert_reference_to_shots',
+    # Generation, keyframes, speech, assembly, and task receipts/stopping.
+    'submit_shot', 'submit_batch', 'get_keyframe_capability', 'submit_assembly',
+    'read_assembly_edit', 'review_assembly_join', 'set_assembly_sound',
+    'preflight_assembly_edit', 'submit_keyframe', 'get_speech_capability',
+    'submit_speech', 'get_submission_receipt', 'reconcile_generation',
+    'stop_generation',
+    # CPU media capability and project-owned candidate tasks.
+    'submit_audio_edit', 'get_media_capability', 'create_silence', 'inspect_video',
+    'transcribe_audio', 'export_silent_video',
 )
 
 

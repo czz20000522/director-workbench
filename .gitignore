@@ -40,10 +40,12 @@
 !/backend/routers/gpu_idle.py
 !/backend/routers/queue_scheduler.py
 !/backend/routers/events_media.py
+!/backend/assembly_continuity.py
 !/contracts/
 /contracts/*
 !/docs/
 /docs/*
+!/docs/assembly-continuity.md
 !/mcp_server/
 /mcp_server/*
 !/public/
@@ -62,6 +64,7 @@
 !/src/app/hooks.ts
 !/tests/
 /tests/*
+!/tests/test_assembly_continuity.py
 !/tests/conftest.py
 !/tests/support.py
 !/tools/
