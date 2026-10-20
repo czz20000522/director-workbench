@@ -14,6 +14,9 @@ const KeyframePanel = lazy(() => import('./KeyframePanel'));
 const SpeechPanel = lazy(() => import('./SpeechPanel'));
 import { projectMaterialOptions } from './materialOptions';
 import './studio-flow.css';
+import './reverse-workbench.css';
+import './material-library.css';
+import './post-tools.css';
 
 type Step = 1 | 2 | 3 | 4 | 5 | 6;
 type Tool = 'script' | 'reference' | 'materials' | 'tasks' | 'post';
@@ -21,7 +24,7 @@ type PostTab = 'enhance' | 'media' | 'audio' | 'keyframe' | 'speech';
 type ProjectAsset = { id: string; title?: string; kind?: string };
 type ProjectDetail = { assets?: ProjectAsset[] };
 type ProjectSummary = { id: string; title: string; series: string; selected?: boolean };
-type Segment = { id: string; duration_seconds?: number; prompt?: string; status?: string; video?: { path?: string } };
+type Segment = { id: string; duration_seconds?: number; prompt?: string; status?: string; script_scene_id?: string; video?: { path?: string } };
 type Plan = { revision: number; segments: Segment[]; assembly?: { output?: string; prompt_id?: string; status?: string } };
 type Preset = { id: string; title: string; description?: string; available?: boolean; missing_models?: string[] };
 type ProjectView = ProjectSummary & { plan: Plan | null; step: string; progress: number };
@@ -244,7 +247,7 @@ function ToolPage({ tool, projectId, plan, projectDetail, postTab, setPostTab, o
   tool: Tool; projectId: string; plan: Plan | null; projectDetail: ProjectDetail | null; postTab: PostTab; setPostTab: (tab: PostTab) => void; onStep: (step: Step) => void;
   onRefreshPlan: () => Promise<void>; onRefreshProject: () => Promise<void>; onOpenShot: (shotId: string) => void; onBrowse: () => void;
 }) {
-  if (tool === 'script') return <div className="sf-step-panel sf-tool-panel"><p className="sf-step-label">工具</p><h1>剧本</h1><p className="sf-lede">编辑本作剧本；从场景生成镜头时，明确回到分镜步骤添加。</p><ScriptWorkbench projectId={projectId} shots={(plan?.segments || []).map(segment => ({ id: segment.id }))} request={fetch} onCreateShot={() => onStep(3)} onSelectShot={shotId => onOpenShot(shotId)} /></div>;
+  if (tool === 'script') return <div className="sf-step-panel sf-tool-panel"><p className="sf-step-label">工具</p><h1>剧本</h1><p className="sf-lede">编辑本作剧本；从场景生成镜头时，明确回到分镜步骤添加。</p><ScriptWorkbench projectId={projectId} shots={(plan?.segments || []).map(segment => ({ id: segment.id, script_scene_id: segment.script_scene_id }))} request={fetch} onCreateShot={() => onStep(3)} onSelectShot={shotId => onOpenShot(shotId)} /></div>;
   if (tool === 'reference') return <div className="sf-step-panel sf-tool-panel"><p className="sf-step-label">工具</p><h1>参考</h1><p className="sf-lede">拆解参考视频；转成分镜需要你明确确认，不会自动写入创作计划。</p><ReverseWorkbench projectId={projectId} onConverted={() => { void onRefreshPlan(); onStep(3); }} /></div>;
   if (tool === 'materials') return <div className="sf-step-panel sf-tool-panel"><p className="sf-step-label">工具</p><h1>素材</h1><p className="sf-lede">登记、查看和复用本作素材。</p><ProjectMaterialLibrary projectId={projectId} onRegistered={() => { void onRefreshPlan(); }} /></div>;
   if (tool === 'tasks') return <TaskPage projectId={projectId} />;

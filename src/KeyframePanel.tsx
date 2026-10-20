@@ -21,6 +21,9 @@ export default function KeyframePanel({ projectId, options, onBrowse, onComplete
   projectId: string; options: MaterialOption[]; onBrowse: () => void; onComplete: (taskId: string) => void;
   simple?: boolean; initialMode?: Mode; candidateTaskId?: string; creativeProfile?: CreativeProfile; defaultOpen?: boolean;
 }) {
+  // The shell now renders every post tool expanded; keep accepting the legacy
+  // prop without letting it collapse the form again.
+  void defaultOpen;
   const storageKey = `director-workbench:${projectId}:keyframe:v1`;
   const promptId = useId();
   const modeId = useId();
@@ -145,34 +148,36 @@ export default function KeyframePanel({ projectId, options, onBrowse, onComplete
     } catch (error) { if (mounted.current) setMessage(error instanceof Error ? error.message : '读取候选失败'); }
     finally { working.current = false; if (mounted.current) setBusy(false); }
   }
-  return <details className="director-operation-panel quick-image-form" open={simple || defaultOpen || undefined} aria-label="生成关键帧">
-    <summary>{simple ? '生成图片' : '生成关键帧'} {task && `· ${labels[task.status] || task.status}`}</summary>
-    <div className="director-creation-grid">
-      <div><label htmlFor={modeId}>生成方式</label><select id={modeId} value={saved.mode} disabled={Boolean(saved.pending)} onChange={event => persist({ ...saved, mode: event.target.value as Mode })}><option value="text">文字生图</option><option value="reference">参考图改图</option></select></div>
-      {saved.mode === 'text' && <ResolutionPicker label="图片" disabled={Boolean(saved.pending)} aspect={saved.width === saved.height ? '1:1' : (saved.width ?? 768) > (saved.height ?? 1344) ? '16:9' : '9:16'} resolution={saved.output_resolution} nativeSize={`${saved.width ?? 768} × ${saved.height ?? 1344}`} onChange={(aspect, output_resolution) => { const [width, height] = aspect === '1:1' ? [1024, 1024] : aspect === '16:9' ? [1344, 768] : [768, 1344]; persist({ ...saved, width, height, output_resolution }); }} />}
-      <div className="director-creation-wide"><label htmlFor={promptId}>{simple ? '图片提示词' : '画面描述'}</label><textarea id={promptId} rows={4} maxLength={6000} value={saved.prompt} disabled={Boolean(saved.pending)} placeholder="描述角色、场景、姿态和构图" onChange={event => persist({ ...saved, prompt: event.target.value })} /></div>
-      {saved.mode === 'reference' && <fieldset className="director-creation-wide" disabled={Boolean(saved.pending)}><MaterialSelect label="参考图片" kind="image" value={saved.reference_image} options={options} onChange={value => persist({ ...saved, reference_image: value })} onBrowse={onBrowse} /></fieldset>}
-      <details className="director-creation-wide"><summary>高级：固定种子</summary><label>种子<input type="number" min={0} max={4294967295} step={1} value={saved.seed} disabled={Boolean(saved.pending)} onChange={event => persist({ ...saved, seed: Number(event.target.value) })} /></label></details>
-    </div>
-    <p className="director-muted">生成后可直接下载图片，也可以选作视频的开始画面。每次生成都会保留原图。</p>
-    {(!capability?.available || capability.mode !== saved.mode) && <p role="status" aria-live="polite">{!capability || capability.mode !== saved.mode ? '正在检查生成环境…' : capability.reason || '关键帧生成环境尚未就绪。'}</p>}
-    {capability && !capability.available && <details><summary>查看缺少的资源</summary><p>{[...(capability.missing_nodes || []), ...(capability.missing_models || [])].join("、") || "请检查生成服务连接。"}</p></details>}
-    {message && <p role="status" aria-live="polite">{message}</p>}
-    {task?.error && <p role="status" aria-live="polite">{task.error}</p>}
-    {task?.status === 'succeeded' && <div className="quick-candidate-meta" aria-label="图片候选信息">
-      <div className="quick-candidate-meta-heading"><strong>当前图片候选</strong><span>已生成 · 待审阅</span></div>
-      <dl><div><dt>输出规格</dt><dd>{resolutionLabel(task.result?.output_size?.resolution ?? task.payload?.request?.output_resolution)}{(task.result?.output_size?.width ?? task.result?.width) && (task.result?.output_size?.height ?? task.result?.height) ? ` · ${task.result?.output_size?.width ?? task.result?.width} × ${task.result?.output_size?.height ?? task.result?.height}` : ''}</dd></div><div><dt>处理方式</dt><dd>{methodLabel(task.result?.output_size?.method ?? task.payload?.output_size?.method)}</dd></div><div><dt>输入快照</dt><dd>完整提示词与参数已保留</dd></div></dl>
-      {(task.result?.native_output || task.result?.published_native_output) && <p>原生文件已保留；当前显示的是处理后的图片候选。</p>}
-    </div>}
-    <div className="director-form-actions">
-      {!saved.pending && <button className="button primary compact" disabled={busy || (!capability?.available || capability.mode !== saved.mode) || !saved.prompt.trim() || (saved.mode === 'reference' && !saved.reference_image) || !Number.isInteger(saved.seed) || saved.seed < 0 || saved.seed > 4294967295} onClick={() => void act('submit')}>{simple ? '生成图片' : '生成关键帧候选'}</button>}
-      {saved.pending && !task && <><button className="button secondary compact" disabled={busy} onClick={() => void act('check')}>核对关键帧提交</button><button className="button secondary compact" disabled={busy || (!capability?.available || capability.mode !== saved.mode)} onClick={() => void act('submit')}>使用原凭据重试</button></>}
-      {task && !terminal.includes(task.status) && task.status !== 'needs_reconcile' && <button className="button secondary compact" disabled={busy} onClick={() => void act('stop')}>停止关键帧任务</button>}
-      {task?.status === 'needs_reconcile' && <button className="button secondary compact" disabled={busy} onClick={() => void act('reconcile')}>核对关键帧结果</button>}
-      {task && terminal.includes(task.status) && <button className="button secondary compact" disabled={busy} onClick={() => { if (persist({ ...saved, pending: undefined })) setTask(null); }}>{simple ? '修改提示词 / 再生成' : '准备下一张关键帧'}</button>}
-      {simple && candidateTaskId && (!saved.pending || task && terminal.includes(task.status)) && <button className="button secondary compact" disabled={busy} onClick={() => void editCandidate()}>载入当前图片的提示词</button>}
-      {task && <TaskQueueStatus task={{ ...task, asset_id: '关键帧' }} />}
-      {task && <span>{labels[task.status] || task.status}</span>}
-    </div>
-  </details>;
+  return <section className={simple ? 'sf-post-tools quick-image-form' : 'sf-post-tools'} aria-label="生成关键帧">
+    <section className="sf-post-section" aria-label={simple ? '生成图片设置' : '生成关键帧设置'}>
+      <div className="sf-post-section-head"><h2 className="sf-post-title">{simple ? '生成图片' : '生成关键帧'}</h2><p className="sf-post-status">{task ? (labels[task.status] || task.status) : '显式提交'}</p></div>
+      <div className="sf-post-fields">
+        <div className="sf-post-field"><label htmlFor={modeId}>生成方式</label><select id={modeId} value={saved.mode} disabled={Boolean(saved.pending)} onChange={event => persist({ ...saved, mode: event.target.value as Mode })}><option value="text">文字生图</option><option value="reference">参考图改图</option></select></div>
+        {saved.mode === 'text' && <div className="sf-post-field sf-post-field--wide"><ResolutionPicker label="图片" disabled={Boolean(saved.pending)} aspect={saved.width === saved.height ? '1:1' : (saved.width ?? 768) > (saved.height ?? 1344) ? '16:9' : '9:16'} resolution={saved.output_resolution} nativeSize={`${saved.width ?? 768} × ${saved.height ?? 1344}`} onChange={(aspect, output_resolution) => { const [width, height] = aspect === '1:1' ? [1024, 1024] : aspect === '16:9' ? [1344, 768] : [768, 1344]; persist({ ...saved, width, height, output_resolution }); }} /></div>}
+        <div className="sf-post-field sf-post-field--wide"><label htmlFor={promptId}>{simple ? '图片提示词' : '画面描述'}</label><textarea id={promptId} rows={4} maxLength={6000} value={saved.prompt} disabled={Boolean(saved.pending)} placeholder="描述角色、场景、姿态和构图" onChange={event => persist({ ...saved, prompt: event.target.value })} /></div>
+        {saved.mode === 'reference' && <fieldset className="sf-post-field sf-post-field--wide" disabled={Boolean(saved.pending)}><MaterialSelect label="参考图片" kind="image" value={saved.reference_image} options={options} onChange={value => persist({ ...saved, reference_image: value })} onBrowse={onBrowse} /></fieldset>}
+        <div className="sf-post-subblock sf-post-field--wide"><h3 className="sf-post-subtitle">固定种子</h3><label className="sf-post-field">种子<input type="number" min={0} max={4294967295} step={1} value={saved.seed} disabled={Boolean(saved.pending)} onChange={event => persist({ ...saved, seed: Number(event.target.value) })} /></label></div>
+      </div>
+      <p className="sf-post-hint">生成后可直接下载图片，也可以选作视频的开始画面。每次生成都会保留原图。</p>
+      {(!capability?.available || capability.mode !== saved.mode) && <p className="sf-post-message" role="status" aria-live="polite">{!capability || capability.mode !== saved.mode ? '正在检查生成环境…' : capability.reason || '关键帧生成环境尚未就绪。'}</p>}
+      {capability && !capability.available && <p className="sf-post-alert">缺少的资源：{[...(capability.missing_nodes || []), ...(capability.missing_models || [])].join("、") || "请检查生成服务连接。"}</p>}
+      {message && <p className="sf-post-message" role="status" aria-live="polite">{message}</p>}
+      {task?.error && <p className="sf-post-message" role="status" aria-live="polite">{task.error}</p>}
+      {task?.status === 'succeeded' && <div className="quick-candidate-meta" aria-label="图片候选信息">
+        <div className="quick-candidate-meta-heading"><strong>当前图片候选</strong><span>已生成 · 待审阅</span></div>
+        <dl><div><dt>输出规格</dt><dd>{resolutionLabel(task.result?.output_size?.resolution ?? task.payload?.request?.output_resolution)}{(task.result?.output_size?.width ?? task.result?.width) && (task.result?.output_size?.height ?? task.result?.height) ? ` · ${task.result?.output_size?.width ?? task.result?.width} × ${task.result?.output_size?.height ?? task.result?.height}` : ''}</dd></div><div><dt>处理方式</dt><dd>{methodLabel(task.result?.output_size?.method ?? task.payload?.output_size?.method)}</dd></div><div><dt>输入快照</dt><dd>完整提示词与参数已保留</dd></div></dl>
+        {(task.result?.native_output || task.result?.published_native_output) && <p className="sf-post-hint">原生文件已保留；当前显示的是处理后的图片候选。</p>}
+      </div>}
+      <div className="sf-post-actions">
+        {!saved.pending && <button className="button primary compact" disabled={busy || (!capability?.available || capability.mode !== saved.mode) || !saved.prompt.trim() || (saved.mode === 'reference' && !saved.reference_image) || !Number.isInteger(saved.seed) || saved.seed < 0 || saved.seed > 4294967295} onClick={() => void act('submit')}>{simple ? '生成图片' : '生成关键帧候选'}</button>}
+        {saved.pending && !task && <><button className="button secondary compact" disabled={busy} onClick={() => void act('check')}>核对关键帧提交</button><button className="button secondary compact" disabled={busy || (!capability?.available || capability.mode !== saved.mode)} onClick={() => void act('submit')}>使用原凭据重试</button></>}
+        {task && !terminal.includes(task.status) && task.status !== 'needs_reconcile' && <button className="button secondary compact" disabled={busy} onClick={() => void act('stop')}>停止关键帧任务</button>}
+        {task?.status === 'needs_reconcile' && <button className="button secondary compact" disabled={busy} onClick={() => void act('reconcile')}>核对关键帧结果</button>}
+        {task && terminal.includes(task.status) && <button className="button secondary compact" disabled={busy} onClick={() => { if (persist({ ...saved, pending: undefined })) setTask(null); }}>{simple ? '修改提示词 / 再生成' : '准备下一张关键帧'}</button>}
+        {simple && candidateTaskId && (!saved.pending || task && terminal.includes(task.status)) && <button className="button secondary compact" disabled={busy} onClick={() => void editCandidate()}>载入当前图片的提示词</button>}
+        {task && <TaskQueueStatus task={{ ...task, asset_id: '关键帧' }} />}
+        {task && <span className="sf-post-status">{labels[task.status] || task.status}</span>}
+      </div>
+    </section>
+  </section>;
 }

@@ -385,35 +385,140 @@ export default function ReverseWorkbench({ projectId, initialAnalysisId = '', on
   const fast = modelStatus.fast_optional;
   const busy = uploading || analyzing || converting || saving || timelineSaving || observing;
 
-  if (loading) return <section className="reverse-empty" role="status" aria-live="polite"><LoaderCircle className="spin" size={24} /><p>正在读取参考拆解…</p></section>;
+  if (loading) return <section className="rw-tool" role="status" aria-live="polite">
+    <div className="rw-loading"><LoaderCircle className="spin" size={20} /><span>正在读取参考拆解…</span></div>
+  </section>;
 
-  if (!active) return <section className="reverse-empty"><div className="reverse-empty-mark"><Search size={28} /></div><span className="director-kicker">参考素材逆向拆解</span><h1>从一段参考开始</h1><p>导入音视频只登记媒体事实；范围、帧和 ASR 都由你显式调用。</p><input ref={fileRef} type="file" accept="video/*,audio/*" hidden onChange={event => void uploadReference(event.target.files?.[0])} /><button className="button primary" disabled={uploading} onClick={() => fileRef.current?.click()}>{uploading ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />}{uploading ? '正在登记媒体…' : '导入参考素材'}</button><div className="reverse-empty-facts"><span>保留原始参考</span><span>只保存媒体事实</span><span>观察与分镜分开</span></div>{error && <p className="director-error">{error}</p>}</section>;
+  if (!active) return <section className="rw-tool rw-empty">
+    <div className="rw-empty-card">
+      <div className="rw-empty-icon"><Search size={20} /></div>
+      <div className="rw-empty-copy">
+        <h2>从一段参考开始</h2>
+        <p>导入音视频只登记媒体事实；范围、帧和 ASR 都由你显式调用。</p>
+        <ul className="rw-facts"><li>保留原始参考</li><li>只保存媒体事实</li><li>观察与分镜分开</li></ul>
+      </div>
+      <div className="rw-empty-actions">
+        <input ref={fileRef} type="file" accept="video/*,audio/*" hidden onChange={event => void uploadReference(event.target.files?.[0])} />
+        <button className="button primary" disabled={uploading} onClick={() => fileRef.current?.click()}>{uploading ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />}{uploading ? '正在登记媒体…' : '导入参考素材'}</button>
+      </div>
+      {error && <p className="director-error rw-empty-error" role="alert">{error}</p>}
+    </div>
+  </section>;
 
-  return <section className="reverse-workbench" data-reference-page={referencePage}>
-    <header className="reverse-heading"><div><span className="director-kicker">参考素材逆向拆解</span><h1>{active.title}</h1><p>{active.source.original_name} · {active.source.width ?? '?'}x{active.source.height ?? '?'} · {Number(active.source.duration_seconds ?? 0).toFixed(1)} 秒 · 已登记媒体事实</p></div><div className="reverse-heading-actions"><select aria-label="选择参考拆解" disabled={busy} value={active.id} onChange={event => setActiveId(event.target.value)}>{analyses.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select><input ref={fileRef} type="file" accept="video/*,audio/*" hidden onChange={event => void uploadReference(event.target.files?.[0])} /><button className="button secondary" disabled={busy} onClick={() => fileRef.current?.click()}><Upload size={15} />新增参考</button>{semanticJob?.status === 'needs_reconcile' && <button className="button secondary" disabled={busy} onClick={() => void reconcileAnalysis()}>核对分析结果</button>}<button className="button secondary" disabled={busy || semanticJob?.status === 'needs_reconcile' || !primary?.ready || !active.timeline.some(segment => segment.frame || segment.frame_path || segment.frames?.length)} onClick={() => void runSemanticAnalysis()}>{analyzing ? <LoaderCircle className="spin" size={15} /> : <BrainCircuit size={15} />}{semanticJob?.status === 'needs_reconcile' ? '分析任务待核对' : analyzing ? analysisLabel : active.stages.some(stage => stage.id === 'semantic' && stage.status === 'done') ? '重新分析内容' : '运行模型观察'}</button><button className="button primary" disabled={busy || !shotDrafts.length} onClick={() => void convertToProduction()}>{converting ? <LoaderCircle className="spin" size={15} /> : <ArrowRight size={15} />}{'转为制作草案（需明确分镜）'}</button><button className="button secondary" onClick={exportAnalysis}><ArrowDownToLine size={15} />导出拆解</button></div></header>
-    {semanticJob && <TaskQueueStatus task={{ ...semanticJob, asset_id: active.id }} />}
-    {semanticJob?.task_id && analyzing && <button className="button secondary compact" disabled={startingAnalysis || ['stop_requested', 'stopping'].includes(semanticJob.status)} onClick={() => void stopSemanticAnalysis()}>停止内容分析</button>}
-    <ClassificationEditor key={`${projectId}:${active.id}`} analysis={active} projectId={projectId} disabled={busy} onSaved={analysis => setAnalyses(previous => previous.map(item => item.id === analysis.id ? analysis : item))} />
+  return <section className="reverse-workbench rw-tool" data-reference-page={referencePage}>
+    <div className="rw-toolbar">
+      <div className="rw-current">
+        <span className="rw-current-label">当前参考</span>
+        <strong title={active.title}>{active.title}</strong>
+        <small>{active.source.original_name} · {active.source.width ?? '?'}×{active.source.height ?? '?'} · {Number(active.source.duration_seconds ?? 0).toFixed(1)} 秒 · 已登记媒体事实</small>
+      </div>
+      <div className="rw-toolbar-actions">
+        <label className="rw-select">选择当前参考
+          <select aria-label="选择参考拆解" disabled={busy} value={active.id} onChange={event => setActiveId(event.target.value)}>{analyses.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select>
+        </label>
+        <input ref={fileRef} type="file" accept="video/*,audio/*" hidden onChange={event => void uploadReference(event.target.files?.[0])} />
+        <button className="button secondary" disabled={busy} onClick={() => fileRef.current?.click()}><Upload size={15} />新增参考</button>
+        {semanticJob?.status === 'needs_reconcile' && <button className="button secondary" disabled={busy} onClick={() => void reconcileAnalysis()}>核对分析结果</button>}
+        <button className="button secondary" disabled={busy || semanticJob?.status === 'needs_reconcile' || !primary?.ready || !active.timeline.some(segment => segment.frame || segment.frame_path || segment.frames?.length)} onClick={() => void runSemanticAnalysis()}>{analyzing ? <LoaderCircle className="spin" size={15} /> : <BrainCircuit size={15} />}{semanticJob?.status === 'needs_reconcile' ? '分析任务待核对' : analyzing ? analysisLabel : active.stages.some(stage => stage.id === 'semantic' && stage.status === 'done') ? '重新分析内容' : '运行模型观察'}</button>
+        <button className="button primary" disabled={busy || !shotDrafts.length} onClick={() => void convertToProduction()}>{converting ? <LoaderCircle className="spin" size={15} /> : <ArrowRight size={15} />}{'转为制作草案（需明确分镜）'}</button>
+        <button className="button secondary" onClick={exportAnalysis}><ArrowDownToLine size={15} />导出拆解</button>
+      </div>
+    </div>
 
-    <section className="director-operation-panel" aria-label="显式参考观察工具"><h2>显式观察工具</h2><p>上传只登记媒体事实。每次提取、采样、音频或 ASR 都必须由调用方明确触发，结果保存为只读观察。</p><div className="director-creation-grid"><label>开始时间（秒）<input type="number" min="0" step="0.1" value={rangeStart} onChange={event => setRangeStart(event.target.value)} /></label><label>结束时间（秒）<input type="number" min="0" step="0.1" value={rangeEnd} onChange={event => setRangeEnd(event.target.value)} /></label><label>帧时间（可选）<input type="number" min="0" step="0.1" value={frameTime} onChange={event => setFrameTime(event.target.value)} /></label></div><div className="director-panel-actions"><button className="button secondary compact" disabled={busy} onClick={() => void explicitObservation('range')}>提取明确范围/帧</button><button className="button secondary compact" disabled={busy || !active.source.has_audio} onClick={() => void explicitObservation('audio')}>提取明确范围音频</button><label>采样时间点（逗号分隔）<input value={sampleTimes} onChange={event => setSampleTimes(event.target.value)} placeholder="0, 2.5, 5" /></label><button className="button secondary compact" disabled={busy} onClick={() => void explicitObservation('sample')}>显式采样</button><button className="button secondary compact" disabled={busy || !active.source.has_audio} onClick={() => void explicitObservation('asr')}>运行 ASR（模型候选）</button></div></section>
+    {semanticJob && <div className="rw-job">
+      <TaskQueueStatus task={{ ...semanticJob, asset_id: active.id }} />
+      {semanticJob.task_id && analyzing && <button className="button secondary compact" disabled={startingAnalysis || ['stop_requested', 'stopping'].includes(semanticJob.status)} onClick={() => void stopSemanticAnalysis()}>停止内容分析</button>}
+    </div>}
 
-    <section className="director-operation-panel" aria-label="明确制作分镜"><h2>明确制作分镜</h2><p>等距采样/待确认范围和模型观察不能直接转为分镜。先填写参考时间段与制作字段，再加入非空列表。</p><div className="director-creation-grid"><label>分镜提示词<textarea rows={2} value={shotPrompt} onChange={event => setShotPrompt(event.target.value)} placeholder="调用方明确填写" /></label><label>动作与表演<textarea rows={2} value={shotPerformance} onChange={event => setShotPerformance(event.target.value)} placeholder="调用方明确填写" /></label></div><button className="button secondary compact" disabled={busy} onClick={addShotDraft}>加入制作分镜</button>{shotDrafts.length ? <ul>{shotDrafts.map(shot => <li key={shot.segment_id}>{shot.segment_id} · {shot.start_seconds}s–{shot.end_seconds}s · {shot.fields.prompt || shot.fields.performance}<button className="text-button" onClick={() => setShotDrafts(previous => previous.filter(item => item.segment_id !== shot.segment_id))}>移除</button></li>)}</ul> : <p>尚未提交明确制作分镜。</p>}</section>
+    <div className="rw-status-row">
+      <ClassificationEditor key={`${projectId}:${active.id}`} analysis={active} projectId={projectId} disabled={busy} onSaved={analysis => setAnalyses(previous => previous.map(item => item.id === analysis.id ? analysis : item))} />
+      <details className="reverse-model-details rw-models">
+        <summary>分析能力与模型状态</summary>
+        <div className="reverse-model-strip">
+          <BrainCircuit size={16} />
+          <div><strong>{primary?.label ?? 'Qwen3.8-27B Uncensored Q4_K_M'}</strong><span>主模型 · 仅在你显式运行时输出逐帧观察与结构化模型候选，需人工校订</span></div>
+          <span className={primary?.ready ? 'ready' : 'waiting'}>{primary?.ready ? '模型文件齐备' : primary?.model_ready ? '缺少视觉投影' : '主模型缺失'}</span>
+          <div className="reverse-model-divider" />
+          <div><strong>{fast?.label ?? 'Qwen3-VL-8B-Instruct Q4_K_M'}</strong><span>可选快速预检，不是主流程必经步骤</span></div>
+          <span className={fast?.ready ? 'ready' : 'waiting'}>{fast?.ready ? '快速模型可用' : '快速模型缺失'}</span>
+          <button className="icon-button" aria-label="刷新模型状态" title="刷新模型状态" disabled={busy} onClick={() => void load().catch(reason => setError(String(reason)))}><RefreshCw size={15} /></button>
+        </div>
+      </details>
+    </div>
 
-    {conversionConflict && <section role="alert" className="director-creative-conflict"><p>参考已更新，本次未转换。重新读取后请先核对内容，再决定是否转为制作草案。</p><button className="button secondary compact" disabled={busy} onClick={async () => { try { await load(); setConversionConflict(false); setError(''); setNotice('已读取最新参考；请核对后再转换。'); } catch (reason) { setError(String(reason)); } }}>读取最新参考</button></section>}
-    <details className="reverse-model-details"><summary>分析能力与模型状态</summary><div className="reverse-model-strip"><BrainCircuit size={17} /><div><strong>{primary?.label ?? 'Qwen3.8-27B Uncensored Q4_K_M'}</strong><span>主模型 · 仅在你显式运行时输出逐帧观察与结构化模型候选，需人工校订</span></div><span className={primary?.ready ? 'ready' : 'waiting'}>{primary?.ready ? '模型文件齐备' : primary?.model_ready ? '缺少视觉投影' : '主模型缺失'}</span><div className="reverse-model-divider" /><div><strong>{fast?.label ?? 'Qwen3-VL-8B-Instruct Q4_K_M'}</strong><span>可选快速预检，不是主流程必经步骤</span></div><span className={fast?.ready ? 'ready' : 'waiting'}>{fast?.ready ? '快速模型可用' : '快速模型缺失'}</span><button className="icon-button" aria-label="刷新模型状态" title="刷新模型状态" disabled={busy} onClick={() => void load().catch(reason => setError(String(reason)))}><RefreshCw size={15} /></button></div></details>
+    <section className="rw-card rw-observation" aria-label="显式观察工具">
+      <div className="rw-card-head">
+        <div><h2>显式观察工具</h2><p>上传只登记媒体事实。每次提取、采样、音频或 ASR 都必须由调用方明确触发，结果保存为只读观察。</p></div>
+        <span className="rw-chip">结果只读 · 等待人工校订</span>
+      </div>
+      <div className="rw-field-grid">
+        <label>开始时间（秒）<input type="number" min="0" step="0.1" value={rangeStart} onChange={event => setRangeStart(event.target.value)} /></label>
+        <label>结束时间（秒）<input type="number" min="0" step="0.1" value={rangeEnd} onChange={event => setRangeEnd(event.target.value)} /></label>
+        <label>帧时间（可选）<input type="number" min="0" step="0.1" value={frameTime} onChange={event => setFrameTime(event.target.value)} /></label>
+      </div>
+      <div className="rw-inline-actions">
+        <button className="button secondary compact" disabled={busy} onClick={() => void explicitObservation('range')}>提取明确范围/帧</button>
+        <button className="button secondary compact" disabled={busy || !active.source.has_audio} onClick={() => void explicitObservation('audio')}>提取明确范围音频</button>
+      </div>
+      <div className="rw-inline-actions">
+        <label className="rw-inline-field">采样时间点（逗号分隔）<input value={sampleTimes} onChange={event => setSampleTimes(event.target.value)} placeholder="0, 2.5, 5" /></label>
+        <button className="button secondary compact" disabled={busy} onClick={() => void explicitObservation('sample')}>显式采样</button>
+        <button className="button secondary compact" disabled={busy || !active.source.has_audio} onClick={() => void explicitObservation('asr')}>运行 ASR（模型候选）</button>
+      </div>
+    </section>
 
-    <p className="creation-route-hint">{active.production_seed ? '此参考已登记制作草案种子。再次转换只处理你显式加入的分镜，不会覆盖你在制作页的修改。' : '只有明确提交的分镜列表、参考时间段和字段会进入制作；观察与模型候选保持只读，不会自动写入。'}{!primary?.ready && ' 当前模型观察尚未就绪，可以继续使用显式媒体工具。'}</p>
-    <details className="director-progress-details"><summary>查看拆解进度</summary><div className="reverse-stage-rail" aria-label="参考拆解阶段">{active.stages.map((stage, index) => <div key={stage.id} className={`reverse-stage ${stage.status}`}><span>{stage.status === 'done' ? <Check size={13} /> : String(index + 1).padStart(2, '0')}</span><div><strong>{stage.label}</strong><small>{stage.status === 'done' ? '已完成' : stage.status === 'ready' ? '可以开始' : '待准备'}</small></div></div>)}</div></details>
-    <nav className="director-kind-tabs reverse-page-tabs" aria-label="参考拆解页面"><button aria-pressed={referencePage === 'timeline'} onClick={() => setReferencePage('timeline')}>视频与逐段校订</button><button aria-pressed={referencePage === 'analysis'} onClick={() => setReferencePage('analysis')}>观察与模型候选 <span>{readyArtifacts}/{artifactOrder.length}</span></button></nav>
+    <section className="rw-card rw-shots" aria-label="明确制作分镜">
+      <div className="rw-card-head">
+        <div><h2>明确制作分镜</h2><p>等距采样/待确认范围和模型观察不能直接转为分镜。先填写参考时间段与制作字段，再加入非空列表。</p></div>
+      </div>
+      <div className="rw-field-grid">
+        <label>分镜提示词<textarea rows={2} value={shotPrompt} onChange={event => setShotPrompt(event.target.value)} placeholder="调用方明确填写" /></label>
+        <label>动作与表演<textarea rows={2} value={shotPerformance} onChange={event => setShotPerformance(event.target.value)} placeholder="调用方明确填写" /></label>
+      </div>
+      <div className="rw-shot-actions">
+        <button className="button secondary compact" disabled={busy} onClick={addShotDraft}>加入制作分镜</button>
+        {!shotDrafts.length && <span className="rw-muted">尚未提交明确制作分镜。</span>}
+      </div>
+      {!!shotDrafts.length && <ul className="rw-shot-list">
+        {shotDrafts.map(shot => <li key={shot.segment_id}><span>{shot.segment_id} · {shot.start_seconds}s–{shot.end_seconds}s · {shot.fields.prompt || shot.fields.performance}</span><button className="text-button" onClick={() => setShotDrafts(previous => previous.filter(item => item.segment_id !== shot.segment_id))}>移除</button></li>)}
+      </ul>}
+    </section>
 
-    <div className="reverse-layout">
-      <div className="reverse-main">
-        <section className="reverse-source"><video src={mediaUrl(active.source.path)} controls preload="metadata" /><div><span>源素材</span><strong>{active.source.original_name}</strong><small>{active.source.has_audio ? '包含音轨' : '无音轨'} · 已生成 {active.timeline.length} 个分析段</small></div></section>
-        <section className="reverse-timeline-section"><div className="reverse-section-head"><div><h2>观察时间轴</h2><p>这里展示显式范围、采样和模型观察；它们不是自动镜头切点。</p></div><span>{active.timeline.length} 条观察</span></div><div className="reverse-timeline">{active.timeline.map(segment => <TimelineCard key={`${active.id}:${segment.id}`} segment={segment} busy={busy} onSave={saveTimeline} />)}</div></section>
+    {conversionConflict && <section role="alert" className="rw-alert">
+      <p>参考已更新，本次未转换。重新读取后请先核对内容，再决定是否转为制作草案。</p>
+      <button className="button secondary compact" disabled={busy} onClick={async () => { try { await load(); setConversionConflict(false); setError(''); setNotice('已读取最新参考；请核对后再转换。'); } catch (reason) { setError(String(reason)); } }}>读取最新参考</button>
+    </section>}
+
+    <p className="rw-hint">{active.production_seed ? '此参考已登记制作草案种子。再次转换只处理你显式加入的分镜，不会覆盖你在制作页的修改。' : '只有明确提交的分镜列表、参考时间段和字段会进入制作；观察与模型候选保持只读，不会自动写入。'}{!primary?.ready && ' 当前模型观察尚未就绪，可以继续使用显式媒体工具。'}</p>
+
+    <details className="rw-details">
+      <summary>查看拆解进度</summary>
+      <div className="reverse-stage-rail" aria-label="参考拆解阶段">{active.stages.map((stage, index) => <div key={stage.id} className={`reverse-stage ${stage.status}`}><span>{stage.status === 'done' ? <Check size={13} /> : String(index + 1).padStart(2, '0')}</span><div><strong>{stage.label}</strong><small>{stage.status === 'done' ? '已完成' : stage.status === 'ready' ? '可以开始' : '待准备'}</small></div></div>)}</div>
+    </details>
+
+    <nav className="rw-tabs" aria-label="参考拆解页面">
+      <button aria-pressed={referencePage === 'timeline'} onClick={() => setReferencePage('timeline')}>视频与逐段校订</button>
+      <button aria-pressed={referencePage === 'analysis'} onClick={() => setReferencePage('analysis')}>观察与模型候选 <span>{readyArtifacts}/{artifactOrder.length}</span></button>
+    </nav>
+
+    <div className="rw-layout">
+      <div className="rw-main">
+        <section className="rw-card rw-source">
+          <video src={mediaUrl(active.source.path)} controls preload="metadata" />
+          <div className="rw-source-meta"><span>源素材</span><strong>{active.source.original_name}</strong><small>{active.source.has_audio ? '包含音轨' : '无音轨'} · 已生成 {active.timeline.length} 个分析段</small></div>
+        </section>
+        <section className="rw-card rw-timeline-section">
+          <div className="rw-section-head"><div><h2>观察时间轴</h2><p>这里展示显式范围、采样和模型观察；它们不是自动镜头切点。</p></div><span>{active.timeline.length} 条观察</span></div>
+          <div className="reverse-timeline">{active.timeline.map(segment => <TimelineCard key={`${active.id}:${segment.id}`} segment={segment} busy={busy} onSave={saveTimeline} />)}</div>
+        </section>
       </div>
 
-      <aside className="reverse-inspector"><div className="reverse-inspector-head"><div><span className="director-kicker">观察与候选工件</span><h2>{readyArtifacts}/{artifactOrder.length} 项已有结果</h2></div></div><div className="reverse-artifact-list">{artifactOrder.map(id => { const artifact = active.artifacts[id]; if (!artifact) return null; const Icon = artifactIcons[id] ?? FileText; return <button key={id} className={selectedArtifact === id ? 'active' : ''} onClick={() => setSelectedArtifact(id)}><Icon size={15} /><span><strong>{artifact.title}</strong><small>{provenanceLabels[artifact.provenance] ?? '待归类'} · {artifact.user_status === 'reviewed' ? '已校订' : artifact.status === 'ready' ? '已有结果' : '待分析'}</small></span></button>; })}</div>{selected && <div className="reverse-artifact-editor"><div className="reverse-provenance"><span>{provenanceLabels[selected.provenance] ?? selected.provenance}</span>{selected.provenance !== 'user_confirmed' && selected.confidence != null && <span>模型置信度 {Math.round(selected.confidence * 100)}%</span>}</div><label htmlFor="reverse-artifact-summary">模型候选与人工校订</label><textarea id="reverse-artifact-summary" rows={7} value={artifactDraft} onChange={event => { artifactDirty.current = true; setArtifactDraft(event.target.value); }} /><p>{selectedArtifact === 'mechanisms' ? '“爆火原因”必须写成假设，并记录对应镜头、声音或文案证据。' : '模型输出不会覆盖人工版本；保存后标记为用户已校订。'}</p><button className="button secondary" disabled={busy || !artifactDraft.trim()} onClick={() => void saveArtifact()}>{saving ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}保存人工校订</button>{selected.evidence?.length ? <details><summary>查看依据</summary><ul>{selected.evidence.map((item, index) => <li key={index}>{item}</li>)}</ul></details> : null}{artifactDraft !== selected.summary && <details><summary>查看当前保存版本</summary><p>{selected.summary}</p></details>}{!!selected.review_history?.length && <details><summary>校订历史（{selected.review_history.length}）</summary>{[...selected.review_history].reverse().map((entry, index) => <article key={`${entry.revision ?? 'unknown'}-${index}`}><small>校订前版本 {entry.revision ?? '未知'} · {reviewTime(entry.recorded_at)} · {entry.user_status === 'reviewed' ? '已校订' : '待校订'} · {provenanceLabels[entry.provenance ?? ''] ?? entry.provenance ?? '来源未记录'}</small><p>{entry.summary ?? '无文本记录'}</p></article>)}</details>}{(selected.model_candidate || selected.original_candidate) && <details><summary>查看模型 / 原始候选</summary><p>{selected.model_candidate?.summary ?? selected.original_candidate?.summary}</p></details>}</div>}</aside>
+      <aside className="rw-card rw-inspector">
+        <div className="rw-inspector-head"><div><span className="rw-eyebrow">观察与候选工件</span><h2>{readyArtifacts}/{artifactOrder.length} 项已有结果</h2></div></div>
+        <div className="reverse-artifact-list">{artifactOrder.map(id => { const artifact = active.artifacts[id]; if (!artifact) return null; const Icon = artifactIcons[id] ?? FileText; return <button key={id} className={selectedArtifact === id ? 'active' : ''} onClick={() => setSelectedArtifact(id)}><Icon size={15} /><span><strong>{artifact.title}</strong><small>{provenanceLabels[artifact.provenance] ?? '待归类'} · {artifact.user_status === 'reviewed' ? '已校订' : artifact.status === 'ready' ? '已有结果' : '待分析'}</small></span></button>; })}</div>{selected && <div className="reverse-artifact-editor"><div className="reverse-provenance"><span>{provenanceLabels[selected.provenance] ?? selected.provenance}</span>{selected.provenance !== 'user_confirmed' && selected.confidence != null && <span>模型置信度 {Math.round(selected.confidence * 100)}%</span>}</div><label htmlFor="reverse-artifact-summary">模型候选与人工校订</label><textarea id="reverse-artifact-summary" rows={7} value={artifactDraft} onChange={event => { artifactDirty.current = true; setArtifactDraft(event.target.value); }} /><p>{selectedArtifact === 'mechanisms' ? '“爆火原因”必须写成假设，并记录对应镜头、声音或文案证据。' : '模型输出不会覆盖人工版本；保存后标记为用户已校订。'}</p><button className="button secondary" disabled={busy || !artifactDraft.trim()} onClick={() => void saveArtifact()}>{saving ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}保存人工校订</button>{selected.evidence?.length ? <details><summary>查看依据</summary><ul>{selected.evidence.map((item, index) => <li key={index}>{item}</li>)}</ul></details> : null}{artifactDraft !== selected.summary && <details><summary>查看当前保存版本</summary><p>{selected.summary}</p></details>}{!!selected.review_history?.length && <details><summary>校订历史（{selected.review_history.length}）</summary>{[...selected.review_history].reverse().map((entry, index) => <article key={`${entry.revision ?? 'unknown'}-${index}`}><small>校订前版本 {entry.revision ?? '未知'} · {reviewTime(entry.recorded_at)} · {entry.user_status === 'reviewed' ? '已校订' : '待校订'} · {provenanceLabels[entry.provenance ?? ''] ?? entry.provenance ?? '来源未记录'}</small><p>{entry.summary ?? '无文本记录'}</p></article>)}</details>}{(selected.model_candidate || selected.original_candidate) && <details><summary>查看模型 / 原始候选</summary><p>{selected.model_candidate?.summary ?? selected.original_candidate?.summary}</p></details>}</div>}
+      </aside>
     </div>
-    {(notice || error) && <div className={`reverse-notice ${error ? 'error' : ''}`}>{error || notice}</div>}
+
+    {(notice || error) && <div className={`rw-notice ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'} aria-live="polite">{error || notice}</div>}
   </section>;
 }

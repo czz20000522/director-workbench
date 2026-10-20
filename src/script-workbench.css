@@ -1,46 +1,109 @@
-.script-workbench { margin-top: 20px; border: 1px solid var(--line); border-radius: 8px; background: #fff; overflow: hidden; }
-.script-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 18px; padding: 22px 24px; border-bottom: 1px solid var(--line); }
-.script-header h2 { display: flex; gap: 9px; align-items: center; margin: 0; font-size: 18px; }
-.script-header p { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
-.script-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.script-meta { color: var(--muted); font-size: 12px; line-height: 1.7; }
-.script-layout { display: grid; grid-template-columns: minmax(185px, 240px) minmax(0, 1fr); min-height: 480px; }
-.script-scenes { padding: 16px 12px; border-right: 1px solid var(--line); background: #fafafa; min-width: 0; }
-.script-scene-item { width: 100%; display: flex; gap: 10px; align-items: baseline; text-align: left; border: 1px solid transparent; border-radius: 5px; background: transparent; padding: 12px; margin-bottom: 5px; color: var(--ink); }
-.script-scene-item:first-child { display: block; margin-bottom: 16px; }
-.script-scene-item:hover { background: #f0f1f3; }
-.script-scene-item.active { border-color: var(--line-strong); background: #e9ebee; }
-.script-scene-item strong { display: block; font-size: 13px; font-weight: 550; overflow-wrap: anywhere; }
-.script-scene-item small { display: block; margin-top: 5px; font-size: 11px; color: var(--muted); }
-.script-scene-order { color: var(--muted); font-size: 11px; }
-.script-add { width: 100%; justify-content: center; margin-top: 12px; }
-.script-reading { min-width: 0; padding: 32px clamp(20px, 3.5vw, 54px); }
-.script-reading h3 { font-size: 23px; font-weight: 550; line-height: 1.5; margin: 0 0 24px; overflow-wrap: anywhere; }
-.script-prose { max-width: 780px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 2; color: #383b40; }
-.script-fields { min-width: 0; border: 0; padding: 0; margin: 0; }
-.script-fields label { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; font-size: 13px; color: var(--muted); min-width: 0; }
-.script-fields input, .script-fields textarea { width: 100%; min-width: 0; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 5px; background: white; color: var(--ink); font: inherit; }
-.script-fields-row { display: grid; grid-template-columns: minmax(0, 1fr) 170px; gap: 18px; }
-.script-fields .script-text-editor { min-height: 390px; resize: vertical; line-height: 1.9; font-size: 15px; }
-.script-linked { margin-top: 32px; padding-top: 22px; border-top: 1px solid var(--line); }
-.script-linked h4 { font-size: 14px; margin: 0 0 14px; }
-.script-remove { color: var(--danger); }
-.script-message { display: flex; gap: 12px; justify-content: space-between; flex-wrap: wrap; margin: 12px 24px; padding: 12px 14px; border-radius: 5px; background: #f2f3f5; color: #4b515c; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
-.script-error { background: #fff3ef; color: #854c3c; }
-.script-empty { padding: 50px 24px; color: var(--muted); text-align: center; }
-.script-latest { margin: 16px 24px; padding: 18px; border: 1px solid var(--line-strong); border-radius: 5px; background: #f7f8fa; }
-.script-latest h3 { margin: 0 0 8px; font-size: 15px; }
-.script-latest p, .script-latest summary { font-size: 13px; line-height: 1.7; }
-.script-latest details { margin-bottom: 16px; }
-.script-latest details .script-prose { max-height: 320px; overflow-y: auto; margin-top: 15px; }
-@media (max-width: 800px) {
-  .script-header { padding: 18px; }
-  .script-layout { grid-template-columns: minmax(0, 1fr); }
-  .script-scenes { border-right: 0; border-bottom: 1px solid var(--line); max-height: 240px; overflow-y: auto; }
-  .script-scene-item { padding: 9px 12px; }
-  .script-scene-item:first-child { margin-bottom: 8px; }
-  .script-reading { padding: 24px 18px; }
+/* Script tool: flat toolbar over a scene directory + reading/editing pane. */
+
+.script-workbench { display: flex; flex-direction: column; min-width: 0; color: var(--ink, #202124); }
+
+/* Flat toolbar: save state on the left, actions compact and right-aligned. */
+.script-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; min-height: 44px; padding: 0 0 10px; border-bottom: 1px solid var(--line, #d9dce2); }
+.script-status { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; min-width: 0; margin-right: auto; }
+.script-save-state { display: inline-flex; align-items: center; gap: 6px; color: var(--muted, #60646c); font-size: 12px; line-height: 1.4; white-space: nowrap; }
+.script-save-state::before { content: ""; width: 6px; height: 6px; flex: none; border-radius: 50%; background: #8a9099; }
+.script-save-state.dirty { color: var(--warning, #865a00); }
+.script-save-state.dirty::before { background: #c98a00; }
+.script-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; min-width: 0; }
+.script-toolbar .script-actions { margin-left: auto; }
+.script-meta { color: var(--muted, #60646c); font-size: 12px; line-height: 1.6; }
+
+/* Inline messages and empty state */
+.script-message { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 8px 14px; margin: 10px 0 0; padding: 9px 12px; border: 1px solid #e2e5ea; border-radius: 8px; background: #f6f7f9; color: #4b515c; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
+.script-message > span { min-width: 0; }
+.script-message .text-button { flex: none; }
+.script-error { border-color: #f0c9c9; background: #fff4f4; color: var(--danger, #b42332); }
+.script-empty { margin: 0; padding: 48px 16px; color: var(--muted, #60646c); font-size: 13px; text-align: center; }
+
+/* Latest server version preview (read-only, does not replace the draft) */
+.script-latest { margin: 12px 0 0; padding: 14px 16px; border: 1px solid var(--line, #d9dce2); border-radius: 8px; background: #f6f7f9; }
+.script-latest-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; }
+.script-latest h2 { margin: 0; color: var(--ink, #202124); font-size: 14px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.script-latest p { margin: 6px 0 0; color: var(--muted, #60646c); font-size: 12px; line-height: 1.65; }
+.script-latest details { margin-top: 10px; }
+.script-latest summary { color: var(--muted, #60646c); font-size: 12px; cursor: pointer; }
+.script-latest .script-prose { max-height: 280px; overflow-y: auto; margin-top: 10px; padding: 10px 12px; border: 1px solid #e2e5ea; border-radius: 8px; background: #fff; color: #30343a; font-size: 13px; line-height: 1.8; }
+.script-latest ul { margin: 10px 0 0; padding-left: 18px; color: var(--muted, #60646c); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.script-latest li + li { margin-top: 6px; }
+.script-latest li .script-prose { max-height: none; overflow: visible; margin: 6px 0 0; padding: 0; border: 0; background: transparent; }
+.script-latest .script-actions { margin-top: 12px; }
+
+/* Two panes sharing one divider: scene directory + reading/editing. */
+.script-layout { display: grid; grid-template-columns: minmax(190px, 232px) minmax(0, 1fr); min-width: 0; min-height: 460px; }
+.script-scenes { min-width: 0; min-height: 0; padding: 12px 12px 16px 0; border-right: 1px solid var(--line, #d9dce2); background: #f6f7f9; overflow-y: auto; }
+.script-scenes-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0 0 8px; padding: 0 12px; color: var(--muted, #60646c); font-size: 11px; font-weight: 600; letter-spacing: .06em; }
+.script-scenes-head span { color: #8a9099; font-weight: 500; letter-spacing: 0; }
+.script-scene-item { position: relative; width: 100%; display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 8px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--ink, #202124); text-align: left; cursor: pointer; }
+.script-scene-item:hover { background: #eceef2; }
+.script-scene-item.active { background: var(--accent-soft, #eaf0ff); }
+.script-scene-item.active::before { content: ""; position: absolute; top: 7px; bottom: 7px; left: 0; width: 3px; border-radius: 0 2px 2px 0; background: var(--accent, #365fd6); }
+.script-scene-item.active strong { color: #284bb8; }
+.script-scene-item:focus-visible { outline-offset: -2px; }
+.script-scenes-head + .script-scene-item { margin-bottom: 4px; }
+.script-scene-item strong { display: block; min-width: 0; font-size: 13px; font-weight: 550; line-height: 1.5; overflow-wrap: anywhere; }
+.script-scene-item small { display: block; margin-top: 2px; color: var(--muted, #60646c); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.script-scene-order { flex: none; min-width: 18px; padding-top: 1px; color: #8a9099; font-size: 11px; font-variant-numeric: tabular-nums; }
+.script-add { width: 100%; justify-content: center; margin-top: 8px; }
+.script-scenes-empty { margin: 8px 0 0; padding: 2px 12px; }
+
+/* Reading and editing pane stays white and text-first. */
+.script-reading { min-width: 0; padding: 20px 20px 32px 26px; background: #fff; }
+.script-reading h2 { margin: 0 0 14px; color: var(--ink, #202124); font-size: 20px; font-weight: 600; line-height: 1.45; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.script-reading-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 14px; }
+.script-reading-head h2 { margin: 0; }
+.script-reading > .script-meta { display: block; margin: 0 0 4px; }
+.script-prose { max-width: 74ch; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: #202124; font-size: 15px; line-height: 1.9; }
+
+/* Inline editing fields */
+.script-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
+.script-fields label { display: flex; flex-direction: column; gap: 6px; min-width: 0; margin-bottom: 16px; color: var(--muted, #60646c); font-size: 12px; line-height: 1.5; }
+.script-fields input, .script-fields textarea { width: 100%; min-width: 0; padding: 9px 11px; border: 1px solid var(--line, #d9dce2); border-radius: 8px; background: #fff; color: var(--ink, #202124); font: inherit; font-size: 13px; }
+.script-fields input:focus, .script-fields textarea:focus { border-color: var(--accent, #365fd6); outline: 2px solid rgba(54, 95, 214, .22); outline-offset: 1px; }
+.script-fields-row { display: grid; grid-template-columns: minmax(0, 1fr) 168px; gap: 14px; }
+.script-fields .script-text-editor { min-height: 380px; resize: vertical; font-size: 15px; line-height: 1.85; }
+.script-fields .script-meta { margin: 0 0 16px; }
+.script-remove { margin-top: 4px; color: var(--danger, #b42332); }
+
+/* Linked shots for the active scene */
+.script-linked { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--line, #d9dce2); }
+.script-linked h3 { margin: 0 0 8px; color: var(--ink, #202124); font-size: 13px; font-weight: 600; }
+.script-linked .script-actions { justify-content: flex-start; }
+.script-linked p.script-meta { margin: 8px 0 0; }
+
+/* The new shell already provides the white workspace; neutralize its legacy tool shims. */
+.sf-tool-panel .script-workbench .script-scenes { padding: 12px 12px 16px 0; border-right: 1px solid var(--line, #d9dce2); background: #f6f7f9; }
+.sf-tool-panel .script-workbench .script-scene-item { padding: 8px 12px; border: 0; border-radius: 8px; }
+.sf-tool-panel .script-workbench .script-scene-item.active { border: 0; background: var(--accent-soft, #eaf0ff); box-shadow: none; }
+.sf-tool-panel .script-workbench .script-reading { padding: 14px 30px 32px; }
+.sf-tool-panel .script-workbench .script-reading .script-prose { color: #202124; font-size: 15px; line-height: 1.9; }
+.sf-tool-panel .script-workbench .script-reading .script-linked h3 { margin: 0 0 8px; font-size: 13px; }
+
+@media (max-width: 860px) {
+  .script-toolbar { gap: 6px 10px; min-height: 40px; padding-bottom: 8px; }
+  .script-layout { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+  .script-scenes { max-height: 236px; overflow-y: auto; padding: 10px 0 12px; border-right: 0; border-bottom: 1px solid var(--line, #d9dce2); }
+  .script-scenes-head { padding: 0 10px; }
+  .script-scene-item { padding: 7px 10px; }
+  .script-scene-item.active::before { top: 6px; bottom: 6px; }
+  .script-scenes-empty { padding: 2px 10px; }
+  .script-reading { padding: 18px 0 28px; }
+  .script-reading h2 { font-size: 18px; }
   .script-fields-row { grid-template-columns: minmax(0, 1fr); gap: 0; }
-  .script-reading h3 { font-size: 20px; }
-  .script-message, .script-latest { margin-left: 12px; margin-right: 12px; }
+  .script-fields label { margin-bottom: 14px; }
+  .script-fields .script-text-editor { min-height: 300px; }
+  .script-latest { margin-top: 10px; padding: 12px; }
+  .sf-tool-panel .script-workbench .script-layout { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+  .sf-tool-panel .script-workbench .script-scenes { padding: 10px 0 12px; border-right: 0; border-bottom: 1px solid var(--line, #d9dce2); }
+  .sf-tool-panel .script-workbench .script-scene-item { padding: 7px 10px; }
+  .sf-tool-panel .script-workbench .script-reading { padding: 16px 0 28px; }
+}
+
+@media (max-width: 420px) {
+  .script-status { width: 100%; }
+  .script-toolbar .script-actions { width: 100%; }
 }

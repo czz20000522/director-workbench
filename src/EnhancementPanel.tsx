@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import TaskQueueStatus from './TaskQueueStatus';
 import type { MaterialOption } from './MaterialSelect';
 import { ApiError, mediaUrl, request as apiRequest } from './api/client';
-import './enhancement.css';
 
 type Facts = { width?: number; height?: number; duration_seconds?: number; frames?: number; fps?: number; audio_streams?: number };
 type Recipe = { source: string; source_facts: Facts & { kind: 'image' | 'video' }; model: string; scale: number };
@@ -17,6 +16,9 @@ class RequestError extends Error {
 }
 
 export default function EnhancementPanel({ projectId, initialSource = '', onBack }: { projectId: string; initialSource?: string; onBack: () => void }) {
+  // The outer 后期 shell owns the page heading and tab navigation; the prop stays
+  // accepted for the legacy workspace entrypoint but no longer renders a back button.
+  void onBack;
   const base = `/api/projects/${encodeURIComponent(projectId)}`;
   const key = `director-workbench:${projectId}:enhancement:v1`;
   const [initial] = useState(() => {
@@ -135,22 +137,33 @@ export default function EnhancementPanel({ projectId, initialSource = '', onBack
   function preview(path: string, kind: string, label: string) {
     return kind === 'image' ? <img src={mediaUrl(path)} alt={label} /> : <video aria-label={label} src={mediaUrl(path)} controls preload="metadata" playsInline />;
   }
-  return <section className="enhancement-panel" aria-label="图像／视频清晰化">
-    <header><div><span className="director-kicker">先快速生成，再提高分辨率</span><h1>图像／视频清晰化</h1><p>AI 超分辨率 · 宽高各放大 2 倍 · 保持画幅</p></div><button className="button secondary" onClick={onBack}>返回快速生成</button></header>
-    <section className="enhancement-input"><h2>选择原素材</h2><label>当前作品的图片或视频<select aria-label="清晰化原素材" value={source} disabled={busy || !!pending} onChange={event => setSource(event.target.value)}><option value="">选择已有候选或上传素材</option>{sources.map(item => <option key={item.value} value={item.value}>{item.kind === 'image' ? '图片' : '视频'} · {item.label}</option>)}</select></label>
-      <label className="enhancement-upload">上传图片或视频<input aria-label="上传清晰化素材" type="file" accept=".png,.jpg,.jpeg,.webp,.mp4,.mov,.webm,.mkv" disabled={busy || !!pending} onChange={event => { const file = event.target.files?.[0]; if (file) void upload(file); event.target.value = ''; }} /></label>
-      {chosen && <div className="enhancement-source">{preview(source, chosen.kind, '所选原素材')}</div>}
-      <p>RealESRGAN 2× 增强；图片输出 PNG（不保留透明通道），视频保留原帧率与音频。AI 可能改变纹理，请对照原素材检查；逐帧增强不保证消除模糊或闪烁。</p>
-      <p className="enhancement-limits">{capability?.limits || '正在检查处理环境…'}</p>
-      {chosen && capability && !available && <p role="alert">环境尚未就绪：{capability.kinds[chosen.kind as 'image' | 'video']?.missing.join('、')}</p>}
-      <div className="enhancement-actions"><button className="button primary" disabled={busy || !pending && (!source || !available)} onClick={() => void submit()}>{pending ? '沿用原请求重试' : '开始 AI 清晰化 · 2×'}</button>{pending && <button className="button secondary" disabled={busy} onClick={() => { void request<Task>(`${base}/submission-receipt?key=${encodeURIComponent(pending.idempotency_key)}`).then(accept).catch(error => setMessage(error.message)); }}>核对提交回执</button>}</div>
-      {message && <p role="status" aria-live="polite">{message}</p>}
+  return <section className="sf-post-tools" aria-label="图像／视频清晰化">
+    <section className="sf-post-section" aria-label="选择原素材">
+      <div className="sf-post-section-head"><h2 className="sf-post-title">选择原素材</h2><p className="sf-post-meta">AI 超分辨率 · 宽高各放大 2 倍 · 保持画幅</p></div>
+      <div className="sf-post-fields">
+        <label className="sf-post-field sf-post-field--wide">当前作品的图片或视频<select aria-label="清晰化原素材" value={source} disabled={busy || !!pending} onChange={event => setSource(event.target.value)}><option value="">选择已有候选或上传素材</option>{sources.map(item => <option key={item.value} value={item.value}>{item.kind === 'image' ? '图片' : '视频'} · {item.label}</option>)}</select></label>
+        <label className="sf-post-field sf-post-field--wide">上传图片或视频<input className="sf-post-file" aria-label="上传清晰化素材" type="file" accept=".png,.jpg,.jpeg,.webp,.mp4,.mov,.webm,.mkv" disabled={busy || !!pending} onChange={event => { const file = event.target.files?.[0]; if (file) void upload(file); event.target.value = ''; }} /></label>
+      </div>
+      {chosen && <div className="sf-post-source">{preview(source, chosen.kind, '所选原素材')}</div>}
+      <p className="sf-post-hint">RealESRGAN 2× 增强；图片输出 PNG（不保留透明通道），视频保留原帧率与音频。AI 可能改变纹理，请对照原素材检查；逐帧增强不保证消除模糊或闪烁。</p>
+      <p className="sf-post-hint">{capability?.limits || '正在检查处理环境…'}</p>
+      {chosen && capability && !available && <p className="sf-post-alert" role="alert">环境尚未就绪：{capability.kinds[chosen.kind as 'image' | 'video']?.missing.join('、')}</p>}
+      <div className="sf-post-actions"><button className="button primary" disabled={busy || !pending && (!source || !available)} onClick={() => void submit()}>{pending ? '沿用原请求重试' : '开始 AI 清晰化 · 2×'}</button>{pending && <button className="button secondary" disabled={busy} onClick={() => { void request<Task>(`${base}/submission-receipt?key=${encodeURIComponent(pending.idempotency_key)}`).then(accept).catch(error => setMessage(error.message)); }}>核对提交回执</button>}</div>
+      {message && <p className="sf-post-message" role="status" aria-live="polite">{message}</p>}
     </section>
-    {selectedTask && <section className="enhancement-result"><h2>处理结果</h2><p>{statusLabel[selectedTask.status] || selectedTask.status} · {selectedTask.id.slice(0, 8)}</p><TaskQueueStatus task={selectedTask} />{selectedTask.error && <p role="alert">{selectedTask.error}</p>}
-      {!terminal.includes(selectedTask.status) && <div className="enhancement-actions"><button className="button secondary" disabled={busy || selectedTask.status === 'needs_reconcile'} onClick={() => void operate('stop')}>停止处理</button><button className="button secondary" disabled={busy} onClick={() => void operate('reconcile')}>核对处理回执</button></div>}
-      {recipe && <div className="enhancement-compare"><figure><figcaption>原素材 · {dimensions(recipe.source_facts)}</figcaption>{preview(recipe.source, recipe.source_facts.kind, '清晰化原素材预览')}<a href={mediaUrl(recipe.source)} download>下载原素材</a></figure><figure><figcaption>AI 清晰化候选 · {dimensions(selectedTask.result?.output_facts)}</figcaption>{output ? <>{preview(output, recipe.source_facts.kind, '清晰化结果预览')}<a className="button primary" href={mediaUrl(output)} download>下载清晰化候选</a></> : <p>完成后在这里比较和下载。</p>}</figure></div>}
-      <p>原素材和历次结果分别保留。清晰化结果不会自动替换已采用的片段或成片。</p>
+    {selectedTask && <section className="sf-post-section" aria-label="处理结果">
+      <div className="sf-post-section-head"><h2 className="sf-post-title">处理结果</h2><p className="sf-post-status">{statusLabel[selectedTask.status] || selectedTask.status} · {selectedTask.id.slice(0, 8)}</p></div>
+      <TaskQueueStatus task={selectedTask} />
+      {selectedTask.error && <p className="sf-post-alert" role="alert">{selectedTask.error}</p>}
+      {!terminal.includes(selectedTask.status) && <div className="sf-post-actions"><button className="button secondary" disabled={busy || selectedTask.status === 'needs_reconcile'} onClick={() => void operate('stop')}>停止处理</button><button className="button secondary" disabled={busy} onClick={() => void operate('reconcile')}>核对处理回执</button></div>}
+      {recipe && <div className="sf-post-compare"><figure className="sf-post-figure"><figcaption>原素材 · {dimensions(recipe.source_facts)}</figcaption>{preview(recipe.source, recipe.source_facts.kind, '清晰化原素材预览')}<a href={mediaUrl(recipe.source)} download>下载原素材</a></figure><figure className="sf-post-figure"><figcaption>AI 清晰化候选 · {dimensions(selectedTask.result?.output_facts)}</figcaption>{output ? <>{preview(output, recipe.source_facts.kind, '清晰化结果预览')}<a className="button primary" href={mediaUrl(output)} download>下载清晰化候选</a></> : <p className="sf-post-hint">完成后在这里比较和下载。</p>}</figure></div>}
+      <p className="sf-post-hint">原素材和历次结果分别保留。清晰化结果不会自动替换已采用的片段或成片。</p>
     </section>}
-    <section className="enhancement-history"><h2>清晰化记录</h2>{!tasks.length && <p>还没有处理记录。</p>}<ul>{tasks.map(task => <li key={task.id}><button aria-pressed={selectedId === task.id} disabled={busy || !!pending} onClick={() => { persist({ taskId: task.id, pending }); setSelectedId(task.id); setSelectedTask(task); }}>{task.payload?.enhancement?.source_facts.kind === 'image' ? '图片' : '视频'} · {task.id.slice(0, 8)} · {statusLabel[task.status] || task.status}</button><time>{task.created_at ? new Date(task.created_at * 1000).toLocaleString('zh-CN') : ''}</time></li>)}</ul><div className="enhancement-actions"><button className="button secondary" disabled={!offset} onClick={() => setOffset(value => Math.max(0, value - 20))}>较新记录</button><button className="button secondary" disabled={nextOffset === null} onClick={() => setOffset(nextOffset!)}>更早记录</button></div></section>
+    <section className="sf-post-section" aria-label="清晰化记录">
+      <div className="sf-post-section-head"><h2 className="sf-post-title">清晰化记录</h2><p className="sf-post-meta">选择记录可比较历次结果</p></div>
+      {!tasks.length && <p className="sf-post-hint">还没有处理记录。</p>}
+      <ul className="sf-post-history">{tasks.map(task => <li key={task.id}><button aria-pressed={selectedId === task.id} disabled={busy || !!pending} onClick={() => { persist({ taskId: task.id, pending }); setSelectedId(task.id); setSelectedTask(task); }}>{task.payload?.enhancement?.source_facts.kind === 'image' ? '图片' : '视频'} · {task.id.slice(0, 8)} · {statusLabel[task.status] || task.status}</button><time>{task.created_at ? new Date(task.created_at * 1000).toLocaleString('zh-CN') : ''}</time></li>)}</ul>
+      <div className="sf-post-actions"><button className="button secondary" disabled={!offset} onClick={() => setOffset(value => Math.max(0, value - 20))}>较新记录</button><button className="button secondary" disabled={nextOffset === null} onClick={() => setOffset(nextOffset!)}>更早记录</button></div>
+    </section>
   </section>;
 }

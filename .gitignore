@@ -400,3 +400,7 @@
 # UI flow prototype (review-only; remove or merge after approval).
 !/src/studio-flow.css
 !/src/StudioFlowLive.tsx
+
+!/src/reverse-workbench.css
+!/src/material-library.css
+!/src/post-tools.css

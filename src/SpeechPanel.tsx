@@ -15,6 +15,9 @@ const labels: Record<string, string> = { scheduler_waiting: '已接受 · 等待
 export default function SpeechPanel({ projectId, options, onBrowse, onComplete, defaultOpen = false }: {
   projectId: string; options: MaterialOption[]; onBrowse: () => void; onComplete: () => void; defaultOpen?: boolean;
 }) {
+  // The shell now renders every post tool expanded; keep accepting the legacy
+  // prop without letting it collapse the form again.
+  void defaultOpen;
   const storageKey = `director-workbench:${projectId}:speech:v1`;
   const textId = useId();
   const durationId = useId();
@@ -119,30 +122,32 @@ export default function SpeechPanel({ projectId, options, onBrowse, onComplete, 
     }
     finally { working.current = false; if (mounted.current) setBusy(false); }
   }
-  return <details className="director-operation-panel" aria-label="生成声音" open={defaultOpen || undefined}>
-    <summary>生成声音 {task && `· ${labels[task.status] || task.status}`}</summary>
-    <div className="director-creation-grid">
-      <div className="director-creation-wide"><label htmlFor={textId}>台词</label><textarea id={textId} rows={3} maxLength={2000} value={saved.text} disabled={Boolean(saved.pending)} placeholder="输入这段作品需要说的台词" onChange={event => persist({ ...saved, text: event.target.value })} /></div>
-      <div className="director-creation-wide"><label htmlFor={modeId}>声音来源</label><select id={modeId} value={saved.mode} disabled={Boolean(saved.pending)} onChange={event => persist({ ...saved, mode: event.target.value === 'design' ? 'design' : 'reference' })}><option value="reference">沿用参考声音</option><option value="design">设计新声音</option></select></div>
-      {saved.mode === 'design'
-        ? <div className="director-creation-wide"><label htmlFor={descriptionId}>音色描述</label><textarea id={descriptionId} rows={2} maxLength={2000} value={saved.voice_description} disabled={Boolean(saved.pending)} placeholder="例如：年长男性，声音低沉沙哑，语速舒缓、克制" onChange={event => persist({ ...saved, voice_description: event.target.value })} /></div>
-        : <fieldset className="director-creation-wide" disabled={Boolean(saved.pending)}><MaterialSelect label="音色参考" kind="audio" value={saved.voice_reference} options={options} onChange={value => persist({ ...saved, voice_reference: value })} onBrowse={onBrowse} /></fieldset>}
-      <div><label htmlFor={durationId}>请求时长（秒）</label><input id={durationId} type="number" min={0} max={30} step="any" value={saved.pending ? saved.pending.gen_seconds ?? '' : saved.gen_seconds} placeholder="沿用原提交参数" disabled={Boolean(saved.pending)} onChange={event => persist({ ...saved, gen_seconds: Number(event.target.value) })} /></div>
-      <details><summary>高级：固定种子</summary><label htmlFor={seedId}>种子</label><input id={seedId} type="number" min={0} max={4294967295} step={1} value={saved.pending ? saved.pending.seed ?? '' : saved.seed} placeholder="沿用原提交参数" disabled={Boolean(saved.pending)} onChange={event => persist({ ...saved, seed: Number(event.target.value) })} /></details>
-    </div>
-    <p className="director-muted">{saved.mode === 'design' ? '描述希望的音色，无需参考音频；满意的候选可用作后续台词的参考。' : '参考音频与请求时长合计须不超过 30 秒。'}请求时长不保证台词完整。</p>
-    <p className="director-muted">生成后先试听，再在分镜中选择。现有分镜音频会保留。</p>
-    {!capability?.available && <p role="status" aria-live="polite">{capability ? capability.reason || '声音生成环境尚未就绪。' : '正在检查声音环境…'}</p>}
-    {message && <p role="status" aria-live="polite">{message}</p>}
-    {task?.error && <p role="status" aria-live="polite">{task.error}</p>}
-    <div className="director-form-actions">
-      {!saved.pending && <button className="button primary compact" disabled={busy || !capability?.available || !saved.text.trim() || (saved.mode === 'design' ? !saved.voice_description.trim() : !saved.voice_reference) || !Number.isFinite(saved.gen_seconds) || saved.gen_seconds <= 0 || saved.gen_seconds > 30 || !Number.isInteger(saved.seed) || saved.seed < 0 || saved.seed > 4294967295} onClick={() => void act('submit')}>生成声音候选</button>}
-      {saved.pending && !task && <><button className="button secondary compact" disabled={busy} onClick={() => void act('check')}>核对声音提交</button><button className="button secondary compact" disabled={busy || !capability?.available} onClick={() => void act('submit')}>使用原凭据重试</button></>}
-      {task && !terminal.includes(task.status) && task.status !== 'needs_reconcile' && <button className="button secondary compact" disabled={busy} onClick={() => void act('stop')}>停止声音任务</button>}
-      {task?.status === 'needs_reconcile' && <button className="button secondary compact" disabled={busy} onClick={() => void act('reconcile')}>核对声音结果</button>}
-      {task && terminal.includes(task.status) && <button className="button secondary compact" disabled={busy} onClick={() => { if (persist({ ...saved, pending: undefined })) setTask(null); }}>准备下一条台词</button>}
-      {task && <TaskQueueStatus task={{ ...task, asset_id: '声音' }} />}
-      {task && <span>{labels[task.status] || task.status}</span>}
-    </div>
-  </details>;
+  return <section className="sf-post-tools" aria-label="生成声音">
+    <section className="sf-post-section" aria-label="声音生成设置">
+      <div className="sf-post-section-head"><h2 className="sf-post-title">声音生成</h2><p className="sf-post-status">{task ? (labels[task.status] || task.status) : '显式提交'}</p></div>
+      <div className="sf-post-fields">
+        <div className="sf-post-field sf-post-field--wide"><label htmlFor={textId}>台词</label><textarea id={textId} rows={3} maxLength={2000} value={saved.text} disabled={Boolean(saved.pending)} placeholder="输入这段作品需要说的台词" onChange={event => persist({ ...saved, text: event.target.value })} /></div>
+        <div className="sf-post-field"><label htmlFor={modeId}>声音来源</label><select id={modeId} value={saved.mode} disabled={Boolean(saved.pending)} onChange={event => persist({ ...saved, mode: event.target.value === 'design' ? 'design' : 'reference' })}><option value="reference">沿用参考声音</option><option value="design">设计新声音</option></select></div>
+        {saved.mode === 'design'
+          ? <div className="sf-post-field sf-post-field--wide"><label htmlFor={descriptionId}>音色描述</label><textarea id={descriptionId} rows={2} maxLength={2000} value={saved.voice_description} disabled={Boolean(saved.pending)} placeholder="例如：年长男性，声音低沉沙哑，语速舒缓、克制" onChange={event => persist({ ...saved, voice_description: event.target.value })} /></div>
+          : <fieldset className="sf-post-field sf-post-field--wide" disabled={Boolean(saved.pending)}><MaterialSelect label="音色参考" kind="audio" value={saved.voice_reference} options={options} onChange={value => persist({ ...saved, voice_reference: value })} onBrowse={onBrowse} /></fieldset>}
+        <div className="sf-post-field"><label htmlFor={durationId}>请求时长（秒）</label><input id={durationId} type="number" min={0} max={30} step="any" value={saved.pending ? saved.pending.gen_seconds ?? '' : saved.gen_seconds} placeholder="沿用原提交参数" disabled={Boolean(saved.pending)} onChange={event => persist({ ...saved, gen_seconds: Number(event.target.value) })} /></div>
+        <div className="sf-post-field"><label htmlFor={seedId}>种子</label><input id={seedId} type="number" min={0} max={4294967295} step={1} value={saved.pending ? saved.pending.seed ?? '' : saved.seed} placeholder="沿用原提交参数" disabled={Boolean(saved.pending)} onChange={event => persist({ ...saved, seed: Number(event.target.value) })} /></div>
+      </div>
+      <p className="sf-post-hint">{saved.mode === 'design' ? '描述希望的音色，无需参考音频；满意的候选可用作后续台词的参考。' : '参考音频与请求时长合计须不超过 30 秒。'}请求时长不保证台词完整。</p>
+      <p className="sf-post-hint">生成后先试听，再在分镜中选择。现有分镜音频会保留。</p>
+      {!capability?.available && <p className="sf-post-message" role="status" aria-live="polite">{capability ? capability.reason || '声音生成环境尚未就绪。' : '正在检查声音环境…'}</p>}
+      {message && <p className="sf-post-message" role="status" aria-live="polite">{message}</p>}
+      {task?.error && <p className="sf-post-message" role="status" aria-live="polite">{task.error}</p>}
+      <div className="sf-post-actions">
+        {!saved.pending && <button className="button primary compact" disabled={busy || !capability?.available || !saved.text.trim() || (saved.mode === 'design' ? !saved.voice_description.trim() : !saved.voice_reference) || !Number.isFinite(saved.gen_seconds) || saved.gen_seconds <= 0 || saved.gen_seconds > 30 || !Number.isInteger(saved.seed) || saved.seed < 0 || saved.seed > 4294967295} onClick={() => void act('submit')}>生成声音候选</button>}
+        {saved.pending && !task && <><button className="button secondary compact" disabled={busy} onClick={() => void act('check')}>核对声音提交</button><button className="button secondary compact" disabled={busy || !capability?.available} onClick={() => void act('submit')}>使用原凭据重试</button></>}
+        {task && !terminal.includes(task.status) && task.status !== 'needs_reconcile' && <button className="button secondary compact" disabled={busy} onClick={() => void act('stop')}>停止声音任务</button>}
+        {task?.status === 'needs_reconcile' && <button className="button secondary compact" disabled={busy} onClick={() => void act('reconcile')}>核对声音结果</button>}
+        {task && terminal.includes(task.status) && <button className="button secondary compact" disabled={busy} onClick={() => { if (persist({ ...saved, pending: undefined })) setTask(null); }}>准备下一条台词</button>}
+        {task && <TaskQueueStatus task={{ ...task, asset_id: '声音' }} />}
+        {task && <span className="sf-post-status">{labels[task.status] || task.status}</span>}
+      </div>
+    </section>
+  </section>;
 }
