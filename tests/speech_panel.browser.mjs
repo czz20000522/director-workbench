@@ -26,7 +26,7 @@ try {
     return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div><script>' + result.outputFiles[0].text + '</script>' });
   });
   await page.goto('http://localhost:4199/');
-  await page.locator('summary').first().click();
+  
   await page.getByLabel('台词', { exact: true }).fill('天快黑了。');
   assert.equal(await page.getByRole('button', { name: '生成声音候选' }).isEnabled(), false);
   await page.getByLabel('声音来源').selectOption('design');
@@ -40,7 +40,7 @@ try {
   assert.equal(submissions[0].voice_description, '年长男性，低沉沙哑');
   assert.equal('voice_reference' in submissions[0], false);
   await page.reload();
-  await page.locator('summary').first().click();
+  
   assert.equal(await page.getByLabel('声音来源').inputValue(), 'design');
   assert.equal(await page.getByLabel('音色描述').isDisabled(), true);
   assert.equal(submissions.length, 1, 'Reload must recover the receipt, not submit again');

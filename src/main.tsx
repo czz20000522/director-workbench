@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import App from './App';
+import StudioFlowLive from './StudioFlowLive';
 import LoginGate from './LoginGate';
 import './styles.css';
 
@@ -60,7 +60,7 @@ function WorkbenchEntry() {
   }, []);
   if (failed) return <main className="workspace-login"><p role="alert">无法连接工作台，请刷新重试。</p></main>;
   if (privateMode === null) return <main className="workspace-login"><p role="status" aria-live="polite">正在连接工作台…</p></main>;
-  return privateMode ? <LoginGate /> : <App />;
+  return privateMode ? <LoginGate /> : <StudioFlowLive username="本机" onLogout={() => window.location.reload()} />;
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><ErrorBoundary><WorkbenchEntry /></ErrorBoundary></React.StrictMode>);

@@ -3,7 +3,7 @@ import TaskQueueStatus, { type QueueReceipt } from './TaskQueueStatus';
 import { ApiError, mediaUrl, request as apiRequest } from './api/client';
 
 type Operation = 'silence' | 'video_qc' | 'transcribe' | 'silent_video';
-type Props = { projectId: string; assets: Array<{ id: string; title: string; kind: string }>; onComplete: () => void; onBrowse: () => void };
+type Props = { projectId: string; assets: Array<{ id: string; title: string; kind: string }>; onComplete: () => void; onBrowse: () => void; defaultOpen?: boolean };
 type Draft = { operation: Operation; source_asset_id: string; duration_seconds: number; sample_rate: number; channels: number; sample_count: number; expected_text: string; language: string; word_timestamps: boolean };
 type Submission = Record<string, unknown> & { idempotency_key: string };
 type Saved = { draft: Draft; pending?: Submission; completedTaskId?: string };
@@ -30,7 +30,10 @@ class RequestError extends Error { constructor(message: string, readonly status:
 // Keyed inner state prevents a pending request from following a project switch.
 export default function MediaToolsPanel(props: Props) { return <ProjectMediaToolsPanel key={props.projectId} {...props} />; }
 
-function ProjectMediaToolsPanel({ projectId, assets, onComplete, onBrowse }: Props) {
+function ProjectMediaToolsPanel({ projectId, assets, onComplete, onBrowse, defaultOpen }: Props) {
+  // The shell now renders every post tool expanded; keep accepting the legacy
+  // prop without letting it collapse the form again.
+  void defaultOpen;
   const storageKey = `director-workbench:${projectId}:media-tools:v1`;
   const prefix = useId();
   const [saved, setSaved] = useState<Saved>(() => {
@@ -128,47 +131,53 @@ function ProjectMediaToolsPanel({ projectId, assets, onComplete, onBrowse }: Pro
   const report = task?.result?.report;
   const segments = Array.isArray(report?.segments) ? report.segments as Array<{ start?: number; end?: number; text?: string }> : [];
   const words = Array.isArray(report?.words) ? report.words as Array<{ start?: number; end?: number; word?: string }> : [];
-  return <details className="director-operation-panel" aria-label="媒体工具">
-    <summary>媒体工具 {task && `· ${labels[task.status] || task.status}`}</summary>
-    <div className="director-creation-grid">
-      <label htmlFor={`${prefix}-operation`}>操作<select id={`${prefix}-operation`} value={draft.operation} disabled={locked} onChange={e => change('operation', e.target.value as Operation)}>{Object.entries(operations).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
-      {draft.operation !== 'silence' && <label htmlFor={`${prefix}-source`}>来源素材<select id={`${prefix}-source`} value={draft.source_asset_id} disabled={locked} onChange={e => change('source_asset_id', e.target.value)}><option value="">选择当前作品素材</option>{draft.source_asset_id && !eligible.some(a => a.id === draft.source_asset_id) && <option value={draft.source_asset_id}>原提交素材（当前不可选）</option>}{eligible.map(a => <option key={a.id} value={a.id}>{a.title}</option>)}</select></label>}
-      {draft.operation === 'silence' && <>
-        <label>时长（秒）<input type="number" min={0.01} max={120} step="any" value={draft.duration_seconds} disabled={locked} onChange={e => change('duration_seconds', Number(e.target.value))} /></label>
-        <label>采样率<select value={draft.sample_rate} disabled={locked} onChange={e => change('sample_rate', Number(e.target.value))}>{[16000, 24000, 48000].map(n => <option key={n} value={n}>{n} Hz</option>)}</select></label>
-        <label>声道<select value={draft.channels} disabled={locked} onChange={e => change('channels', Number(e.target.value))}><option value={1}>单声道</option><option value={2}>双声道</option></select></label>
-      </>}
-      {draft.operation === 'video_qc' && <label>抽帧数量<input type="number" min={3} max={60} step={1} value={draft.sample_count} disabled={locked} onChange={e => change('sample_count', Number(e.target.value))} /></label>}
-      {draft.operation === 'transcribe' && <>
-        <label>预期台词（可选）<textarea maxLength={2000} value={draft.expected_text} disabled={locked} onChange={e => change('expected_text', e.target.value)} /></label>
-        <label>语言<select value={draft.language} disabled={locked} onChange={e => change('language', e.target.value)}><option value="zh">中文</option><option value="en">英语</option><option value="auto">自动识别</option></select></label>
-        <label><input type="checkbox" checked={draft.word_timestamps} disabled={locked} onChange={e => change('word_timestamps', e.target.checked)} />逐词时间戳</label>
-      </>}
-    </div>
-    <p className="director-muted">检查报告与转写帮助定位问题，画面、表演和音色仍由导演判断。所有结果保存为本作品独立结果；质检图仅用于诊断。</p>
-    {!available && <p role="status" aria-live="polite">{capability ? '当前操作不可用：' + (capability[draft.operation]?.missing?.join('、') || '请检查资源与连接') : '正在读取媒体能力…'}</p>}
-    {message && <p role="status" aria-live="polite">{message}</p>}{task?.error && <p role="status" aria-live="polite">{task.error}</p>}
-    <div className="director-form-actions">
-      <button className="button secondary compact" onClick={onBrowse}>添加素材</button>
-      {!locked && <button className="button primary compact" disabled={busy || !available || !valid(draft) || (draft.operation !== 'silence' && !eligible.some(a => a.id === draft.source_asset_id))} onClick={() => void act('submit')}>开始处理</button>}
-      {locked && <button className="button secondary compact" disabled={busy} onClick={() => void act('check')}>核对原提交</button>}
-      {locked && !task && <button className="button secondary compact" disabled={busy} onClick={() => void act('submit')}>使用原凭据重试</button>}
-      {task?.status === 'needs_reconcile' && <button className="button secondary compact" disabled={busy} onClick={() => void act('reconcile')}>核对处理结果</button>}
-      {task && ['scheduler_waiting', 'batch_waiting', 'preparing', 'submitting', 'queued', 'running'].includes(task.status) && <button className="button secondary compact" disabled={busy} onClick={() => void act('stop')}>停止处理</button>}
-      {task && ['stopped', 'failed'].includes(task.status) && <button className="button secondary compact" disabled={busy} onClick={() => void act('resume')}>恢复原任务</button>}
-      {task && terminal.includes(task.status) && <button className="button secondary compact" disabled={busy} onClick={() => { if (persist({ ...current.current, pending: undefined })) { setTask(null); setMessage(''); } }}>继续处理</button>}
-      {task && <TaskQueueStatus task={{ ...task, asset_id: '媒体处理' }} />}
-      {task && <span role="status" aria-live="polite">{labels[task.status] || task.status}</span>}
-    </div>
-    {report && <section aria-label="媒体检查报告"><h3>处理报告</h3>
-      {typeof report.duration_seconds === 'number' && <p>时长 {report.duration_seconds.toFixed(2)} 秒{typeof report.width === 'number' ? ` · ${report.width} × ${report.height}` : ''}{typeof report.frame_count === 'number' ? ` · ${report.frame_count} 帧` : ''}{typeof report.sample_rate === 'number' ? ` · ${report.sample_rate} Hz` : ''}{typeof report.channels === 'number' ? ` · ${report.channels} 声道` : ''}</p>}
-      {typeof report.text === 'string' && <><h4>识别台词</h4><p>{report.text || '未识别到台词'}</p></>}
-      {typeof report.expected_text === 'string' && report.expected_text && <><h4>预期台词</h4><p>{report.expected_text}</p>{typeof report.text_similarity === 'number' && <p>文字相似度 {(report.text_similarity * 100).toFixed(1)}% · 请对照试听，识别可能出错</p>}</>}
-      {segments.length > 0 && <details><summary>分段时间戳</summary><ul>{segments.map((s, i) => <li key={i}>{s.start?.toFixed(2)}–{s.end?.toFixed(2)} 秒：{s.text}</li>)}</ul></details>}
-      {words.length > 0 && <details><summary>逐词时间戳</summary><ul>{words.map((w, i) => <li key={i}>{w.start?.toFixed(2)}–{w.end?.toFixed(2)} 秒：{w.word}</li>)}</ul></details>}
-      {typeof report.note === 'string' && <p className="director-muted">{report.note}</p>}
-      <details><summary>完整技术数据</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{JSON.stringify(report, null, 2)}</pre></details>
+  return <section className="sf-post-tools" aria-label="媒体工具">
+    <section className="sf-post-section" aria-label="媒体处理设置">
+      <div className="sf-post-section-head"><h2 className="sf-post-title">处理设置</h2><p className="sf-post-status">{task ? (labels[task.status] || task.status) : '选择操作并提交'}</p></div>
+      <div className="sf-post-fields">
+        <label className="sf-post-field" htmlFor={`${prefix}-operation`}>操作<select id={`${prefix}-operation`} value={draft.operation} disabled={locked} onChange={e => change('operation', e.target.value as Operation)}>{Object.entries(operations).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+        {draft.operation !== 'silence' && <label className="sf-post-field" htmlFor={`${prefix}-source`}>来源素材<select id={`${prefix}-source`} value={draft.source_asset_id} disabled={locked} onChange={e => change('source_asset_id', e.target.value)}><option value="">选择当前作品素材</option>{draft.source_asset_id && !eligible.some(a => a.id === draft.source_asset_id) && <option value={draft.source_asset_id}>原提交素材（当前不可选）</option>}{eligible.map(a => <option key={a.id} value={a.id}>{a.title}</option>)}</select></label>}
+        {draft.operation === 'silence' && <>
+          <label className="sf-post-field">时长（秒）<input type="number" min={0.01} max={120} step="any" value={draft.duration_seconds} disabled={locked} onChange={e => change('duration_seconds', Number(e.target.value))} /></label>
+          <label className="sf-post-field">采样率<select value={draft.sample_rate} disabled={locked} onChange={e => change('sample_rate', Number(e.target.value))}>{[16000, 24000, 48000].map(n => <option key={n} value={n}>{n} Hz</option>)}</select></label>
+          <label className="sf-post-field">声道<select value={draft.channels} disabled={locked} onChange={e => change('channels', Number(e.target.value))}><option value={1}>单声道</option><option value={2}>双声道</option></select></label>
+        </>}
+        {draft.operation === 'video_qc' && <label className="sf-post-field">抽帧数量<input type="number" min={3} max={60} step={1} value={draft.sample_count} disabled={locked} onChange={e => change('sample_count', Number(e.target.value))} /></label>}
+        {draft.operation === 'transcribe' && <>
+          <label className="sf-post-field sf-post-field--wide">预期台词（可选）<textarea maxLength={2000} value={draft.expected_text} disabled={locked} onChange={e => change('expected_text', e.target.value)} /></label>
+          <label className="sf-post-field">语言<select value={draft.language} disabled={locked} onChange={e => change('language', e.target.value)}><option value="zh">中文</option><option value="en">英语</option><option value="auto">自动识别</option></select></label>
+          <label className="sf-post-check"><input type="checkbox" checked={draft.word_timestamps} disabled={locked} onChange={e => change('word_timestamps', e.target.checked)} />逐词时间戳</label>
+        </>}
+      </div>
+      <p className="sf-post-hint">检查报告与转写帮助定位问题，画面、表演和音色仍由导演判断。所有结果保存为本作品独立结果；质检图仅用于诊断。</p>
+      {!available && <p className="sf-post-message" role="status" aria-live="polite">{capability ? '当前操作不可用：' + (capability[draft.operation]?.missing?.join('、') || '请检查资源与连接') : '正在读取媒体能力…'}</p>}
+      {message && <p className="sf-post-message" role="status" aria-live="polite">{message}</p>}{task?.error && <p className="sf-post-message" role="status" aria-live="polite">{task.error}</p>}
+      <div className="sf-post-actions">
+        <button className="button secondary compact" onClick={onBrowse}>添加素材</button>
+        {!locked && <button className="button primary compact" disabled={busy || !available || !valid(draft) || (draft.operation !== 'silence' && !eligible.some(a => a.id === draft.source_asset_id))} onClick={() => void act('submit')}>开始处理</button>}
+        {locked && <button className="button secondary compact" disabled={busy} onClick={() => void act('check')}>核对原提交</button>}
+        {locked && !task && <button className="button secondary compact" disabled={busy} onClick={() => void act('submit')}>使用原凭据重试</button>}
+        {task?.status === 'needs_reconcile' && <button className="button secondary compact" disabled={busy} onClick={() => void act('reconcile')}>核对处理结果</button>}
+        {task && ['scheduler_waiting', 'batch_waiting', 'preparing', 'submitting', 'queued', 'running'].includes(task.status) && <button className="button secondary compact" disabled={busy} onClick={() => void act('stop')}>停止处理</button>}
+        {task && ['stopped', 'failed'].includes(task.status) && <button className="button secondary compact" disabled={busy} onClick={() => void act('resume')}>恢复原任务</button>}
+        {task && terminal.includes(task.status) && <button className="button secondary compact" disabled={busy} onClick={() => { if (persist({ ...current.current, pending: undefined })) { setTask(null); setMessage(''); } }}>继续处理</button>}
+        {task && <TaskQueueStatus task={{ ...task, asset_id: '媒体处理' }} />}
+        {task && <span className="sf-post-status" role="status" aria-live="polite">{labels[task.status] || task.status}</span>}
+      </div>
+    </section>
+    {report && <section className="sf-post-section" aria-label="媒体检查报告">
+      <div className="sf-post-section-head"><h2 className="sf-post-title">处理报告</h2><p className="sf-post-meta">只读诊断结果</p></div>
+      {typeof report.duration_seconds === 'number' && <p className="sf-post-hint">时长 {report.duration_seconds.toFixed(2)} 秒{typeof report.width === 'number' ? ` · ${report.width} × ${report.height}` : ''}{typeof report.frame_count === 'number' ? ` · ${report.frame_count} 帧` : ''}{typeof report.sample_rate === 'number' ? ` · ${report.sample_rate} Hz` : ''}{typeof report.channels === 'number' ? ` · ${report.channels} 声道` : ''}</p>}
+      {typeof report.text === 'string' && <div className="sf-post-subblock"><h3 className="sf-post-subtitle">识别台词</h3><p>{report.text || '未识别到台词'}</p></div>}
+      {typeof report.expected_text === 'string' && report.expected_text && <div className="sf-post-subblock"><h3 className="sf-post-subtitle">预期台词</h3><p>{report.expected_text}</p>{typeof report.text_similarity === 'number' && <p className="sf-post-hint">文字相似度 {(report.text_similarity * 100).toFixed(1)}% · 请对照试听，识别可能出错</p>}</div>}
+      {segments.length > 0 && <div className="sf-post-subblock"><h3 className="sf-post-subtitle">分段时间戳</h3><ul className="sf-post-list">{segments.map((s, i) => <li key={i}>{s.start?.toFixed(2)}–{s.end?.toFixed(2)} 秒：{s.text}</li>)}</ul></div>}
+      {words.length > 0 && <div className="sf-post-subblock"><h3 className="sf-post-subtitle">逐词时间戳</h3><ul className="sf-post-list">{words.map((w, i) => <li key={i}>{w.start?.toFixed(2)}–{w.end?.toFixed(2)} 秒：{w.word}</li>)}</ul></div>}
+      {typeof report.note === 'string' && <p className="sf-post-hint">{report.note}</p>}
+      <div className="sf-post-subblock"><h3 className="sf-post-subtitle">完整技术数据</h3><pre className="sf-post-json">{JSON.stringify(report, null, 2)}</pre></div>
     </section>}
-    {outputs.map((output, index) => <figure key={`${output.path}-${index}`}><figcaption>{output.title || output.kind}</figcaption>{output.kind === 'image' ? <img src={mediaUrl(output.path)} alt={output.title || '视频抽帧'} style={{ maxWidth: '100%' }} /> : output.kind === 'video' ? <video src={mediaUrl(output.path)} controls preload="metadata" style={{ maxWidth: '100%' }} /> : output.kind === 'audio' ? <audio src={mediaUrl(output.path)} controls preload="metadata" /> : <a href={mediaUrl(output.path)} target="_blank" rel="noreferrer">查看报告文件</a>}</figure>)}
-  </details>;
+    {outputs.length > 0 && <section className="sf-post-section" aria-label="媒体处理结果">
+      <div className="sf-post-section-head"><h2 className="sf-post-title">处理结果</h2></div>
+      <div className="sf-post-outputs">{outputs.map((output, index) => <figure className="sf-post-figure" key={`${output.path}-${index}`}><figcaption>{output.title || output.kind}</figcaption>{output.kind === 'image' ? <img src={mediaUrl(output.path)} alt={output.title || '视频抽帧'} /> : output.kind === 'video' ? <video src={mediaUrl(output.path)} controls preload="metadata" /> : output.kind === 'audio' ? <audio src={mediaUrl(output.path)} controls preload="metadata" /> : <a href={mediaUrl(output.path)} target="_blank" rel="noreferrer">查看报告文件</a>}</figure>)}</div>
+    </section>}
+  </section>;
 }

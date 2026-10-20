@@ -15,7 +15,7 @@ try {
   if(url.pathname.includes('/tasks/'))return route.fulfill({json:[...receipts.values()].at(-1)});
   return route.fulfill({contentType:'text/html',body:'<div id="root"></div><script>'+bundle.outputFiles[0].text+'</script>'});
  });
- await page.goto('http://localhost:4199/');await page.locator('summary').first().click();
+ await page.goto('http://localhost:4199/');
  await page.getByRole('button',{name:'开始处理',exact:true}).click();await page.getByRole('button',{name:'继续处理',exact:true}).waitFor();
  assert.deepEqual(Object.keys(submissions[0]).sort(),['operation','duration_seconds','sample_rate','channels','idempotency_key'].sort());
  await page.getByRole('button',{name:'继续处理',exact:true}).click();await page.locator('select').first().selectOption('transcribe');await page.getByLabel('来源素材').selectOption('audio-1');await page.getByLabel('预期台词').fill('我哪儿还有什么家呀。');
@@ -23,9 +23,9 @@ try {
  await page.getByRole('button',{name:'继续处理',exact:true}).click();await page.locator('select').first().selectOption('video_qc');await page.getByLabel('来源素材').selectOption('video-1');unknown=true;
  await page.getByRole('button',{name:'开始处理',exact:true}).click();await page.waitForTimeout(150);assert.equal(submissions.length,3);
  const saved=await page.evaluate(()=>JSON.parse(localStorage.getItem('director-workbench:work-a:media-tools:v1')));assert.equal(saved.pending.idempotency_key,submissions[2].idempotency_key);
- await page.reload();await page.locator('summary').first().click();assert.equal(await page.locator('select').first().isDisabled(),true);assert.equal(submissions.length,3);
+ await page.reload();assert.equal(await page.locator('select').first().isDisabled(),true);assert.equal(submissions.length,3);
  await page.getByRole('status',{name:'任务排队 媒体处理'}).getByText(/等待 CPU 执行资源 · 队列位置 1/).waitFor();await page.getByRole('button',{name:'停止处理'}).waitFor();
- await page.getByRole('button',{name:'切作品'}).click();await page.locator('summary').first().click();assert.equal(await page.locator('select').first().inputValue(),'silence');assert.equal(await page.locator('select').first().isEnabled(),true);
- await page.getByRole('button',{name:'切作品'}).click();await page.locator('summary').first().click();assert.equal(await page.locator('select').first().inputValue(),'video_qc');assert.equal(submissions.length,3);
+ await page.getByRole('button',{name:'切作品'}).click();assert.equal(await page.locator('select').first().inputValue(),'silence');assert.equal(await page.locator('select').first().isEnabled(),true);
+ await page.getByRole('button',{name:'切作品'}).click();assert.equal(await page.locator('select').first().inputValue(),'video_qc');assert.equal(submissions.length,3);
  console.log('MediaToolsPanel: exclusive payloads, ASR fields, ambiguous receipt recovery, project isolation passed');
 } finally {await browser.close();}

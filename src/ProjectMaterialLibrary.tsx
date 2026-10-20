@@ -74,30 +74,39 @@ export default function ProjectMaterialLibrary({ projectId, onRegistered }: {
     finally { setBusy(false); }
   }
 
-  return <div className="project-material-library">
-    <div className="project-material-filters">
-      <label>来源系列<select value={series} disabled={busy || projectsLoading} onChange={event => {
-        const next = event.target.value; setSeries(next);
-        setSourceId(projects.find(project => !next || (project.series || '未分类系列') === next)?.id ?? '');
-      }}><option value="">全部系列</option>{seriesNames.map(name => <option key={name}>{name}</option>)}</select></label>
-      <label>来源作品<select value={sourceId} disabled={busy || projectsLoading || !sourceProjects.length} onChange={event => setSourceId(event.target.value)}>
-        {!sourceProjects.length && <option value="">暂无其他作品</option>}{sourceProjects.map(project => <option key={project.id} value={project.id}>{project.title}</option>)}
-      </select></label>
-      <label className="project-material-search"><Search size={15} /><input aria-label="搜索其他作品素材" placeholder="搜索素材名称" value={query} onChange={event => setQuery(event.target.value)} /></label>
+  return <div className="ml-tool">
+    <div className="ml-toolbar">
+      <label className="ml-field">来源系列
+        <select value={series} disabled={busy || projectsLoading} onChange={event => {
+          const next = event.target.value; setSeries(next);
+          setSourceId(projects.find(project => !next || (project.series || '未分类系列') === next)?.id ?? '');
+        }}><option value="">全部系列</option>{seriesNames.map(name => <option key={name}>{name}</option>)}</select>
+      </label>
+      <label className="ml-field">来源作品
+        <select value={sourceId} disabled={busy || projectsLoading || !sourceProjects.length} onChange={event => setSourceId(event.target.value)}>
+          {!sourceProjects.length && <option value="">暂无其他作品</option>}{sourceProjects.map(project => <option key={project.id} value={project.id}>{project.title}</option>)}
+        </select>
+      </label>
+      <label className="ml-field ml-search"><Search size={15} /><input aria-label="搜索其他作品素材" placeholder="搜索素材名称" value={query} onChange={event => setQuery(event.target.value)} /></label>
+      <div className="ml-kind-row">
+        <span className="ml-field" aria-hidden="true">类型</span>
+        <div className="ml-kind" role="group" aria-label="其他作品素材类型">{kinds.map(([id, title]) => <button key={id} aria-pressed={kind === id} onClick={() => setKind(id)}>{title}</button>)}</div>
+      </div>
     </div>
-    <div className="project-material-filterbar"><div className="material-kind-filter" aria-label="其他作品素材类型">{kinds.map(([id, title]) => <button key={id} aria-pressed={kind === id} className={kind === id ? 'active' : ''} onClick={() => setKind(id)}>{title}</button>)}</div>
-      <label className="project-material-select-all"><input type="checkbox" checked={allVisibleSelected} disabled={busy || loading || !visible.length} onChange={() => setSelected(previous => {
+    <div className="ml-subbar">
+      <label className="ml-select-all"><input type="checkbox" checked={allVisibleSelected} disabled={busy || loading || !visible.length} onChange={() => setSelected(previous => {
         const next = new Set(previous); visible.forEach(item => allVisibleSelected ? next.delete(item.id) : next.add(item.id)); return next;
-      })} />选择当前结果</label></div>
-    <p className="project-material-hint">复制到当前作品独立保存，保留来源信息；审核结果需重新确认。每次最多128个。</p>
-    {error && <div className="material-notice error" role="alert">{error} <button className="text-button" disabled={busy} onClick={() => setRefresh(value => value + 1)}>重试</button></div>}
-    <div className="project-material-grid" aria-busy={loading || projectsLoading}>
-      {loading || projectsLoading ? <div className="material-empty" role="status" aria-live="polite"><LoaderCircle size={22} className="spin" />正在读取作品素材</div> : error ? null : !visible.length ? <div className="material-empty"><FolderOpen size={24} />{!projects.length ? '还没有其他作品可供复用' : !materials.length ? '此作品暂无可复用素材' : '没有匹配素材，请调整搜索或类型'}</div> : visible.map(item => <article key={item.id} className={selected.has(item.id) ? 'selected' : ''}>
-        <div className="project-material-preview">{item.kind === 'image' ? <img src={mediaUrl(item.path)} alt={item.title} loading="lazy" /> : item.kind === 'audio' ? <audio aria-label={`试听 ${item.title}`} src={mediaUrl(item.path)} controls preload="none" /> : <Film size={32} />}</div>
-        <label className="project-material-choice"><input type="checkbox" checked={selected.has(item.id)} disabled={busy} onChange={() => setSelected(previous => { const next = new Set(previous); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })} /><span><strong>{item.title}</strong><small>{kinds.find(([id]) => id === item.kind)?.[1] ?? '素材'} · {(item.size_bytes / 1024 / 1024).toFixed(1)} MB</small></span></label>
+      })} />选择当前结果</label>
+      <p className="ml-hint">复制到当前作品独立保存，保留来源信息；审核结果需重新确认。每次最多128个。</p>
+    </div>
+    {error && <div className="ml-notice error" role="alert">{error} <button className="text-button" disabled={busy} onClick={() => setRefresh(value => value + 1)}>重试</button></div>}
+    <div className="ml-grid" aria-busy={loading || projectsLoading}>
+      {loading || projectsLoading ? <div className="ml-empty" role="status" aria-live="polite"><LoaderCircle size={20} className="spin" /><span>正在读取作品素材</span></div> : error ? null : !visible.length ? <div className="ml-empty"><FolderOpen size={20} /><span>{!projects.length ? '还没有其他作品可供复用' : !materials.length ? '此作品暂无可复用素材' : '没有匹配素材，请调整搜索或类型'}</span></div> : visible.map(item => <article key={item.id} className={selected.has(item.id) ? 'selected' : ''}>
+        <div className="ml-preview">{item.kind === 'image' ? <img src={mediaUrl(item.path)} alt={item.title} loading="lazy" /> : item.kind === 'audio' ? <audio aria-label={`试听 ${item.title}`} src={mediaUrl(item.path)} controls preload="none" /> : <Film size={30} />}</div>
+        <label className="ml-choice"><input type="checkbox" checked={selected.has(item.id)} disabled={busy} onChange={() => setSelected(previous => { const next = new Set(previous); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })} /><span><strong>{item.title}</strong><small>{kinds.find(([id]) => id === item.kind)?.[1] ?? '素材'} · {(item.size_bytes / 1024 / 1024).toFixed(1)} MB</small></span></label>
       </article>)}
     </div>
-    {notice && <div className="material-notice" role="status" aria-live="polite">{notice}</div>}
-    <footer className="material-bridge-foot"><span>{selected.size ? `已选择 ${selected.size} 个素材${[...selected].some(id => !visible.some(item => item.id === id)) ? '（包含筛选隐藏项）' : ''}${selected.size > 128 ? '，超过单次128个上限，请取消部分选择' : ''}` : '选择素材后复制到当前作品'}</span><button className="button primary" disabled={busy || !selected.size || selected.size > 128 || loading || !projectId} onClick={() => void copySelected()}>{busy ? <LoaderCircle className="spin" size={15} /> : <Copy size={15} />}{busy ? '正在复制…' : '复制到当前作品'}</button></footer>
+    {notice && <div className="ml-notice" role="status" aria-live="polite">{notice}</div>}
+    <footer className="ml-foot"><span>{selected.size ? `已选择 ${selected.size} 个素材${[...selected].some(id => !visible.some(item => item.id === id)) ? '（包含筛选隐藏项）' : ''}${selected.size > 128 ? '，超过单次128个上限，请取消部分选择' : ''}` : '选择素材后复制到当前作品'}</span><button className="button primary" disabled={busy || !selected.size || selected.size > 128 || loading || !projectId} onClick={() => void copySelected()}>{busy ? <LoaderCircle className="spin" size={15} /> : <Copy size={15} />}{busy ? '正在复制…' : '复制到当前作品'}</button></footer>
   </div>;
 }

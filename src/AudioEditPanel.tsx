@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import TaskQueueStatus, { type QueueReceipt } from './TaskQueueStatus';
 import { ApiError, mediaUrl, request as apiRequest } from './api/client';
 
-type Props = { projectId: string; audioAssets: Array<{ id: string; title: string }>; onComplete: () => void; onBrowse: () => void };
+type Props = { projectId: string; audioAssets: Array<{ id: string; title: string }>; onComplete: () => void; onBrowse: () => void; defaultOpen?: boolean };
 type Draft = { source_asset_id: string; background_asset_id?: string; start_seconds: number; duration_seconds: number | null; pad_silence: boolean;
   gain: number; fade_in_seconds: number; fade_out_seconds: number; background_gain: number; background_offset_seconds: number };
 type Submission = Draft & { idempotency_key: string };
@@ -46,7 +46,10 @@ class RequestError extends Error { constructor(message: string, readonly status:
 // Keyed inner state prevents a pending request from following a project switch.
 export default function AudioEditPanel(props: Props) { return <ProjectAudioEditPanel key={props.projectId} {...props} />; }
 
-function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse }: Props) {
+function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse, defaultOpen }: Props) {
+  // The shell now renders every post tool expanded; keep accepting the legacy
+  // prop without letting it collapse the form again.
+  void defaultOpen;
   const storageKey = `director-workbench:${projectId}:audio-edit:v1`;
   const prefix = useId();
   const [saved, setSaved] = useState<Saved>(() => {
@@ -254,67 +257,70 @@ function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse }:
     finally { setMasterBusy(false); }
   }
   const numberInput = (name: Exclude<keyof Draft, 'source_asset_id' | 'background_asset_id' | 'pad_silence'>, label: string, max: number) =>
-    <div key={name}><label htmlFor={`${prefix}-${name}`}>{label}</label><input id={`${prefix}-${name}`} type="number" min={0} max={max} step="any" disabled={locked} value={draft[name] ?? ''}
+    <div key={name} className="sf-post-field"><label htmlFor={`${prefix}-${name}`}>{label}</label><input id={`${prefix}-${name}`} type="number" min={0} max={max} step="any" disabled={locked} value={draft[name] ?? ''}
       placeholder={name === 'duration_seconds' ? '留空：到结尾' : undefined}
       onChange={event => change(name, event.target.value === '' && name === 'duration_seconds' ? null : Number(event.target.value))} /></div>;
-  return <details className="director-operation-panel" aria-label="编辑音频">
-    <summary>编辑音频 {task && `· ${labels[task.status] || '处理中'}`}</summary>
-    <section aria-label="全片母版后期"><h3>全片母版后期（最长30分钟）</h3>
-      <p>对当前作品已登记的完整母版做 CPU 响度归一化、真峰值限制、淡入淡出和可选背景混音。支持 WAV、MP3、M4A、FLAC；WAV 保留原采样率和声道，其他格式由 FFmpeg 归一化为 48kHz 双声道 PCM16。输出为新候选，不会自动替换音轨。</p>
-      <div className="director-creation-grid">
-        <div><label htmlFor={`${prefix}-master-source`}>完整母版</label><select id={`${prefix}-master-source`} value={masterDraft.source_asset_id} disabled={Boolean(masterTask) || Boolean(masterPendingKey)} onChange={event => changeMaster('source_asset_id', event.target.value)}>
+  return <section className="sf-post-tools" aria-label="编辑音频">
+    <section className="sf-post-section" aria-label="全片母版后期">
+      <div className="sf-post-section-head"><h2 className="sf-post-title">全片母版后期</h2><p className="sf-post-meta">最长 30 分钟 · CPU 响度处理</p></div>
+      <p className="sf-post-hint">对当前作品已登记的完整母版做 CPU 响度归一化、真峰值限制、淡入淡出和可选背景混音。支持 WAV、MP3、M4A、FLAC；WAV 保留原采样率和声道，其他格式由 FFmpeg 归一化为 48kHz 双声道 PCM16。输出为新候选，不会自动替换音轨。</p>
+      <div className="sf-post-fields">
+        <div className="sf-post-field"><label htmlFor={`${prefix}-master-source`}>完整母版</label><select id={`${prefix}-master-source`} value={masterDraft.source_asset_id} disabled={Boolean(masterTask) || Boolean(masterPendingKey)} onChange={event => changeMaster('source_asset_id', event.target.value)}>
           <option value="">选择音频</option>{audioAssets.map(asset => <option key={asset.id} value={asset.id}>{asset.title}</option>)}</select></div>
-        <div><label htmlFor={`${prefix}-master-background`}>背景音（可选）</label><select id={`${prefix}-master-background`} value={masterDraft.background_asset_id || ''} disabled={Boolean(masterTask) || Boolean(masterPendingKey)} onChange={event => changeMaster('background_asset_id', event.target.value || undefined)}>
+        <div className="sf-post-field"><label htmlFor={`${prefix}-master-background`}>背景音（可选）</label><select id={`${prefix}-master-background`} value={masterDraft.background_asset_id || ''} disabled={Boolean(masterTask) || Boolean(masterPendingKey)} onChange={event => changeMaster('background_asset_id', event.target.value || undefined)}>
           <option value="">不混入背景音</option>{audioAssets.map(asset => <option key={asset.id} value={asset.id}>{asset.title}</option>)}</select></div>
-        <label><input type="checkbox" checked={masterDraft.pad_silence} disabled={Boolean(masterTask) || Boolean(masterPendingKey)} onChange={event => changeMaster('pad_silence', event.target.checked)} />明确允许源或背景尾部补静音</label>
-        <label>目标响度（LUFS-I）<input type="number" min={-24} max={-8} step="any" disabled={Boolean(masterTask) || Boolean(masterPendingKey)} value={masterDraft.target_lufs} onChange={event => changeMaster('target_lufs', Number(event.target.value))} /></label>
-        <label>真峰值（dBTP）<input type="number" min={-3} max={0} step="any" disabled={Boolean(masterTask) || Boolean(masterPendingKey)} value={masterDraft.true_peak_dbtp} onChange={event => changeMaster('true_peak_dbtp', Number(event.target.value))} /></label>
-        <label>裁切起点（秒）<input type="number" min={0} max={3600} step="any" disabled={Boolean(masterTask) || Boolean(masterPendingKey)} value={masterDraft.trim_start_seconds} onChange={event => changeMaster('trim_start_seconds', Number(event.target.value))} /></label>
-        <label>裁切时长（秒）<input type="number" min={0.001} max={1800} step="any" placeholder="留空：到结尾" disabled={Boolean(masterTask) || Boolean(masterPendingKey)} value={masterDraft.trim_duration_seconds ?? ''} onChange={event => changeMaster('trim_duration_seconds', event.target.value === '' ? null : Number(event.target.value))} /></label>
-        <label><input type="checkbox" checked={Boolean(masterDraft.ducking)} disabled={Boolean(masterTask) || Boolean(masterPendingKey)} onChange={event => changeMaster('ducking', event.target.checked ? { threshold_db: -24, ratio: 4, attack_seconds: .01, release_seconds: .2 } : undefined)} />背景 ducking（带 attack/release 包络）</label>
-        {masterDraft.ducking && <>
-          <label>阈值（dB）<input type="number" min={-60} max={0} step="any" disabled={Boolean(masterTask) || Boolean(masterPendingKey)} value={masterDraft.ducking.threshold_db} onChange={event => changeMaster('ducking', { ...masterDraft.ducking!, threshold_db: Number(event.target.value) })} /></label>
-          <label>压缩比<input type="number" min={1} max={20} step="any" disabled={Boolean(masterTask) || Boolean(masterPendingKey)} value={masterDraft.ducking.ratio} onChange={event => changeMaster('ducking', { ...masterDraft.ducking!, ratio: Number(event.target.value) })} /></label>
-          <label>attack（秒）<input type="number" min={.001} max={1} step="any" disabled={Boolean(masterTask) || Boolean(masterPendingKey)} value={masterDraft.ducking.attack_seconds} onChange={event => changeMaster('ducking', { ...masterDraft.ducking!, attack_seconds: Number(event.target.value) })} /></label>
-          <label>release（秒）<input type="number" min={.01} max={2} step="any" disabled={Boolean(masterTask) || Boolean(masterPendingKey)} value={masterDraft.ducking.release_seconds} onChange={event => changeMaster('ducking', { ...masterDraft.ducking!, release_seconds: Number(event.target.value) })} /></label>
-        </>}
+        <label className="sf-post-check sf-post-field--wide"><input type="checkbox" checked={masterDraft.pad_silence} disabled={Boolean(masterTask) || Boolean(masterPendingKey)} onChange={event => changeMaster('pad_silence', event.target.checked)} />明确允许源或背景尾部补静音</label>
+        <label className="sf-post-field">目标响度（LUFS-I）<input type="number" min={-24} max={-8} step="any" disabled={Boolean(masterTask) || Boolean(masterPendingKey)} value={masterDraft.target_lufs} onChange={event => changeMaster('target_lufs', Number(event.target.value))} /></label>
+        <label className="sf-post-field">真峰值（dBTP）<input type="number" min={-3} max={0} step="any" disabled={Boolean(masterTask) || Boolean(masterPendingKey)} value={masterDraft.true_peak_dbtp} onChange={event => changeMaster('true_peak_dbtp', Number(event.target.value))} /></label>
+        <label className="sf-post-field">裁切起点（秒）<input type="number" min={0} max={3600} step="any" disabled={Boolean(masterTask) || Boolean(masterPendingKey)} value={masterDraft.trim_start_seconds} onChange={event => changeMaster('trim_start_seconds', Number(event.target.value))} /></label>
+        <label className="sf-post-field">裁切时长（秒）<input type="number" min={0.001} max={1800} step="any" placeholder="留空：到结尾" disabled={Boolean(masterTask) || Boolean(masterPendingKey)} value={masterDraft.trim_duration_seconds ?? ''} onChange={event => changeMaster('trim_duration_seconds', event.target.value === '' ? null : Number(event.target.value))} /></label>
+        <label className="sf-post-check sf-post-field--wide"><input type="checkbox" checked={Boolean(masterDraft.ducking)} disabled={Boolean(masterTask) || Boolean(masterPendingKey)} onChange={event => changeMaster('ducking', event.target.checked ? { threshold_db: -24, ratio: 4, attack_seconds: .01, release_seconds: .2 } : undefined)} />背景 ducking（带 attack/release 包络）</label>
       </div>
-      {masterMessage && <p role="status" aria-live="polite">{masterMessage}</p>}{masterTask?.error && <p role="alert">{masterTask.error}</p>}
-      {masterResult?.output && <div><audio controls preload="metadata" aria-label="全片母版后期候选试听" src={mediaUrl(masterResult.output)} /><small>实测 {masterResult.duration_seconds} 秒 · {masterResult.report?.loudness_lufs_i} LUFS-I · {masterResult.report?.output_true_peak_dbtp} dBTP · LRA {masterResult.report?.loudness_lra} · 削波样本 {masterResult.report?.clipped_samples}</small></div>}
-      <div className="director-form-actions"><button className="button primary compact" type="button" disabled={masterBusy || Boolean(masterTask) || Boolean(masterPendingKey) || !validMaster(masterDraft)} onClick={() => void submitMaster()}>提交全片后期</button>
+      {masterDraft.ducking && <div className="sf-post-subblock"><h3 className="sf-post-subtitle">Ducking 参数</h3><div className="sf-post-fields">
+        <label className="sf-post-field">阈值（dB）<input type="number" min={-60} max={0} step="any" disabled={Boolean(masterTask) || Boolean(masterPendingKey)} value={masterDraft.ducking.threshold_db} onChange={event => changeMaster('ducking', { ...masterDraft.ducking!, threshold_db: Number(event.target.value) })} /></label>
+        <label className="sf-post-field">压缩比<input type="number" min={1} max={20} step="any" disabled={Boolean(masterTask) || Boolean(masterPendingKey)} value={masterDraft.ducking.ratio} onChange={event => changeMaster('ducking', { ...masterDraft.ducking!, ratio: Number(event.target.value) })} /></label>
+        <label className="sf-post-field">attack（秒）<input type="number" min={.001} max={1} step="any" disabled={Boolean(masterTask) || Boolean(masterPendingKey)} value={masterDraft.ducking.attack_seconds} onChange={event => changeMaster('ducking', { ...masterDraft.ducking!, attack_seconds: Number(event.target.value) })} /></label>
+        <label className="sf-post-field">release（秒）<input type="number" min={.01} max={2} step="any" disabled={Boolean(masterTask) || Boolean(masterPendingKey)} value={masterDraft.ducking.release_seconds} onChange={event => changeMaster('ducking', { ...masterDraft.ducking!, release_seconds: Number(event.target.value) })} /></label>
+      </div></div>}
+      {masterMessage && <p className="sf-post-message" role="status" aria-live="polite">{masterMessage}</p>}{masterTask?.error && <p className="sf-post-alert" role="alert">{masterTask.error}</p>}
+      {masterResult?.output && <div className="sf-post-subblock"><audio controls preload="metadata" aria-label="全片母版后期候选试听" src={mediaUrl(masterResult.output)} /><small>实测 {masterResult.duration_seconds} 秒 · {masterResult.report?.loudness_lufs_i} LUFS-I · {masterResult.report?.output_true_peak_dbtp} dBTP · LRA {masterResult.report?.loudness_lra} · 削波样本 {masterResult.report?.clipped_samples}</small></div>}
+      <div className="sf-post-actions"><button className="button primary compact" type="button" disabled={masterBusy || Boolean(masterTask) || Boolean(masterPendingKey) || !validMaster(masterDraft)} onClick={() => void submitMaster()}>提交全片后期</button>
         {masterResult?.candidate_asset_id && <button className="button secondary compact" type="button" disabled={masterBusy} onClick={() => void chooseMaster()}>选择为完整母版</button>}
         {masterTask?.status === 'needs_reconcile' && <><button className="button secondary compact" type="button" disabled={masterBusy} onClick={() => void masterAct('reconcile')}>核对母版结果</button><button className="button secondary compact" type="button" disabled={masterBusy} onClick={() => void masterAct('resolve-missing')}>确认执行已结束</button></>}
         {masterTask && terminal.includes(masterTask.status) && <button className="button secondary compact" type="button" disabled={masterBusy} onClick={() => { if (persistMaster({ ...masterCurrent.current, pending: undefined })) setMasterTask(null); }}>继续编辑</button>}
-        {masterTask && <span role="status" aria-live="polite">{labels[masterTask.status] || '处理中'}</span>}</div>
+        {masterTask && <span className="sf-post-status" role="status" aria-live="polite">{labels[masterTask.status] || '处理中'}</span>}</div>
     </section>
-    <p>最长120秒；PCM16 WAV或MP3，MP3转为48kHz双声道。增益和淡变产生新候选，不自动替换母版或采用。短源默认拒绝，可明确补静音；长源用取片时长裁切。完整母版应包含需要保留的对白和音效。</p>
-    <div className="director-creation-grid">
-      <div><label htmlFor={`${prefix}-source`}>原音频</label><select id={`${prefix}-source`} value={draft.source_asset_id} disabled={locked} onChange={event => change('source_asset_id', event.target.value)}>
-        <option value="">选择音频</option>{draft.source_asset_id && !audioAssets.some(a => a.id === draft.source_asset_id) && <option value={draft.source_asset_id}>原提交素材（当前不可选）</option>}
-        {audioAssets.map(asset => <option key={asset.id} value={asset.id}>{asset.title}</option>)}</select></div>
-      <div><label htmlFor={`${prefix}-background`}>背景音（可选）</label><select id={`${prefix}-background`} value={draft.background_asset_id || ''} disabled={locked} onChange={event => persist({ ...current.current, draft: { ...current.current.draft, background_asset_id: event.target.value || undefined, background_offset_seconds: 0 } })}>
-        <option value="">不混入背景音</option>{draft.background_asset_id && !audioAssets.some(a => a.id === draft.background_asset_id) && <option value={draft.background_asset_id}>原提交背景音（当前不可选）</option>}
-        {audioAssets.map(asset => <option key={asset.id} value={asset.id}>{asset.title}</option>)}</select></div>
-      <label><input type="checkbox" checked={draft.pad_silence ?? false} disabled={locked} onChange={event => change('pad_silence', event.target.checked)} />源不足所选时长时，明确在尾部补静音</label>
-      <details className="director-creation-wide"><summary>高级：裁切、音量与淡变</summary><div className="director-creation-grid">
+    <section className="sf-post-section" aria-label="音频编辑">
+      <div className="sf-post-section-head"><h2 className="sf-post-title">音频编辑</h2><p className="sf-post-meta">最长 120 秒 · 生成新候选</p></div>
+      <p className="sf-post-hint">PCM16 WAV 或 MP3，MP3 转为 48kHz 双声道。增益和淡变产生新候选，不自动替换母版或采用。短源默认拒绝，可明确补静音；长源用取片时长裁切。完整母版应包含需要保留的对白和音效。</p>
+      <div className="sf-post-fields">
+        <div className="sf-post-field"><label htmlFor={`${prefix}-source`}>原音频</label><select id={`${prefix}-source`} value={draft.source_asset_id} disabled={locked} onChange={event => change('source_asset_id', event.target.value)}>
+          <option value="">选择音频</option>{draft.source_asset_id && !audioAssets.some(a => a.id === draft.source_asset_id) && <option value={draft.source_asset_id}>原提交素材（当前不可选）</option>}
+          {audioAssets.map(asset => <option key={asset.id} value={asset.id}>{asset.title}</option>)}</select></div>
+        <div className="sf-post-field"><label htmlFor={`${prefix}-background`}>背景音（可选）</label><select id={`${prefix}-background`} value={draft.background_asset_id || ''} disabled={locked} onChange={event => persist({ ...current.current, draft: { ...current.current.draft, background_asset_id: event.target.value || undefined, background_offset_seconds: 0 } })}>
+          <option value="">不混入背景音</option>{draft.background_asset_id && !audioAssets.some(a => a.id === draft.background_asset_id) && <option value={draft.background_asset_id}>原提交背景音（当前不可选）</option>}
+          {audioAssets.map(asset => <option key={asset.id} value={asset.id}>{asset.title}</option>)}</select></div>
+        <label className="sf-post-check sf-post-field--wide"><input type="checkbox" checked={draft.pad_silence ?? false} disabled={locked} onChange={event => change('pad_silence', event.target.checked)} />源不足所选时长时，明确在尾部补静音</label>
+      </div>
+      <div className="sf-post-subblock"><h3 className="sf-post-subtitle">裁切、音量与淡变</h3><div className="sf-post-fields">
         {numberInput('start_seconds', '起点（秒）', 86400)}{numberInput('duration_seconds', '保留时长（秒）', 120)}
         {numberInput('gain', '原音频音量（倍）', 8)}{numberInput('fade_in_seconds', '淡入（秒）', 120)}{numberInput('fade_out_seconds', '淡出（秒）', 120)}
         {draft.background_asset_id && <>{numberInput('background_gain', '背景音音量（倍）', 8)}{numberInput('background_offset_seconds', '背景音开始位置（秒）', 120)}</>}
-      </div></details>
-    </div>
-    <p className="director-muted">PCM16 WAV，最多 120 秒；混音须同采样率、同声道。保存为新候选，原音频保留。</p>
-    {message && <p role="status" aria-live="polite">{message}</p>}{task?.error && <p role="status" aria-live="polite">{task.error}</p>}
-    {result?.output && <div><audio controls preload="metadata" aria-label="音频编辑候选试听" src={mediaUrl(result.output)} /><p>新候选实测 {result.duration_seconds ?? '未知'} 秒；试听后再选择为完整母版，不会自动替换原音。</p></div>}
-    <div className="director-form-actions">
-      <button className="button secondary compact" onClick={onBrowse}>添加素材</button>
-      {!locked && <button className="button primary compact" disabled={busy || !valid(draft) || !audioAssets.some(a => a.id === draft.source_asset_id)} onClick={() => void act('submit')}>保存编辑候选</button>}
-      {locked && !task && <><button className="button secondary compact" disabled={busy} onClick={() => void act('check')}>核对原提交</button><button className="button secondary compact" disabled={busy} onClick={() => void act('submit')}>使用原凭据重试</button></>}
-      {task?.status === 'needs_reconcile' && <><button className="button secondary compact" disabled={busy} onClick={() => void act('reconcile')}>核对编辑结果</button><button className="button secondary compact" disabled={busy} onClick={() => void act('resolve-missing')}>确认执行已结束</button></>}
-      {task && !terminal.includes(task.status) && task.status !== 'needs_reconcile' && <button className="button secondary compact" disabled={busy} onClick={() => void act('stop')}>停止音频编辑</button>}
-      {task && ['stopped', 'failed'].includes(task.status) && <button className="button secondary compact" disabled={busy} onClick={() => void act('resume')}>恢复原编辑任务</button>}
-      {task && terminal.includes(task.status) && <button className="button secondary compact" disabled={busy} onClick={() => { if (persist({ ...current.current, pending: undefined })) { setTask(null); setMessage(''); } }}>继续编辑</button>}
-      {task && <TaskQueueStatus task={{ ...task, asset_id: '音频编辑' }} />}
-      {task && <span role="status" aria-live="polite">{labels[task.status] || '处理中'}</span>}
-    </div>
-  </details>;
+      </div></div>
+      <p className="sf-post-hint">PCM16 WAV，最多 120 秒；混音须同采样率、同声道。保存为新候选，原音频保留。</p>
+      {message && <p className="sf-post-message" role="status" aria-live="polite">{message}</p>}{task?.error && <p className="sf-post-message" role="status" aria-live="polite">{task.error}</p>}
+      {result?.output && <div className="sf-post-subblock"><audio controls preload="metadata" aria-label="音频编辑候选试听" src={mediaUrl(result.output)} /><p className="sf-post-hint">新候选实测 {result.duration_seconds ?? '未知'} 秒；试听后再选择为完整母版，不会自动替换原音。</p></div>}
+      <div className="sf-post-actions">
+        <button className="button secondary compact" onClick={onBrowse}>添加素材</button>
+        {!locked && <button className="button primary compact" disabled={busy || !valid(draft) || !audioAssets.some(a => a.id === draft.source_asset_id)} onClick={() => void act('submit')}>保存编辑候选</button>}
+        {locked && !task && <><button className="button secondary compact" disabled={busy} onClick={() => void act('check')}>核对原提交</button><button className="button secondary compact" disabled={busy} onClick={() => void act('submit')}>使用原凭据重试</button></>}
+        {task?.status === 'needs_reconcile' && <><button className="button secondary compact" disabled={busy} onClick={() => void act('reconcile')}>核对编辑结果</button><button className="button secondary compact" disabled={busy} onClick={() => void act('resolve-missing')}>确认执行已结束</button></>}
+        {task && !terminal.includes(task.status) && task.status !== 'needs_reconcile' && <button className="button secondary compact" disabled={busy} onClick={() => void act('stop')}>停止音频编辑</button>}
+        {task && ['stopped', 'failed'].includes(task.status) && <button className="button secondary compact" disabled={busy} onClick={() => void act('resume')}>恢复原编辑任务</button>}
+        {task && terminal.includes(task.status) && <button className="button secondary compact" disabled={busy} onClick={() => { if (persist({ ...current.current, pending: undefined })) { setTask(null); setMessage(''); } }}>继续编辑</button>}
+        {task && <TaskQueueStatus task={{ ...task, asset_id: '音频编辑' }} />}
+        {task && <span className="sf-post-status" role="status" aria-live="polite">{labels[task.status] || '处理中'}</span>}
+      </div>
+    </section>
+  </section>;
 }

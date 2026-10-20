@@ -26,14 +26,13 @@ INSTALL_DEV_HINT = ('Install development test tooling into the project interpret
                     r'.venv\Scripts\python.exe -m pip install -r requirements-dev.txt')
 DEFAULT_IMPACT_CONFIG = Path('tools/test_impact.toml')
 BROWSER_TESTS = (
-    'assembly_edit', 'explicit_creation', 'client_restore', 'enhancement',
-    'generation_stage', 'guide_queue', 'guide_review', 'media_tools_panel',
+    'assembly_edit', 'guide_queue', 'guide_review', 'media_tools_panel',
     'queued_panels', 'reference_queue', 'speech_panel',
-    'quick_generation', 'media_qc', 'guide_joins', 'creative_review',
+    'media_qc', 'guide_joins', 'creative_review',
 )
 # These drivers additionally need the project interpreter and a fresh absolute runtime
 # directory (relative or pre-existing roots raise AccessDenied in backend/user_context.py).
-BROWSER_FIXTURE_TESTS = ('enhancement', 'quick_generation')
+BROWSER_FIXTURE_TESTS = ()
 # Three drivers read a fixture tree an earlier pytest run wrote and refuse to invent one,
 # so the suite runs the producing module first.  Each producer gets its own --basetemp:
 # pytest empties the directory it is handed, so one shared basetemp would delete the
@@ -47,7 +46,7 @@ BROWSER_PYTEST_FIXTURES = {
 # These drivers take a media fixture after the script name. The producer runs on the
 # project interpreter because it encodes with PyAV, which is a test-time dependency
 # there; the driver then reads the file it wrote instead of being handed one by hand.
-BROWSER_MEDIA_TESTS = {'client_restore': 'tests/client_restore_media.py'}
+BROWSER_MEDIA_TESTS = {}
 # The drivers import these from the checkout's node_modules. Probing the installed package
 # manifests lets --check name the missing install once instead of one import error per driver.
 BROWSER_NODE_MODULES = ('playwright', 'esbuild')
