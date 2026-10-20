@@ -563,3 +563,6 @@
 @media (prefers-reduced-motion: reduce) {
   .sf-root *, .sf-root *::before, .sf-root *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+.sf-step-panel { max-width: 900px; }
+.sf-tool-panel { max-width: 920px; }
