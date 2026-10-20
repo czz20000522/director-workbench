@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   ArrowRight, BookOpen, Check, ChevronLeft, ChevronRight, Clapperboard, FileText, FolderOpen, ListTodo, ScanEye,
-  Film, Image, Layers3, LoaderCircle, Plus, Play, Sparkles, Upload, Volume2, Wand2, X,
+  Film, Layers3, LoaderCircle, Plus, Sparkles, Upload, Volume2,
 } from 'lucide-react';
 const ScriptWorkbench = lazy(() => import('./ScriptWorkbench'));
 const ReverseWorkbench = lazy(() => import('./ReverseWorkbench'));
@@ -10,7 +10,6 @@ const ProjectMaterialLibrary = lazy(() => import('./ProjectMaterialLibrary'));
 import './studio-flow.css';
 
 type Step = 1 | 2 | 3 | 4 | 5 | 6;
-type QuickTool = 'text-video' | 'image-video' | 'text-image' | 'enhance';
 type Tool = 'script' | 'reference' | 'materials' | 'tasks';
 type ProjectSummary = { id: string; title: string; series: string; selected?: boolean };
 type Segment = { id: string; duration_seconds?: number; prompt?: string; status?: string; video?: { path?: string } };
@@ -68,9 +67,9 @@ function TopBar({ username, projectTitle, onHome, onLogout }: { username: string
   );
 }
 
-function Home({ projects, continueProject, loading, error, onStart, onQuick, onOpen, onRetry }: {
+function Home({ projects, continueProject, loading, error, onStart, onOpen, onRetry }: {
   projects: ProjectView[]; continueProject: ProjectView | null; loading: boolean; error: string;
-  onStart: () => void; onQuick: (tool: QuickTool) => void; onOpen: (id: string) => void; onRetry: () => void;
+  onStart: () => void; onOpen: (id: string) => void; onRetry: () => void;
 }) {
   if (loading) return <main className="sf-page sf-center"><LoaderCircle className="sf-spin" size={20} /><p>正在读取作品…</p></main>;
   if (error) return <main className="sf-page sf-center"><p role="alert">{error}</p><button className="sf-secondary" onClick={onRetry}>重试</button></main>;
@@ -110,42 +109,10 @@ function Home({ projects, continueProject, loading, error, onStart, onQuick, onO
         </div>
       </section>}
 
-      <section className="sf-section sf-quick-section">
-        <details className="sf-quick">
-          <summary><span><strong>单步工具</strong><small>文生视频 · 图生视频 · 文生图 · 清晰化</small></span><ChevronRight size={16} /></summary>
-          <div className="sf-quick-grid">
-            <button onClick={() => onQuick('text-video')}><Play size={18} /><strong>文生视频</strong><span>只生成一个镜头</span></button>
-            <button onClick={() => onQuick('image-video')}><Film size={18} /><strong>图生视频</strong><span>让一张图动起来</span></button>
-            <button onClick={() => onQuick('text-image')}><Image size={18} /><strong>文生图</strong><span>先生成一张素材</span></button>
-            <button onClick={() => onQuick('enhance')}><Wand2 size={18} /><strong>清晰化</strong><span>处理已有图片或视频</span></button>
-          </div>
-        </details>
-      </section>
     </main>
   );
 }
 
-function Intent({ onClose, onFull, onQuick }: { onClose: () => void; onFull: () => void; onQuick: (tool: QuickTool) => void }) {
-  return <div className="sf-modal-backdrop" role="dialog" aria-modal="true" aria-label="选择创作意图" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}><div className="sf-modal">
-    <button className="sf-modal-close" onClick={onClose} aria-label="关闭"><X size={18} /></button>
-    <p className="sf-step-label">新建</p><h2>你想做什么？</h2><p className="sf-modal-lede">整片流程和单步工具分开。</p>
-    <button className="sf-intent-primary" onClick={onFull}><span className="sf-intent-icon"><Clapperboard size={20} /></span><span><strong>做一部完整影片</strong><small>愿望 → 方案 → 分镜 → 候选 → 装配 → 成片</small></span><ArrowRight size={18} /></button>
-    <div className="sf-intent-grid">
-      <button onClick={() => onQuick('text-video')}><Play size={18} /><strong>只生成一个镜头</strong><small>使用现有工作台</small></button>
-      <button onClick={() => onQuick('text-image')}><Image size={18} /><strong>只生成一张图</strong><small>使用现有工作台</small></button>
-      <button onClick={() => onQuick('enhance')}><Wand2 size={18} /><strong>处理已有素材</strong><small>使用现有工作台</small></button>
-    </div>
-    <div className="sf-zone-pick"><span>内容分区</span><button className="sf-zone selected">普通创作</button><button className="sf-zone">成人向创作 <small>需明确边界</small></button></div>
-  </div></div>;
-}
-
-function QuickGateway({ tool, onBack }: { tool: QuickTool; onBack: () => void }) {
-  const info = {
-    'text-video': ['文生视频', '只生成一个镜头'], 'image-video': ['图生视频', '让一张图动起来'],
-    'text-image': ['文生图', '先生成一张素材'], enhance: ['清晰化', '处理已有图片或视频'],
-  }[tool];
-  return <main className="sf-quick-page"><button className="sf-back" onClick={onBack}><ChevronLeft size={16} /> 返回首页</button><section className="sf-quick-panel"><div className="sf-quick-icon"><Wand2 size={24} /></div><p className="sf-step-label">快速工具</p><h1>{info[0]}</h1><p>{info[1]}。单步工具尚未并入新工作流，暂时在旧版入口中完成。</p><div className="sf-quick-actions"><button className="sf-primary" onClick={() => { window.location.href = '/?legacy=1'; }}>打开旧版单步工具 <ArrowRight size={16} /></button><button className="sf-secondary" onClick={onBack}>返回</button></div></section></main>;
-}
 
 function StepRail({ step, tool, projectReady, projectTitle, onStep, onTool }: { step: Step; tool: Tool | null; projectReady: boolean; projectTitle: string; onStep: (step: Step) => void; onTool: (tool: Tool | null) => void }) {
   const tools: { id: Tool; label: string; icon: ReactNode }[] = [
@@ -274,7 +241,7 @@ function ToolPage({ tool, projectId, plan, onStep, onRefreshPlan, onOpenShot }: 
 }
 
 export default function StudioFlowLive({ username, onLogout }: { username: string; onLogout: () => void }) {
-  const [screen, setScreen] = useState<'home' | 'intent' | 'wizard' | 'quick'>('home');
+  const [screen, setScreen] = useState<'home' | 'wizard'>('home');
   const [projects, setProjects] = useState<ProjectView[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -291,7 +258,6 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
   const [shotDuration, setShotDuration] = useState(4);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [quickTool, setQuickTool] = useState<QuickTool>('text-video');
   const [tool, setTool] = useState<Tool | null>(null);
   const [projectTitle, setProjectTitle] = useState('');
   const [stageId, setStageId] = useState('');
@@ -326,11 +292,6 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
     finally { setLoading(false); }
   };
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && screen === 'intent') setScreen('home'); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [screen]);
   useEffect(() => {
     const deepLink = new URLSearchParams(window.location.search).get('project');
     if (deepLink) { void openProject(deepLink); } else { void loadProjects(); }
@@ -518,15 +479,11 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
   const openShot = (shotId: string) => { setTool(null); setVersionShot(shotId); setStep(4); void loadVersions(shotId); };
 
   const startFull = () => { setTitle(''); setSeries('新作品'); setDuration(15); setPlan(null); setProjectId(''); setProjectTitle(''); setPresetId(''); setTool(null); setError(''); setStep(1); setScreen('wizard'); };
-  const newProject = () => setScreen('intent');
-  const quick = (tool: QuickTool) => { setQuickTool(tool); setScreen('quick'); };
   const home = () => { setScreen('home'); setError(''); void loadProjects(); };
 
   return <div className="sf-root">
     <TopBar username={username} projectTitle={screen === 'wizard' ? projectTitle : undefined} onHome={home} onLogout={onLogout} />
-    {screen === 'home' && <Home projects={projects} continueProject={projects[0] || null} loading={loading} error={loadError} onStart={newProject} onQuick={quick} onOpen={id => void openProject(id)} onRetry={() => void loadProjects()} />}
-    {screen === 'intent' && <Intent onClose={() => setScreen('home')} onFull={startFull} onQuick={quick} />}
-    {screen === 'quick' && <QuickGateway tool={quickTool} onBack={() => setScreen('home')} />}
+    {screen === 'home' && <Home projects={projects} continueProject={projects[0] || null} loading={loading} error={loadError} onStart={startFull} onOpen={id => void openProject(id)} onRetry={() => void loadProjects()} />}
     {screen === 'wizard' && <Wizard step={step} tool={tool} projectReady={Boolean(projectId)} projectTitle={projectTitle} onStep={next => { setTool(null); setStep(next); }} onTool={setTool} onHome={home}>
       {tool && projectId ? <Suspense fallback={<div className="sf-center"><LoaderCircle className="sf-spin" size={20} /><p>正在载入工具…</p></div>}><ToolPage tool={tool} projectId={projectId} plan={plan} onStep={next => { setTool(null); setStep(next); }} onRefreshPlan={refreshPlan} onOpenShot={openShot} /></Suspense> : <>
       {step === 1 && <StepOne title={title} setTitle={setTitle} series={series} setSeries={setSeries} duration={duration} setDuration={setDuration} busy={busy} error={error} existing={Boolean(projectId)} onNext={() => void createProject()} />}
@@ -540,6 +497,8 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
     </Wizard>}
   </div>;
 }
+
+
 
 
 
