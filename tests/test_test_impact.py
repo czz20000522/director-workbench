@@ -205,8 +205,8 @@ def test_import_reverse_dependency_selects_importing_test(tmp_path):
 def test_changed_browser_driver_selects_itself():
     config = select_tests.load_config(select_tests.DEFAULT_CONFIG, REAL_ROOT)
     selection = select_tests.select(
-        config, [select_tests.ChangedFile('tests/enhancement.browser.mjs', 'M')])
-    assert selection.browser == ['tests/enhancement.browser.mjs']
+        config, [select_tests.ChangedFile('tests/media_qc.browser.mjs', 'M')])
+    assert selection.browser == ['tests/media_qc.browser.mjs']
     assert selection.pytest == []
     assert selection.full_core is False
 
@@ -271,3 +271,4 @@ def test_cli_json_reports_the_same_selection_and_rejects_stale_config(tmp_path, 
     assert select_tests.main(['--root', str(root), '--base', 'HEAD', '--json',
                               '--config', str(config_path)]) == 2
     assert 'update the mapping' in capsys.readouterr().out
+

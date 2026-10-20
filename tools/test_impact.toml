@@ -202,10 +202,8 @@ name = "enhancement"
 paths = [
   "backend/enhancement.py",
   "src/EnhancementPanel.tsx",
-  "src/enhancement.css",
 ]
 tests = ["tests/test_enhancement.py"]
-browser = ["tests/enhancement.browser.mjs"]
 
 [[mapping]]
 name = "gpu-idle"
@@ -287,8 +285,6 @@ paths = [
 ]
 tests = ["tests/test_output_resolution.py"]
 browser = [
-  "tests/quick_generation.browser.mjs",
-  "tests/generation_stage.browser.mjs",
 ]
 
 [[mapping]]
@@ -306,8 +302,6 @@ tests = [
   "tests/test_mcp_creative_template.py",
 ]
 browser = [
-  "tests/quick_generation.browser.mjs",
-  "tests/generation_stage.browser.mjs",
 ]
 
 [[mapping]]
@@ -351,9 +345,6 @@ tests = [
   "tests/test_screenplay.py",
 ]
 browser = [
-  "tests/explicit_creation.browser.mjs",
-  "tests/quick_generation.browser.mjs",
-  "tests/generation_stage.browser.mjs",
 ]
 
 [[mapping]]
