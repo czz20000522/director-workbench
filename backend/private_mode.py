@@ -84,7 +84,7 @@ def install(backend, *, accounts: AccountStore, layout: Layout, origins: tuple[s
             return None
         allowed = {'/api/project', '/api/projects', '/api/projects/create', '/api/projects/select',
                    '/api/material-library', '/material-file', '/media-file', '/workflow-file',
-                   '/api/health', '/api/status', '/api/production-presets', '/api/settings/guide', '/api/queue',
+                   '/api/health', '/api/status', '/api/production-presets', '/api/models', '/api/settings/guide', '/api/queue',
                    '/api/keyframe-capability', '/api/speech-capability', '/api/media-capability', '/api/models/reverse-analysis',
                    '/openapi.json', '/docs', '/docs/oauth2-redirect', '/redoc'}
         if path in allowed:

@@ -28,6 +28,13 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
             result['data'] = await media.shape_task(client, project_id, data)
         return result
 
+    @server.tool(annotations=read_only)
+    async def list_models(category: Annotated[str | None, Field(max_length=80)] = None,
+                          query: Annotated[str | None, Field(max_length=200)] = None) -> dict[str, Any]:
+        """列出本机 ComfyUI 模型文件及用途事实，供 Agent 自行组装方案；不推荐、不下载、不安装。"""
+        params = {key: value for key, value in {'category': category, 'q': query}.items() if value}
+        return await request('GET', '/api/models', params=params)
+
     @server.tool(annotations=idempotent_write)
     async def submit_shot(project_id: str, asset_id: Annotated[str, Field(min_length=1, max_length=160)],
                           idempotency_key: Annotated[str, Field(min_length=1, max_length=160, pattern=r'\S')],

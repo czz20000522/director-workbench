@@ -19,7 +19,7 @@ from .mcp_access_config import transport_security
 REMOTE_TOOLS = (
     # Creative projects, scripts, plans, registered materials, and reviews.
     'list_projects', 'upload_material', 'read_guide_settings', 'read_queue',
-    'list_production_presets', 'configure_production_preset', 'create_project',
+    'list_production_presets', 'list_models', 'configure_production_preset', 'create_project',
     'read_project', 'read_script', 'save_script', 'list_tasks', 'get_task',
     'list_shot_versions', 'preflight', 'save_creative_draft', 'record_review',
     'approve_candidate', 'update_shot', 'arrange_shot', 'create_shot',

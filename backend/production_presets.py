@@ -245,6 +245,105 @@ def catalog(model_root: Path, preset_id: str = PRESET_ID) -> dict[str, Any]:
                          '已验证连接和输入契约，尚未完成模型小样；不保证口型或无字幕。' if preset_id == LOCKED_PRESET_ID
                          else '沿用已有作品验证过的执行连接；新作品仍需生成小样并审核。'),
         'missing_models': sorted(set(missing)),
+        'model_requirements': model_requirements(preset_id, model_root),
+    }
+
+
+MODEL_EXTENSIONS = ('.safetensors', '.gguf', '.pth', '.pt', '.bin', '.onnx')
+MODEL_ROLES = {
+    'diffusion_models': 'diffusion_model', 'unet': 'diffusion_model', 'loras': 'lora',
+    'text_encoders': 'text_encoder', 'clip': 'text_encoder', 'vae': 'vae',
+    'audio_encoders': 'audio_encoder', 'latent_upscale_models': 'latent_upscaler',
+    'upscale_models': 'upscaler', 'vae_approx': 'vae_approx', 'LLM': 'llm', 'AuK': 'voice_model',
+}
+
+
+def _model_metadata(relative: str, size_bytes: int) -> dict[str, Any]:
+    name = relative.rsplit('/', 1)[-1]
+    lower = name.lower()
+    precision = next((token for token in ('nvfp4', 'int8', 'fp8', 'bf16', 'fp16', 'fp32', 'q4_k_m', 'q8_0', 'gguf') if token in lower), 'unknown')
+    family = next((token for token in ('minimax_h3', 'qwen3vl', 'qwen_image', 'qwen_2.5', 'wan2.2', 'krea2', 'anima', 'auk', 'fastvideo', 'noctq') if token in lower), 'other')
+    category = relative.split('/', 1)[0]
+    return {
+        'id': relative, 'filename': name, 'category': category,
+        'role': MODEL_ROLES.get(category, 'other'), 'format': name.rsplit('.', 1)[-1].lower(),
+        'precision': precision, 'family': family, 'size_bytes': size_bytes,
+    }
+
+
+def _model_inventory(root: Path) -> list[dict[str, Any]]:
+    if not root.is_dir():
+        return []
+    files = []
+    for path in sorted(root.rglob('*')):
+        if path.is_file() and path.suffix.lower() in MODEL_EXTENSIONS:
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            if size > 0:
+                files.append(_model_metadata(path.relative_to(root).as_posix(), size))
+    return files
+
+
+def _requirement_paths(preset_id: str) -> list[tuple[str, str]]:
+    """Return (relative name, expected category) pairs referenced by a preset graph."""
+    graph = load_recipe(preset_id)
+    found: list[tuple[str, str]] = []
+    for key, category in (('unet_name', 'diffusion_models'), ('clip_name', 'text_encoders'), ('vae_name', 'vae'), ('lora_name', 'loras')):
+        for node in graph.values():
+            value = node.get('inputs', {}).get(key)
+            if isinstance(value, str) and value:
+                normalized = value.replace('\\', '/')
+                found.append((normalized, category))
+    return sorted(set(found))
+
+
+def model_requirements(preset_id: str, model_root: Path) -> list[dict[str, Any]]:
+    """Describe the model files a preset eats; no recommendation, only facts."""
+    title(preset_id)
+    inventory = {item['filename']: item for item in _model_inventory(model_root)}
+    result = []
+    for name, category in _requirement_paths(preset_id):
+        record = inventory.get(name.rsplit('/', 1)[-1])
+        result.append({
+            'id': record['id'] if record else f'{category}/{name}',
+            'filename': name.rsplit('/', 1)[-1], 'category': category,
+            'role': MODEL_ROLES.get(category, 'other'),
+            'present': bool(record), 'size_bytes': record['size_bytes'] if record else 0,
+        })
+    return result
+
+
+def model_catalog(model_root: Path, category: str | None = None, query: str | None = None) -> dict[str, Any]:
+    """Read-only inventory of local model files, for Agent composition."""
+    files = _model_inventory(model_root)
+    usage: dict[str, list[str]] = {}
+    for preset_id in PRESET_IDS:
+        try:
+            requirements = model_requirements(preset_id, model_root)
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        for requirement in requirements:
+            usage.setdefault(requirement['filename'], []).append(preset_id)
+    for item in files:
+        item['used_by'] = sorted(usage.get(item['filename'], []))
+    if category:
+        files = [item for item in files if item['category'] == category]
+    if query:
+        needle = query.lower()
+        files = [item for item in files if needle in item['filename'].lower() or needle in item['family'].lower()]
+    categories: dict[str, dict[str, Any]] = {}
+    for item in _model_inventory(model_root):
+        value = categories.setdefault(item['category'], {'files': 0, 'size_bytes': 0, 'roles': []})
+        value['files'] += 1
+        value['size_bytes'] += item['size_bytes']
+        if item['role'] not in value['roles']:
+            value['roles'].append(item['role'])
+    return {
+        'schema_version': 1, 'root': 'ComfyUI-Shared/models', 'download_enabled': False,
+        'generated_from': 'read-only local inventory', 'categories': categories,
+        'files': files,
     }
 
 

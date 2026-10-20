@@ -113,6 +113,7 @@ tests = [
   "tests/test_review_openapi.py",
   "tests/test_static_ui.py",
   "tests/test_public_source.py",
+  "tests/test_model_catalog.py",
 ]
 
 # ---------------------------------------------------------------------------
@@ -276,6 +277,15 @@ browser = [
   "tests/media_tools_panel.browser.mjs",
   "tests/media_qc.browser.mjs",
 ]
+
+[[mapping]]
+name = "model-catalog"
+paths = [
+  "backend/production_presets.py",
+  "backend/routers/workbench_status.py",
+  "mcp_server/tools_generation.py",
+]
+tests = ["tests/test_model_catalog.py"]
 
 [[mapping]]
 name = "output-resolution"

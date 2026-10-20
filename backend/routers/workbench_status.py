@@ -12,7 +12,7 @@ import copy
 import threading
 import time
 from typing import Any
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 import math
 import shlex
 from .. import production_presets, readiness, shot_creation
@@ -21,6 +21,12 @@ from .. import app as backend
 
 
 ROUTER = APIRouter()
+
+
+@ROUTER.get('/api/models')
+def model_catalog(category: str | None = Query(None, max_length=80), q: str | None = Query(None, max_length=200)) -> dict[str, Any]:
+    """Read-only local model inventory for Agent composition. No download or recommendation."""
+    return production_presets.model_catalog(backend.SHARED_ROOT / 'models', category, q)
 _READINESS_CACHE_LOCK = threading.RLock()
 _READINESS_CACHE: dict[tuple[str, str], tuple[tuple[Any, ...], dict[str, Any]]] = {}
 

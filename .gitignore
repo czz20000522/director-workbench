@@ -402,3 +402,5 @@
 !/src/material-library.css
 !/src/post-tools.css
 !/src/QuickTools.tsx
+
+!/tests/test_model_catalog.py
