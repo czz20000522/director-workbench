@@ -417,3 +417,18 @@
 !/backend/routers/delivery_upscale.py
 !/tests/test_delivery_upscale.py
 !/mcp_server/tools_delivery.py
+
+# Adopted-video audio extraction into a new project audio asset.
+!/backend/audio_asset.py
+!/backend/routers/audio_asset.py
+!/tests/test_audio_asset.py
+!/mcp_server/tools_assets.py
+!/backend/resource_packs.py
+!/backend/routers/resource_packs.py
+!/tests/test_resource_packs.py
+!/backend/queue_recovery.py
+!/backend/routers/queue_recovery.py
+!/tests/test_queue_recovery.py
+!/backend/continuity_transfer.py
+!/backend/routers/continuity_transfer.py
+!/tests/test_continuity_transfer.py

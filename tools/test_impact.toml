@@ -119,6 +119,10 @@ tests = [
   "tests/test_delivery_upscale.py",
   "tests/test_shot_refinement.py",
   "tests/test_backend_module_split.py",
+  "tests/test_resource_packs.py",
+  "tests/test_queue_recovery.py",
+  "tests/test_continuity_transfer.py",
+  "tests/test_audio_asset.py",
 ]
 
 # ---------------------------------------------------------------------------
@@ -281,6 +285,26 @@ tests = [
 browser = [
   "tests/media_tools_panel.browser.mjs",
   "tests/media_qc.browser.mjs",
+]
+
+[[mapping]]
+name = "resource-packs-and-recovery"
+paths = [
+  "backend/resource_packs.py",
+  "backend/routers/resource_packs.py",
+  "backend/queue_recovery.py",
+  "backend/routers/queue_recovery.py",
+  "backend/continuity_transfer.py",
+  "backend/routers/continuity_transfer.py",
+  "backend/audio_asset.py",
+  "backend/routers/audio_asset.py",
+  "mcp_server/tools_assets.py",
+]
+tests = [
+  "tests/test_resource_packs.py",
+  "tests/test_queue_recovery.py",
+  "tests/test_continuity_transfer.py",
+  "tests/test_audio_asset.py",
 ]
 
 [[mapping]]

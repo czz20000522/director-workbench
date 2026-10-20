@@ -92,7 +92,7 @@ class PrivateWorkspaces:
                         work = context.path(work)
                     except (ValueError, OSError):
                         continue
-                    if work.is_dir():
+                    if work.is_dir() and not work.name.startswith('_') and work.name != '公共素材':
                         works.append({'name': work.name, 'project_id': locations.get((series.name, work.name))})
                 result.append({'name': series.name, 'works': works})
             except (ValueError, OSError):

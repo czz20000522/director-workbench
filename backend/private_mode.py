@@ -87,6 +87,8 @@ def install(backend, *, accounts: AccountStore, layout: Layout, origins: tuple[s
                    '/api/health', '/api/status', '/api/production-presets', '/api/models', '/api/settings/guide', '/api/queue',
                    '/api/keyframe-capability', '/api/speech-capability', '/api/media-capability', '/api/models/reverse-analysis',
                    '/openapi.json', '/docs', '/docs/oauth2-redirect', '/redoc'}
+        if path.startswith('/api/series/') or path.startswith('/api/admin/tasks/'):
+            return None
         if path in allowed:
             if path in {'/api/material-library', '/material-file'}:
                 try:

@@ -46,6 +46,10 @@ REMOTE_TOOLS = (
     # Recovery, audio normalization, delivery upscale and shot refinement.
     'plan_resume', 'analyze_audio', 'normalize_audio', 'get_upscale_capability',
     'submit_upscale', 'get_refinement_capability', 'submit_refinement',
+    'list_resource_packs', 'create_resource_pack', 'get_resource_pack',
+    'add_resource_pack_asset', 'publish_resource_pack', 'list_project_resource_packs',
+    'get_task_recovery_plan', 'repair_task_owner', 'resolve_ownerless_task',
+    'get_continuity_capability', 'carry_frame', 'list_audio_assets', 'extract_audio',
 )
 
 

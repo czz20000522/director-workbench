@@ -11,10 +11,10 @@ from mcp.types import ToolAnnotations
 
 if __package__:
     from .models import ScriptScene, ShotChanges, ShotMaterials
-    from . import errors, media, tools_creative, tools_delivery, tools_generation, tools_media, tools_reference
+    from . import errors, media, tools_assets, tools_creative, tools_delivery, tools_generation, tools_media, tools_reference
 else:
     from models import ScriptScene, ShotChanges, ShotMaterials
-    import errors, media, tools_creative, tools_delivery, tools_generation, tools_media, tools_reference
+    import errors, media, tools_assets, tools_creative, tools_delivery, tools_generation, tools_media, tools_reference
 
 
 class _Client:
@@ -120,6 +120,7 @@ def create_server(base_url: str, transport: httpx.AsyncBaseTransport | None = No
     tools_generation.register(guarded, client, read_only=read_only, write_record=write_record, idempotent_write=idempotent_write)
     tools_media.register(guarded, client, read_only=read_only, write_record=write_record, idempotent_write=idempotent_write)
     tools_delivery.register(guarded, client, read_only=read_only, write_record=write_record, idempotent_write=idempotent_write)
+    tools_assets.register(guarded, client, read_only=read_only, write_record=write_record, idempotent_write=idempotent_write)
     return server
 
 

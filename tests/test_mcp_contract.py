@@ -201,7 +201,7 @@ def test_idempotency_annotations_follow_actual_replay_capability():
     async def verify():
         async with Client(create_server('http://localhost:4100')) as client:
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-        assert len(tools) == 75
+        assert len(tools) == 88
         assert set(tools) == set(MCP_TOOL_NAMES)
         for name in IDEMPOTENT_WRITES:
             annotations = tools[name].annotations
@@ -244,15 +244,15 @@ def test_published_docs_use_the_current_tool_names_counts_and_media_contract():
     appendix_a = skill.split('## 附录 A')[1].split('## 附录 B')[0]
     reported_remote = set(re.findall(r'`([a-z][a-z0-9_]+)`', appendix_a))
     assert reported_remote == set(remote_mcp.REMOTE_TOOLS)
-    assert len(reported_remote) == 68
+    assert len(reported_remote) == 81
 
     appendix_b = skill.split('## 附录 B')[1].split('## 附录 C')[0]
     reported_local = set(re.findall(r'^\| `([a-z][a-z0-9_]+)`', appendix_b, re.MULTILINE))
     assert reported_local == set(MCP_TOOL_NAMES) - set(remote_mcp.REMOTE_TOOLS)
     assert len(reported_local) == 7
 
-    assert '**68**' in readme and '**75**' in readme
-    assert '当前 68 个；本机 stdio 全量 75 个' in guide
+    assert '**81**' in readme and '**88**' in readme
+    assert '当前 81 个；本机 stdio 全量 88 个' in guide
     for document in (skill, readme):
         for tool in ('list_media', 'get_media_url', 'download_media'):
             assert tool in document, tool

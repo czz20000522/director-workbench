@@ -141,7 +141,7 @@ MCP 对应工具为 `list_media`、`get_media_url`、`download_media`。`downloa
 
 ## MCP 和验证边界
 
-远程 MCP 使用同一私人 URL 的 `/mcp/`，要求可配置 Bearer 的 Streamable HTTP 客户端。公网入口由 HTTPS 反向代理转发到本机 `/mcp/`，未认证请求返回 401；远程端固定开放一组经过业务路由授权的安全工具（当前 68 个；本机 stdio 全量 75 个），按能力覆盖：
+远程 MCP 使用同一私人 URL 的 `/mcp/`，要求可配置 Bearer 的 Streamable HTTP 客户端。公网入口由 HTTPS 反向代理转发到本机 `/mcp/`，未认证请求返回 401；远程端固定开放一组经过业务路由授权的安全工具（当前 81 个；本机 stdio 全量 88 个），按能力覆盖：
 
 | 类别 | 远程能力 |
 | --- | --- |
@@ -156,7 +156,7 @@ MCP 对应工具为 `list_media`、`get_media_url`、`download_media`。`downloa
 
 远程 MCP 与 HTTP 使用同一显式创作合同：`create_project` 必须传 `creation_mode:"advanced"`；`preflight` 必须传实际 `stage_id`；`create_shot`／`update_shot` 可传 `workflow` 或已安装的 `preset_id`。`read_project` 的 `section:'state'` 返回同一准备度结构（含 `stage_required`/`recipe_unresolved` 与 `options`），`section:'reusable-templates'` 返回不含推荐的 `available_templates` 事实清单。自动方案、`stage_id:"auto"` 和 `generation.mode` 已移除，缺省时返回结构化阻塞和可选项，不写计划。
 
-可分发 Skill 位于 [director-workbench/SKILL.md](../.agents/skills/director-workbench/SKILL.md)。外部客户端从公开源代码快照取得该目录后，按自身项目级或用户级 Skill 机制安装；工作台不会自动写入客户端目录。当前远程 MCP 只注册 tools，没有注册 resources 或 prompts，因此不能通过 MCP 资源接口拉取 Skill；这是当前限制。Skill 版本与工具数量作为合同快照维护（当前远程 68 / stdio 68），新部署仍以 `tools/list` 和 `/openapi.json` 为准。
+可分发 Skill 位于 [director-workbench/SKILL.md](../.agents/skills/director-workbench/SKILL.md)。外部客户端从公开源代码快照取得该目录后，按自身项目级或用户级 Skill 机制安装；工作台不会自动写入客户端目录。当前远程 MCP 只注册 tools，没有注册 resources 或 prompts，因此不能通过 MCP 资源接口拉取 Skill；这是当前限制。Skill 版本与工具数量作为合同快照维护（当前远程 81 / stdio 68），新部署仍以 `tools/list` 和 `/openapi.json` 为准。
 
 MCP 默认保留官方 SDK 的 loopback Host/Origin 限制和 DNS rebinding 防护。公网入口必须在工作台或反向代理启动前配置精确允许列表，不能由客户端请求或 `Forwarded`/`X-Forwarded-Host` 决定：
 

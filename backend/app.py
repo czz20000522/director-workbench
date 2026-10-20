@@ -40,6 +40,7 @@ from . import production_presets, background_jobs, speech, keyframes, audio_edit
 from . import output_resolution, enhancement, task_store, media_refs
 import av
 import paths
+from . import queue_recovery
 from .private_auth import SecurityHeaders, current_principal
 from .atomic_files import replace_prepared
 from .storage import storage_roots, relocate_asset, legacy_mappings
@@ -638,6 +639,11 @@ async def lifespan(app: FastAPI):
     are entered and exited, so the order lives in one readable spot.
     """
     start_workbench()
+    try:
+        # Release only pre-submission ownerless rows; submitted/unknown work is untouched.
+        queue_recovery.startup_sweep(sys.modules[__name__])
+    except Exception:
+        logging.getLogger('uvicorn.error').exception('startup ownerless queue recovery failed')
     subsystems = AsyncExitStack()
     await subsystems.__aenter__()
     for factory in app.state.lifespan_subsystems:
@@ -2765,6 +2771,21 @@ from .routers.private_series import (
 )
 
 
+# 系列级资源包已拆到 backend/routers/resource_packs.py。
+from .routers.resource_packs import ROUTER as _resource_packs_router
+app.include_router(_resource_packs_router)
+from .routers.resource_packs import (
+    ResourcePackAssetCreate,
+    ResourcePackCreate,
+    add_series_resource_pack_asset,
+    create_series_resource_pack,
+    list_project_resource_packs,
+    list_series_resource_packs,
+    publish_series_resource_pack,
+    read_series_resource_pack,
+)
+
+
 # 作品目录与选择领域已拆到 backend/routers/project_catalog.py。
 # 下面两行必须留在原位置：路由注册顺序决定 /api/... 的匹配结果。
 from .routers.project_catalog import ROUTER as _project_catalog_router
@@ -3585,6 +3606,12 @@ def material_kind(path: Path) -> str:
     return next((kind for kind, extensions in MATERIAL_EXTENSIONS.items() if suffix in extensions), "other")
 
 
+# 尾帧承接已拆到 backend/routers/continuity_transfer.py。
+from .routers.continuity_transfer import ROUTER as _continuity_transfer_router
+app.include_router(_continuity_transfer_router)
+from .routers.continuity_transfer import carry_frame, continuity_capability
+
+
 # 素材库领域已拆到 backend/routers/material_library.py。
 # 下面两行必须留在原位置：路由注册顺序决定 /api/... 的匹配结果。
 from .routers.material_library import ROUTER as _material_library_router
@@ -3788,6 +3815,16 @@ from .routers.refinement import (
 )
 
 
+# Ownerless needs_reconcile 恢复已拆到 backend/routers/queue_recovery.py。
+from .routers.queue_recovery import ROUTER as _queue_recovery_router
+app.include_router(_queue_recovery_router)
+from .routers.queue_recovery import (
+    recovery_plan,
+    repair_owner,
+    resolve_ownerless,
+)
+
+
 # 任务入口与补齐领域已拆到 backend/routers/task_entry.py。
 # 下面两行必须留在原位置：路由注册顺序决定 /api/... 的匹配结果。
 from .routers.task_entry import ROUTER as _task_entry_router
@@ -3852,6 +3889,12 @@ from .routers.audio_delivery import (
     get_project_audio_analysis,
     normalize_project_audio,
 )
+
+
+# 视频音轨抽取为音频素材已拆到 backend/routers/audio_asset.py。
+from .routers.audio_asset import ROUTER as _audio_asset_router
+app.include_router(_audio_asset_router)
+from .routers.audio_asset import extract_project_audio, list_project_audio_assets
 
 
 # 2K/4K 交付超分候选已拆到 backend/routers/delivery_upscale.py。
