@@ -52,6 +52,7 @@ def _fake_object_info() -> dict:
         'MiniMaxH3DualClockSamplerT8': ['MODEL', 'SAMPLER', 'SIGMAS'],
         'MiniMaxH3StillDecodeT8': ['IMAGE', 'IMAGE', 'STRING'],
         'MiniMaxH3ImageToVideo': ['CONDITIONING', 'LATENT'],
+        'MiniMaxH3TimedImageReferenceT8Advanced': ['CLIP'],
         'BasicGuider': ['GUIDER'],
         'RandomNoise': ['NOISE'],
         'SamplerCustomAdvanced': ['LATENT', 'LATENT'],
@@ -65,7 +66,7 @@ def _fake_object_info() -> dict:
         for name, output in outputs.items()
     }
     info['LoadImage']['input']['required']['image'] = [
-        ['example.png', 'scene.png', 'char-a.png', 'char-b.png'], {}
+        ['example.png', 'scene.png', 'first.png', 'char-a.png', 'char-b.png'], {}
     ]
     info['UNETLoader']['input']['required']['unet_name'] = [[STILL_UNET, VIDEO_UNET], {}]
     info['CLIPLoader']['input']['required']['clip_name'] = [[CLIP_MODEL], {}]
@@ -114,6 +115,42 @@ def test_single_reference_is_explicit_and_uses_no_ref_slot():
     graph = build_graph(request(scene_image=None, character_ref_images=['only.png']))
     assert graph['load_primary']['inputs']['image'] == 'only.png'
     assert not [key for key in graph['still']['inputs'] if key.startswith('ref_images.')]
+
+
+def test_first_frame_mode_skips_still_stage_and_chains_timed_references():
+    graph = build_graph(request(
+        first_frame_image='first.png', scene_image=None,
+        character_ref_images=['char-a.png', 'char-b.png'],
+    ))
+    assert 'still' not in graph
+    assert 'still_unet' not in graph
+    assert 'still_decode' not in graph
+    assert graph['load_first_frame']['inputs']['image'] == 'first.png'
+    assert graph['i2v']['inputs']['first_frame'] == ['load_first_frame', 0]
+    assert graph['timed_ref_0']['class_type'] == 'MiniMaxH3TimedImageReferenceT8Advanced'
+    assert graph['timed_ref_0']['inputs']['clip'] == ['clip', 0]
+    assert graph['timed_ref_0']['inputs']['prompt_tag'] == 'dshRef1'
+    assert graph['timed_ref_1']['inputs']['clip'] == ['timed_ref_0', 0]
+    assert graph['timed_ref_1']['inputs']['prompt_tag'] == 'dshRef2'
+    assert graph['i2v']['inputs']['clip'] == ['timed_ref_1', 0]
+    assert graph['i2v']['inputs']['prompt'].endswith('#dshRef1 #dshRef2')
+    assert graph['video_unet']['inputs']['unet_name'] == VIDEO_UNET
+
+
+def test_first_frame_without_references_is_allowed():
+    graph = build_graph(request(first_frame_image='first.png', scene_image=None,
+                                character_ref_images=[]))
+    assert graph['i2v']['inputs']['first_frame'] == ['load_first_frame', 0]
+    assert graph['i2v']['inputs']['clip'] == ['clip', 0]
+    assert not [node_id for node_id in graph if node_id.startswith('timed_ref_')]
+    assert not [node_id for node_id in graph if node_id.startswith('still')]
+
+
+def test_first_frame_and_scene_are_mutually_exclusive():
+    with pytest.raises(MultiRefError) as caught:
+        build_graph(request(first_frame_image='first.png', scene_image='scene.png'))
+    assert caught.value.code == 'first_frame_scene_exclusive'
+    assert caught.value.status_code == 422
 
 
 def test_no_reference_images_is_a_structured_blocker():
@@ -166,6 +203,17 @@ def test_prepare_validates_graph_against_object_info():
     assert body['metadata']['actual_duration_seconds'] == 5.167
     assert body['metadata']['cloud_api'] is False
     assert body['prompt']['i2v']['inputs']['first_frame'] == ['still_decode', 0]
+
+
+def test_prepare_validates_first_frame_graph_against_object_info():
+    body = prepare(request(first_frame_image='first.png', scene_image=None,
+                           character_ref_images=['char-a.png']),
+                   object_info=_fake_object_info())
+    assert body['environment']['ready'] is True
+    assert body['metadata']['mode'] == 'first_frame_reference'
+    assert body['metadata']['reference_prompt_tags'] == ['dshRef1']
+    assert '#dshRef1' in body['metadata']['video_prompt']
+    assert body['prompt']['i2v']['inputs']['first_frame'] == ['load_first_frame', 0]
 
 
 def test_environment_reports_missing_node_and_model():

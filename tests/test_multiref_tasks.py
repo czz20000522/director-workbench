@@ -8,7 +8,9 @@ to prove the existing segment-result registration path is used.
 """
 from __future__ import annotations
 
+import base64
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -22,7 +24,9 @@ from backend.routers.multiref_tasks import ROUTER
 PROJECT_ID = 'preset-test'
 BASE = f'/api/projects/{PROJECT_ID}'
 TASKS_PATH = '/api/projects/{project_id}/multiref-tasks'
-PNG_BYTES = b'\x89PNG\r\n\x1a\n' + b'fixture-image-body'
+PNG_BYTES = base64.b64decode(
+    'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAACXBIWXMAAAAAAAAAAQCEeRdzAAAAEElEQVR4nGNgGAWjYBTAAAADEAABPywr7AAAAABJRU5ErkJggg=='
+)
 
 
 @pytest.fixture
@@ -44,6 +48,7 @@ def multiref_client(preset_client, monkeypatch):
         ('files', ('ref-a.png', PNG_BYTES, 'image/png')),
         ('files', ('ref-b.png', PNG_BYTES, 'image/png')),
         ('files', ('scene.png', PNG_BYTES, 'image/png')),
+        ('files', ('first.png', PNG_BYTES, 'image/png')),
     ])
     assert response.status_code == 200, response.text
     manifest = backend.load_project_manifest(PROJECT_ID)
@@ -205,6 +210,55 @@ def test_two_references_without_scene_preserve_character_order(multiref_client, 
     assert graph['load_ref_0']['inputs']['image'].endswith('-ref-02.png')
 
 
+def test_first_frame_mode_skips_still_stage_and_uses_timed_references(multiref_client, monkeypatch):
+    client, project, assets = multiref_client
+    monkeypatch.setattr(multiref_tasks.recipe, 'prepare', _fake_prepare)
+    response = _with_assets(
+        client, project, assets,
+        scene_asset_id=None,
+        first_frame_asset_id=assets['first.png'],
+        reference_asset_ids=[assets['ref-a.png'], assets['ref-b.png']],
+    )
+    assert response.status_code == 202, response.text
+    task = response.json()
+    payload = task['payload']
+    assert payload['multiref']['mode'] == 'first_frame_reference'
+    assert payload['multiref']['first_frame_asset_id'] == assets['first.png']
+    assert payload['execution_snapshot']['multiref']['reference_prompt_tags'] == ['dshRef1', 'dshRef2']
+    graph = json.loads(Path(payload['workflow']).read_text(encoding='utf-8'))
+    assert 'still' not in graph and 'still_decode' not in graph
+    assert graph['i2v']['inputs']['first_frame'] == ['load_first_frame', 0]
+    assert graph['timed_ref_0']['inputs']['prompt_tag'] == 'dshRef1'
+    assert graph['timed_ref_1']['inputs']['clip'] == ['timed_ref_0', 0]
+    references = {item['reference'] for item in payload['execution_snapshot']['staged_materials']}
+    assert any('-first-frame.' in item for item in references)
+    assert any('-ref-01.' in item for item in references)
+    assert any('-ref-02.' in item for item in references)
+
+
+def test_first_frame_and_scene_are_mutually_exclusive(multiref_client, monkeypatch):
+    client, project, assets = multiref_client
+    monkeypatch.setattr(multiref_tasks.recipe, 'prepare', _fake_prepare)
+    response = _with_assets(client, project, assets,
+                            first_frame_asset_id=assets['first.png'])
+    assert response.status_code == 422, response.text
+    assert response.json()['detail']['code'] == 'first_frame_scene_exclusive'
+
+
+def test_first_frame_without_references_is_allowed(multiref_client, monkeypatch):
+    client, project, assets = multiref_client
+    monkeypatch.setattr(multiref_tasks.recipe, 'prepare', _fake_prepare)
+    response = _with_assets(client, project, assets, scene_asset_id=None,
+                            first_frame_asset_id=assets['first.png'],
+                            reference_asset_ids=[])
+    assert response.status_code == 202, response.text
+    task = response.json()
+    assert len(task['payload']['execution_snapshot']['staged_materials']) == 1
+    graph = json.loads(Path(task['payload']['workflow']).read_text(encoding='utf-8'))
+    assert graph['i2v']['inputs']['first_frame'] == ['load_first_frame', 0]
+    assert not [node_id for node_id in graph if node_id.startswith('timed_ref_')]
+
+
 def test_no_reference_assets_is_a_structured_blocker(multiref_client, monkeypatch):
     client, project, assets = multiref_client
     monkeypatch.setattr(multiref_tasks.recipe, 'prepare', _fake_prepare)
@@ -260,3 +314,46 @@ def test_validation_happens_before_copy_for_bad_segment(multiref_client):
     response = _with_assets(client, project, assets, segment_id='S99')
     assert response.status_code == 404, response.text
     assert response.json()['detail']['code'] == 'segment_not_found'
+
+
+@pytest.mark.host_tool
+@pytest.mark.timeout(600)
+@pytest.mark.skipif(os.environ.get('DIRECTOR_MULTIREF_REAL_TASK') != '1',
+                    reason='set DIRECTOR_MULTIREF_REAL_TASK=1 to run one real 4s first-frame task')
+def test_real_first_frame_task_registers_segment_video(multiref_client, monkeypatch):
+    client, project, assets = multiref_client
+    # The test project uses a temporary workspace but the real task must stage
+    # into the local ComfyUI input root for LoadImage to resolve it.
+    monkeypatch.setattr(backend, 'INPUT_ROOT', Path(r'E:\Comfy-Assets\input'))
+    controlled = []
+    try:
+        response = _with_assets(
+            client, project, assets,
+            scene_asset_id=None,
+            first_frame_asset_id=assets['first.png'],
+            reference_asset_ids=[assets['ref-a.png'], assets['ref-b.png']],
+            prompt='A cinematic shot with a person in a softly lit room, slow push in',
+            duration_seconds=4,
+            aspect_ratio='1:1',
+            seed=42,
+        )
+        assert response.status_code == 202, response.text
+        task = response.json()
+        controlled = [item['reference'] for item in task['payload']['execution_snapshot']['staged_materials']]
+        backend.run_workflow_submission(task['id'], task['payload'])
+        current = backend.get_task(task['id'])
+        assert current['status'] == 'succeeded', current
+        document = json.loads(Path(task['payload']['plan_path']).read_text(encoding='utf-8'))
+        segment = next(item for item in document['segments'] if item['id'] == 'S01')
+        assert segment['status'] == 'video_generated'
+        assert segment['video']['path']
+        assert segment['current_version_task_id'] == task['id']
+        state = client.get(f'{BASE}/state').json()
+        assert 'S01' not in (state.get('reviews') or {})
+        assert current['result'] is not None
+    finally:
+        for name in controlled:
+            try:
+                (Path(backend.INPUT_ROOT) / name).unlink(missing_ok=True)
+            except OSError:
+                pass

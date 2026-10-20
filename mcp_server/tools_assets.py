@@ -135,12 +135,14 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
                                   duration_seconds: Annotated[float, Field(ge=4, le=15)],
                                   aspect_ratio: Annotated[str, Field(min_length=1, max_length=8)] = '16:9',
                                   scene_asset_id: Annotated[str | None, Field(max_length=160)] = None,
+                                  first_frame_asset_id: Annotated[str | None, Field(max_length=160)] = None,
                                   seed: Annotated[int, Field(ge=0, le=4294967295)] = 42) -> dict[str, Any]:
-        """提交 H3 多参考图任务；参考图必须显式给出，不自动选择，不自动采用。"""
+        """提交 H3 多参考图/首帧任务；首帧与场景二选一，不自动选择，不自动采用。"""
         return await request('POST', project_path(project_id) + '/multiref-tasks', json={
             'segment_id': segment_id, 'reference_asset_ids': reference_asset_ids,
-            'scene_asset_id': scene_asset_id, 'prompt': prompt,
-            'duration_seconds': duration_seconds, 'aspect_ratio': aspect_ratio, 'seed': seed})
+            'scene_asset_id': scene_asset_id, 'first_frame_asset_id': first_frame_asset_id,
+            'prompt': prompt, 'duration_seconds': duration_seconds,
+            'aspect_ratio': aspect_ratio, 'seed': seed})
 
     @server.tool(annotations=read_only)
     async def get_multiref_task(project_id: str, task_id: str) -> dict[str, Any]:

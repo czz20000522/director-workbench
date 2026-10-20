@@ -11,7 +11,7 @@ from mcp_server.server import create_server
 
 
 MCP_TOOL_NAMES = """list_projects,upload_material,read_guide_settings,update_guide_settings,read_queue,list_production_presets,configure_production_preset,create_project,read_project,read_script,save_script,list_tasks,get_task,list_shot_versions,restore_shot_version,preflight,repair_shot_recipe_identity,save_creative_draft,record_review,approve_candidate,update_shot,arrange_shot,create_shot,reuse_materials,import_reference_from_material,import_reference_content,import_reference,extract_reference_range,extract_reference_audio,sample_reference_frames,transcribe_reference,list_references,read_reference,start_reference_analysis,reconcile_reference_analysis,annotate_reference_timeline,correct_reference_artifact,correct_reference_classification,convert_reference_to_shots,list_models,submit_shot,submit_batch,control_batch,get_keyframe_capability,submit_assembly,read_assembly_edit,review_assembly_join,set_assembly_sound,preflight_assembly_edit,check_assembly_continuity,submit_keyframe,get_speech_capability,submit_speech,get_submission_receipt,reconcile_generation,resolve_missing_execution,stop_generation,resume_generation,list_media,get_media_url,download_media,submit_audio_edit,submit_audio_master,get_media_capability,create_silence,inspect_video,transcribe_audio,export_silent_video,plan_resume,analyze_audio,normalize_audio,get_upscale_capability,submit_upscale,get_refinement_capability,submit_refinement,list_resource_packs,create_resource_pack,get_resource_pack,add_resource_pack_asset,publish_resource_pack,list_project_resource_packs,get_segment_resources,bind_segment_resources,use_segment_resource_frame,get_task_recovery_plan,repair_task_owner,resolve_ownerless_task,get_continuity_capability,carry_frame,list_audio_assets,extract_audio,start_multiref_task,get_multiref_task""".split(',')
-MCP_TOOL_SCHEMA_SHA256 = 'c207bdc81be2248de8fd04d740c7b4662f1dcb77198cc5efe073d258231a27e5'
+MCP_TOOL_SCHEMA_SHA256 = '6bffc1e4db5411ddff0c92010f71bee34b53dfbf7db5424033703d796eb4133f'
 
 
 def test_create_shot_forwards_explicit_materials_without_contract_probe():
@@ -229,6 +229,7 @@ def test_reference_list_is_compact_and_detail_keeps_provenance():
             detail = await client.call_tool('read_reference', {'project_id': 'a', 'analysis_id': 'ref-1'})
             assert detail.structured_content['data']['artifacts']['story'] == artifact
     asyncio.run(verify())
+
 
 
 

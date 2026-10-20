@@ -4,7 +4,9 @@ This module turns one explicit project request into the existing task-table
 record that the normal scheduler/runner already understands:
 
 * project assets are checked for ownership/kind and copied to the ComfyUI input
-  directory under a controlled, per-task path;
+  directory under a controlled, per-task path; an optional first-frame asset
+  selects the direct-first-frame + timed-reference mode, while scene/character
+  assets select the existing still-conditioned mode;
 * :mod:`backend.multiref_recipe` builds and validates the API graph against the
   local ComfyUI object_info;
 * the frozen graph is written to the project snapshot root, and the task is
@@ -65,6 +67,7 @@ class MultiRefTaskRequest(BaseModel):
     segment_id: str = Field(min_length=1, max_length=160)
     reference_asset_ids: list[str]
     scene_asset_id: str | None = Field(default=None, max_length=160)
+    first_frame_asset_id: str | None = Field(default=None, max_length=160)
     prompt: str
     duration_seconds: float
     aspect_ratio: str
@@ -161,7 +164,8 @@ def _copy_asset(source: Path, destination: Path) -> dict[str, Any]:
 
 def _stage_inputs(backend: Any, task_id: str,
                   references: list[tuple[dict[str, Any], Path]],
-                  scene: tuple[dict[str, Any], Path] | None) -> tuple[dict[str, str], list[dict[str, Any]], list[Path]]:
+                  scene: tuple[dict[str, Any], Path] | None,
+                  first_frame: tuple[dict[str, Any], Path] | None) -> tuple[dict[str, str], list[dict[str, Any]], list[Path]]:
     """Copy explicit assets in caller order and return controlled LoadImage names.
 
     Files are flat basenames under the ComfyUI input root so LoadImage can
@@ -173,12 +177,14 @@ def _stage_inputs(backend: Any, task_id: str,
     staged: list[dict[str, Any]] = []
     written: list[Path] = []
     entries: list[tuple[str, Path]] = []
-    if scene is not None:
+    if first_frame is not None:
+        entries.append(('first-frame', first_frame[1]))
+    elif scene is not None:
         entries.append(('primary', scene[1]))
     elif references:
         entries.append(('primary', references[0][1]))
     for index, (_, source) in enumerate(references, start=1):
-        if scene is None and index == 1:
+        if first_frame is None and scene is None and index == 1:
             continue
         entries.append((f'ref-{index:02d}', source))
     for label, source in entries:
@@ -244,19 +250,39 @@ def create_task(project_id: str, request: MultiRefTaskRequest, *,
         )
     references = [_asset_file(backend, manifest, asset_id, role='参考图')
                   for asset_id in request.reference_asset_ids]
-    if not references:
+    if request.first_frame_asset_id is not None and request.scene_asset_id is not None:
         raise MultiRefTaskError(
-            'reference_images_required',
-            '至少需要一张当前作品的图片素材作为角色参考。',
+            'first_frame_scene_exclusive',
+            '首帧素材与场景图不能同时提供；请选择直接首帧或多参考首帧其中一种模式。',
             422,
-            blockers=[{'code': 'reference_images_required',
-                       'field': 'reference_asset_ids'}],
+            blockers=[{'code': 'first_frame_scene_exclusive',
+                       'fields': ['first_frame_asset_id', 'scene_asset_id']}],
         )
+    if request.first_frame_asset_id is not None:
+        first_frame = _asset_file(backend, manifest, request.first_frame_asset_id, role='首帧图')
+        if len(references) > recipe.MAX_REF_IMAGES:
+            raise MultiRefTaskError(
+                'too_many_reference_images',
+                f'直接首帧模式下最多 {recipe.MAX_REF_IMAGES} 张语义参考图。',
+                422,
+                blockers=[{'code': 'too_many_reference_images',
+                           'value': len(references), 'max': recipe.MAX_REF_IMAGES}],
+            )
+    else:
+        first_frame = None
+        if not references:
+            raise MultiRefTaskError(
+                'reference_images_required',
+                '没有首帧时至少需要一张当前作品的图片素材作为角色参考。',
+                422,
+                blockers=[{'code': 'reference_images_required',
+                           'field': 'reference_asset_ids'}],
+            )
     if request.scene_asset_id is not None:
         scene = _asset_file(backend, manifest, request.scene_asset_id, role='场景图')
     else:
         scene = None
-    if scene is None and len(references) > recipe.MAX_PICTURES:
+    if first_frame is None and scene is None and len(references) > recipe.MAX_PICTURES:
         raise MultiRefTaskError(
             'too_many_reference_images',
             f'没有场景图时最多 {recipe.MAX_PICTURES} 张角色参考图。',
@@ -264,7 +290,7 @@ def create_task(project_id: str, request: MultiRefTaskRequest, *,
             blockers=[{'code': 'too_many_reference_images',
                        'value': len(references), 'max': recipe.MAX_PICTURES}],
         )
-    if scene is not None and len(references) > recipe.MAX_REF_IMAGES:
+    if first_frame is None and scene is not None and len(references) > recipe.MAX_REF_IMAGES:
         raise MultiRefTaskError(
             'too_many_reference_images',
             f'有场景图时最多 {recipe.MAX_REF_IMAGES} 张角色参考图。',
@@ -291,9 +317,10 @@ def create_task(project_id: str, request: MultiRefTaskRequest, *,
     workflow_path: Path | None = None
     created = False
     try:
-        names, staged, staged_files = _stage_inputs(backend, task_id, references, scene)
-        if scene is not None:
-            character_names = [names[f'ref-{index:02d}'] for index in range(1, len(references) + 1)]
+        names, staged, staged_files = _stage_inputs(backend, task_id, references, scene, first_frame)
+        if first_frame is not None or scene is not None:
+            character_names = [names[f'ref-{index:02d}']
+                               for index in range(1, len(references) + 1)]
         else:
             # Without a scene the recipe uses the first character reference as
             # Picture 1; pass the complete ordered character list, not only the
@@ -303,6 +330,7 @@ def create_task(project_id: str, request: MultiRefTaskRequest, *,
             ]
         recipe_request = recipe.MultiRefRequest(
             character_ref_images=character_names,
+            first_frame_image=names.get('first-frame') if first_frame is not None else None,
             scene_image=names.get('primary') if scene is not None else None,
             prompt=request.prompt,
             duration_seconds=request.duration_seconds,
@@ -324,7 +352,8 @@ def create_task(project_id: str, request: MultiRefTaskRequest, *,
         backend.write_json_atomic(workflow_path, graph)
         execution_snapshot = {
             'api_graph': str(workflow_path),
-            'prompt': request.prompt,
+            'prompt': metadata.get('video_prompt') or request.prompt,
+            'original_prompt': request.prompt,
             'parameters': {
                 'duration_seconds': request.duration_seconds,
                 'aspect_ratio': request.aspect_ratio,
@@ -337,8 +366,12 @@ def create_task(project_id: str, request: MultiRefTaskRequest, *,
             'multiref': {
                 'schema_version': SCHEMA_VERSION,
                 'recipe': recipe.RECIPE_ID,
+                'mode': metadata.get('mode'),
                 'reference_asset_ids': list(request.reference_asset_ids),
                 'scene_asset_id': request.scene_asset_id,
+                'first_frame_asset_id': request.first_frame_asset_id,
+                'first_frame_image': metadata.get('first_frame_image'),
+                'reference_prompt_tags': metadata.get('reference_prompt_tags') or [],
                 'controlled_images': names,
                 'prepare': {
                     'environment_ready': bool(prepared.get('environment', {}).get('ready')),

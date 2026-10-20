@@ -2,13 +2,14 @@
 
 The recipe is deliberately explicit:
 
-* the caller supplies an ordered list of character reference image names,
-  an optional scene image name, the shot prompt, duration and aspect ratio;
-* the scene image (or the first character reference when no scene is given) is
-  Picture 1 for :class:`MiniMaxH3StillConditioningT8`; the remaining character
-  references are its ``ref_images`` (at most eight);
-* the still stage samples one explicit H3 Ref2VA first frame, then
-  :class:`MiniMaxH3ImageToVideo` turns that frame into an H3 video;
+* without ``first_frame_image``, the caller supplies an ordered list of
+  character reference image names plus an optional scene image; the scene (or
+  the first character) is Picture 1 for ``MiniMaxH3StillConditioningT8`` and the
+  still stage samples one H3 Ref2VA first frame;
+* with ``first_frame_image``, the still stage is skipped: the supplied image is
+  loaded directly as ``MiniMaxH3ImageToVideo.first_frame`` and remaining
+  character refs are chained onto the CLIP line through local
+  ``MiniMaxH3TimedImageReferenceT8Advanced`` nodes (semantic reference only);
 * no cloud API node, model download, automatic reference choice or automatic
   shot splitting is performed.
 
@@ -53,6 +54,9 @@ DEFAULT_VIDEO_STEPS = 20
 DEFAULT_STILL_TARGET = 'direct_1_frame'
 IMAGE_SUFFIXES = {'.png', '.jpg', '.jpeg', '.webp', '.bmp'}
 FORBIDDEN_NODE_PREFIXES = ('ComfyCloud',)
+TIMED_REFERENCE_NODE = 'MiniMaxH3TimedImageReferenceT8Advanced'
+REFERENCE_PROMPT_PREFIX = 'dshRef'
+DEFAULT_TIMED_IMAGE_SIZE = '512'
 
 # Local node names are part of the recipe contract. They must be present in the
 # live ComfyUI object_info and must not be API nodes.
@@ -65,6 +69,7 @@ REQUIRED_NODES = (
     'MiniMaxH3DualClockSamplerT8',
     'MiniMaxH3StillDecodeT8',
     'MiniMaxH3ImageToVideo',
+    'MiniMaxH3TimedImageReferenceT8Advanced',
     'BasicGuider',
     'RandomNoise',
     'SamplerCustomAdvanced',
@@ -87,6 +92,8 @@ NODE_REQUIRED_INPUTS = {
     'MiniMaxH3DualClockSamplerT8': {'model', 'av_latent', 'steps', 'shift_video', 'shift_audio'},
     'MiniMaxH3StillDecodeT8': {'av_latent', 'video_vae', 'frame_selection', 'frame_index'},
     'MiniMaxH3ImageToVideo': {'clip', 'vae', 'prompt', 'width', 'height', 'length'},
+    'MiniMaxH3TimedImageReferenceT8Advanced': {'clip', 'image', 'prompt_tag',
+                                               'time_seconds', 'image_size'},
     'BasicGuider': {'model', 'conditioning'},
     'RandomNoise': {'noise_seed'},
     'SamplerCustomAdvanced': {'noise', 'guider', 'sampler', 'sigmas', 'latent_image'},
@@ -132,6 +139,7 @@ class MultiRefRequest(BaseModel):
 
     model_config = ConfigDict(extra='forbid')
     character_ref_images: list[str]
+    first_frame_image: str | None = None
     scene_image: str | None = None
     prompt: str
     duration_seconds: float
@@ -164,10 +172,32 @@ def validate_request(request: MultiRefRequest) -> dict[str, Any]:
     """Validate and freeze the explicit request into a graph plan."""
     blockers: list[dict[str, Any]] = []
     refs = list(request.character_ref_images or [])
-    if not refs:
+    first_frame = (request.first_frame_image.strip()
+                   if isinstance(request.first_frame_image, str) else request.first_frame_image)
+    scene = (request.scene_image.strip()
+             if isinstance(request.scene_image, str) else request.scene_image)
+    if first_frame is not None and scene is not None:
+        blockers.append(_blocker(
+            'first_frame_scene_exclusive',
+            '首帧图与场景图不能同时提供；请选择直接首帧或多参考首帧其中一种模式。',
+            fields=['first_frame_image', 'scene_image'],
+        ))
+    if first_frame is not None and not _valid_image_name(first_frame):
+        blockers.append(_blocker(
+            'invalid_first_frame_image',
+            '首帧图不是有效的 ComfyUI 输入图片名。',
+            value=request.first_frame_image,
+        ))
+    if scene is not None and not _valid_image_name(scene):
+        blockers.append(_blocker(
+            'invalid_scene_image',
+            '场景图不是有效的 ComfyUI 输入图片名。',
+            value=request.scene_image,
+        ))
+    if first_frame is None and not refs:
         blockers.append(_blocker(
             'reference_images_required',
-            '至少需要一张角色参考图；没有参考图时不能构造多参考首帧。',
+            '至少需要一张角色参考图；没有首帧和参考图时不能构造多参考生成。',
             required='character_ref_images',
         ))
     for index, name in enumerate(refs):
@@ -177,13 +207,40 @@ def validate_request(request: MultiRefRequest) -> dict[str, Any]:
                 f'第 {index + 1} 张角色参考图不是有效的 ComfyUI 输入图片名。',
                 index=index, value=name,
             ))
-    scene = request.scene_image.strip() if isinstance(request.scene_image, str) else request.scene_image
-    if scene is not None and not _valid_image_name(scene):
+    if first_frame is None and len(refs) > MAX_PICTURES:
         blockers.append(_blocker(
-            'invalid_scene_image',
-            '场景图不是有效的 ComfyUI 输入图片名。',
-            value=request.scene_image,
+            'too_many_reference_images',
+            f'没有首帧和场景图时最多 {MAX_PICTURES} 张角色参考图。',
+            value=len(refs), max=MAX_PICTURES,
         ))
+    if first_frame is not None and len(refs) > MAX_REF_IMAGES:
+        blockers.append(_blocker(
+            'too_many_reference_images',
+            f'直接首帧模式下最多 {MAX_REF_IMAGES} 张语义参考图。',
+            value=len(refs), max=MAX_REF_IMAGES,
+        ))
+    if first_frame is not None and refs:
+        reference_prompt_tags = [f'{REFERENCE_PROMPT_PREFIX}{index}'
+                                 for index in range(1, len(refs) + 1)]
+    else:
+        reference_prompt_tags = []
+    primary = None if first_frame is not None else (
+        scene if scene is not None else (refs[0] if refs else None))
+    ref_images = refs if first_frame is not None else (
+        refs if scene is not None else refs[1:])
+    if first_frame is None:
+        if len(ref_images) > MAX_REF_IMAGES:
+            blockers.append(_blocker(
+                'too_many_reference_images',
+                f'edit_image 之外最多 {MAX_REF_IMAGES} 张参考图；当前为 {len(ref_images)} 张。',
+                value=len(ref_images), max=MAX_REF_IMAGES,
+            ))
+        if primary is not None and len(ref_images) + 1 > MAX_PICTURES:
+            blockers.append(_blocker(
+                'too_many_reference_images',
+                f'总参考图最多 {MAX_PICTURES} 张（edit_image + ref_images）。',
+                value=len(ref_images) + 1, max=MAX_PICTURES,
+            ))
     if not isinstance(request.prompt, str) or not request.prompt.strip():
         blockers.append(_blocker('prompt_required', '分镜 prompt 不能为空。'))
     if not MIN_DURATION <= float(request.duration_seconds) <= MAX_DURATION:
@@ -199,20 +256,6 @@ def validate_request(request: MultiRefRequest) -> dict[str, Any]:
             value=request.aspect_ratio,
             options=list(ASPECT_SIZES),
         ))
-    primary = scene if scene is not None else (refs[0] if refs else None)
-    ref_images = refs if scene is not None else refs[1:]
-    if len(ref_images) > MAX_REF_IMAGES:
-        blockers.append(_blocker(
-            'too_many_reference_images',
-            f'edit_image 之外最多 {MAX_REF_IMAGES} 张参考图；当前为 {len(ref_images)} 张。',
-            value=len(ref_images), max=MAX_REF_IMAGES,
-        ))
-    if primary is not None and len(ref_images) + 1 > MAX_PICTURES:
-        blockers.append(_blocker(
-            'too_many_reference_images',
-            f'总参考图最多 {MAX_PICTURES} 张（edit_image + ref_images）。',
-            value=len(ref_images) + 1, max=MAX_PICTURES,
-        ))
     prefix = request.output_prefix.strip() if isinstance(request.output_prefix, str) else ''
     if not prefix or '\x00' in prefix or '..' in prefix.replace('\\', '/').split('/'):
         blockers.append(_blocker(
@@ -225,17 +268,26 @@ def validate_request(request: MultiRefRequest) -> dict[str, Any]:
         raise MultiRefError(first['code'], first['message'], 422, blockers=blockers)
     requested_frames, frames, actual_duration = _snap_frames(request.duration_seconds)
     width, height = ASPECT_SIZES[request.aspect_ratio]
+    prompt = request.prompt
+    video_prompt = prompt
+    if reference_prompt_tags:
+        video_prompt = prompt.rstrip() + ' ' + ' '.join(
+            f'#{tag}' for tag in reference_prompt_tags)
     return {
+        'mode': 'first_frame_reference' if first_frame is not None else 'still_conditioned',
+        'first_frame_image': first_frame,
         'primary_image': primary,
         'ref_images': ref_images,
-        'picture_count': len(ref_images) + 1,
+        'picture_count': (len(refs) if first_frame is not None else len(ref_images) + 1),
+        'reference_prompt_tags': reference_prompt_tags,
+        'video_prompt': video_prompt,
         'width': width,
         'height': height,
         'aspect_ratio': request.aspect_ratio,
         'requested_frames': requested_frames,
         'frames': frames,
         'actual_duration_seconds': actual_duration,
-        'prompt': request.prompt,
+        'prompt': prompt,
         'seed': request.seed,
         'still_steps': request.still_steps,
         'video_steps': request.video_steps,
@@ -251,9 +303,108 @@ def _link(node_id: str, index: int) -> list[Any]:
     return [node_id, index]
 
 
+def _build_first_frame_graph(plan: dict[str, Any]) -> dict[str, Any]:
+    """Build direct-first-frame + timed semantic references (no still stage)."""
+    graph: dict[str, Any] = {
+        'load_first_frame': _load_image_node(plan['first_frame_image']),
+        'video_unet': {'class_type': 'UNETLoader',
+                       'inputs': {'unet_name': VIDEO_UNET, 'weight_dtype': 'default'}},
+        'clip': {'class_type': 'CLIPLoader',
+                 'inputs': {'clip_name': CLIP_MODEL, 'type': 'minimax', 'device': 'default'}},
+        'vae_video': {'class_type': 'VAELoader', 'inputs': {'vae_name': VIDEO_VAE}},
+        'vae_audio': {'class_type': 'VAELoader', 'inputs': {'vae_name': AUDIO_VAE}},
+    }
+    clip_source = _link('clip', 0)
+    for index, name in enumerate(plan['ref_images']):
+        load_id = f'load_ref_{index}'
+        timed_id = f'timed_ref_{index}'
+        graph[load_id] = _load_image_node(name)
+        graph[timed_id] = {
+            'class_type': TIMED_REFERENCE_NODE,
+            'inputs': {
+                'clip': clip_source,
+                'image': _link(load_id, 0),
+                'prompt_tag': plan['reference_prompt_tags'][index],
+                'time_seconds': 0.0,
+                'image_size': DEFAULT_TIMED_IMAGE_SIZE,
+            },
+        }
+        clip_source = _link(timed_id, 0)
+    graph['i2v'] = {
+        'class_type': 'MiniMaxH3ImageToVideo',
+        'inputs': {
+            'clip': clip_source,
+            'vae': _link('vae_video', 0),
+            'prompt': plan['video_prompt'],
+            'width': plan['width'],
+            'height': plan['height'],
+            'length': plan['frames'],
+            'first_frame': _link('load_first_frame', 0),
+        },
+    }
+    graph.update({
+        'video_clock': {
+            'class_type': 'MiniMaxH3DualClockSamplerT8',
+            'inputs': {
+                'model': _link('video_unet', 0),
+                'av_latent': _link('i2v', 1),
+                'steps': plan['video_steps'],
+                'shift_video': 12.0,
+                'shift_audio': 3.0,
+                'sampler_name': 'dual_clock_euler',
+                'scheduler': 'native_flow',
+            },
+        },
+        'video_guider': {'class_type': 'BasicGuider',
+                         'inputs': {'model': _link('video_clock', 0),
+                                    'conditioning': _link('i2v', 0)}},
+        'video_noise': {'class_type': 'RandomNoise', 'inputs': {'noise_seed': plan['seed']}},
+        'video_sample': {
+            'class_type': 'SamplerCustomAdvanced',
+            'inputs': {
+                'noise': _link('video_noise', 0),
+                'guider': _link('video_guider', 0),
+                'sampler': _link('video_clock', 1),
+                'sigmas': _link('video_clock', 2),
+                'latent_image': _link('i2v', 1),
+            },
+        },
+        'video_decode': {'class_type': 'VAEDecode',
+                         'inputs': {'samples': _link('video_sample', 0),
+                                    'vae': _link('vae_video', 0)}},
+        'audio_decode': {'class_type': 'VAEDecodeAudio',
+                         'inputs': {'samples': _link('video_sample', 0),
+                                    'vae': _link('vae_audio', 0)}},
+        'create_video': {
+            'class_type': 'CreateVideo',
+            'inputs': {
+                'images': _link('video_decode', 0),
+                'fps': 24.0,
+                'audio': _link('audio_decode', 0),
+                'bit_depth': 8,
+                'color_space': 'sRGB',
+            },
+        },
+        'save_video': {
+            'class_type': 'SaveVideo',
+            'inputs': {
+                'video': _link('create_video', 0),
+                'filename_prefix': plan['output_prefix'],
+                'format': 'auto',
+                'format.codec': 'auto',
+                'codec': 'auto',
+                'video-preview': '',
+            },
+        },
+    })
+    return graph
+
+
 def build_graph(request: MultiRefRequest) -> dict[str, Any]:
     """Build one API-format graph; no network, model loading or file writes."""
     plan = validate_request(request)
+    if plan['mode'] == 'first_frame_reference':
+        return _build_first_frame_graph(plan)
     graph: dict[str, Any] = {
         'load_primary': _load_image_node(plan['primary_image']),
         'still_unet': {'class_type': 'UNETLoader',
