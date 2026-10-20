@@ -17,9 +17,9 @@ const labels: Record<string, string> = { scheduler_waiting: '已接受 · 等待
 const resolutionLabel = (value?: OutputResolution) => value && value !== 'native' ? value.toUpperCase() : '原生';
 const methodLabel = (value?: string) => value === 'lanczos_resize' ? '尺寸放大（Lanczos）' : value === 'ai_upscale' ? 'AI 高清处理' : '原生生成';
 
-export default function KeyframePanel({ projectId, options, onBrowse, onComplete, simple = false, initialMode = 'reference', candidateTaskId, creativeProfile }: {
+export default function KeyframePanel({ projectId, options, onBrowse, onComplete, simple = false, initialMode = 'reference', candidateTaskId, creativeProfile, defaultOpen = false }: {
   projectId: string; options: MaterialOption[]; onBrowse: () => void; onComplete: (taskId: string) => void;
-  simple?: boolean; initialMode?: Mode; candidateTaskId?: string; creativeProfile?: CreativeProfile;
+  simple?: boolean; initialMode?: Mode; candidateTaskId?: string; creativeProfile?: CreativeProfile; defaultOpen?: boolean;
 }) {
   const storageKey = `director-workbench:${projectId}:keyframe:v1`;
   const promptId = useId();
@@ -145,7 +145,7 @@ export default function KeyframePanel({ projectId, options, onBrowse, onComplete
     } catch (error) { if (mounted.current) setMessage(error instanceof Error ? error.message : '读取候选失败'); }
     finally { working.current = false; if (mounted.current) setBusy(false); }
   }
-  return <details className="director-operation-panel quick-image-form" open={simple || undefined} aria-label="生成关键帧">
+  return <details className="director-operation-panel quick-image-form" open={simple || defaultOpen || undefined} aria-label="生成关键帧">
     <summary>{simple ? '生成图片' : '生成关键帧'} {task && `· ${labels[task.status] || task.status}`}</summary>
     <div className="director-creation-grid">
       <div><label htmlFor={modeId}>生成方式</label><select id={modeId} value={saved.mode} disabled={Boolean(saved.pending)} onChange={event => persist({ ...saved, mode: event.target.value as Mode })}><option value="text">文字生图</option><option value="reference">参考图改图</option></select></div>

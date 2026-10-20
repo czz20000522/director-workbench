@@ -12,8 +12,8 @@ class RequestError extends Error {
 const terminal = ['succeeded', 'failed', 'stopped'];
 const labels: Record<string, string> = { scheduler_waiting: '已接受 · 等待资源', batch_waiting: '已接受 · 等待依赖', submitting: '正在生成', succeeded: '已生成 · 待试听', failed: '生成失败', stopped: '已停止', stop_requested: '正在停止', stopping: '正在停止', needs_reconcile: '需要核对结果' };
 
-export default function SpeechPanel({ projectId, options, onBrowse, onComplete }: {
-  projectId: string; options: MaterialOption[]; onBrowse: () => void; onComplete: () => void;
+export default function SpeechPanel({ projectId, options, onBrowse, onComplete, defaultOpen = false }: {
+  projectId: string; options: MaterialOption[]; onBrowse: () => void; onComplete: () => void; defaultOpen?: boolean;
 }) {
   const storageKey = `director-workbench:${projectId}:speech:v1`;
   const textId = useId();
@@ -119,7 +119,7 @@ export default function SpeechPanel({ projectId, options, onBrowse, onComplete }
     }
     finally { working.current = false; if (mounted.current) setBusy(false); }
   }
-  return <details className="director-operation-panel" aria-label="生成声音">
+  return <details className="director-operation-panel" aria-label="生成声音" open={defaultOpen || undefined}>
     <summary>生成声音 {task && `· ${labels[task.status] || task.status}`}</summary>
     <div className="director-creation-grid">
       <div className="director-creation-wide"><label htmlFor={textId}>台词</label><textarea id={textId} rows={3} maxLength={2000} value={saved.text} disabled={Boolean(saved.pending)} placeholder="输入这段作品需要说的台词" onChange={event => persist({ ...saved, text: event.target.value })} /></div>

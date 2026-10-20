@@ -3,7 +3,7 @@ import TaskQueueStatus, { type QueueReceipt } from './TaskQueueStatus';
 import { ApiError, mediaUrl, request as apiRequest } from './api/client';
 
 type Operation = 'silence' | 'video_qc' | 'transcribe' | 'silent_video';
-type Props = { projectId: string; assets: Array<{ id: string; title: string; kind: string }>; onComplete: () => void; onBrowse: () => void };
+type Props = { projectId: string; assets: Array<{ id: string; title: string; kind: string }>; onComplete: () => void; onBrowse: () => void; defaultOpen?: boolean };
 type Draft = { operation: Operation; source_asset_id: string; duration_seconds: number; sample_rate: number; channels: number; sample_count: number; expected_text: string; language: string; word_timestamps: boolean };
 type Submission = Record<string, unknown> & { idempotency_key: string };
 type Saved = { draft: Draft; pending?: Submission; completedTaskId?: string };
@@ -30,7 +30,7 @@ class RequestError extends Error { constructor(message: string, readonly status:
 // Keyed inner state prevents a pending request from following a project switch.
 export default function MediaToolsPanel(props: Props) { return <ProjectMediaToolsPanel key={props.projectId} {...props} />; }
 
-function ProjectMediaToolsPanel({ projectId, assets, onComplete, onBrowse }: Props) {
+function ProjectMediaToolsPanel({ projectId, assets, onComplete, onBrowse, defaultOpen }: Props) {
   const storageKey = `director-workbench:${projectId}:media-tools:v1`;
   const prefix = useId();
   const [saved, setSaved] = useState<Saved>(() => {
@@ -128,7 +128,7 @@ function ProjectMediaToolsPanel({ projectId, assets, onComplete, onBrowse }: Pro
   const report = task?.result?.report;
   const segments = Array.isArray(report?.segments) ? report.segments as Array<{ start?: number; end?: number; text?: string }> : [];
   const words = Array.isArray(report?.words) ? report.words as Array<{ start?: number; end?: number; word?: string }> : [];
-  return <details className="director-operation-panel" aria-label="媒体工具">
+  return <details className="director-operation-panel" aria-label="媒体工具" open={defaultOpen || undefined}>
     <summary>媒体工具 {task && `· ${labels[task.status] || task.status}`}</summary>
     <div className="director-creation-grid">
       <label htmlFor={`${prefix}-operation`}>操作<select id={`${prefix}-operation`} value={draft.operation} disabled={locked} onChange={e => change('operation', e.target.value as Operation)}>{Object.entries(operations).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>

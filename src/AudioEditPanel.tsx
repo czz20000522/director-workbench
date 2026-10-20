@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import TaskQueueStatus, { type QueueReceipt } from './TaskQueueStatus';
 import { ApiError, mediaUrl, request as apiRequest } from './api/client';
 
-type Props = { projectId: string; audioAssets: Array<{ id: string; title: string }>; onComplete: () => void; onBrowse: () => void };
+type Props = { projectId: string; audioAssets: Array<{ id: string; title: string }>; onComplete: () => void; onBrowse: () => void; defaultOpen?: boolean };
 type Draft = { source_asset_id: string; background_asset_id?: string; start_seconds: number; duration_seconds: number | null; pad_silence: boolean;
   gain: number; fade_in_seconds: number; fade_out_seconds: number; background_gain: number; background_offset_seconds: number };
 type Submission = Draft & { idempotency_key: string };
@@ -46,7 +46,7 @@ class RequestError extends Error { constructor(message: string, readonly status:
 // Keyed inner state prevents a pending request from following a project switch.
 export default function AudioEditPanel(props: Props) { return <ProjectAudioEditPanel key={props.projectId} {...props} />; }
 
-function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse }: Props) {
+function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse, defaultOpen }: Props) {
   const storageKey = `director-workbench:${projectId}:audio-edit:v1`;
   const prefix = useId();
   const [saved, setSaved] = useState<Saved>(() => {
@@ -257,7 +257,7 @@ function ProjectAudioEditPanel({ projectId, audioAssets, onComplete, onBrowse }:
     <div key={name}><label htmlFor={`${prefix}-${name}`}>{label}</label><input id={`${prefix}-${name}`} type="number" min={0} max={max} step="any" disabled={locked} value={draft[name] ?? ''}
       placeholder={name === 'duration_seconds' ? '留空：到结尾' : undefined}
       onChange={event => change(name, event.target.value === '' && name === 'duration_seconds' ? null : Number(event.target.value))} /></div>;
-  return <details className="director-operation-panel" aria-label="编辑音频">
+  return <details className="director-operation-panel" aria-label="编辑音频" open={defaultOpen || undefined}>
     <summary>编辑音频 {task && `· ${labels[task.status] || '处理中'}`}</summary>
     <section aria-label="全片母版后期"><h3>全片母版后期（最长30分钟）</h3>
       <p>对当前作品已登记的完整母版做 CPU 响度归一化、真峰值限制、淡入淡出和可选背景混音。支持 WAV、MP3、M4A、FLAC；WAV 保留原采样率和声道，其他格式由 FFmpeg 归一化为 48kHz 双声道 PCM16。输出为新候选，不会自动替换音轨。</p>
