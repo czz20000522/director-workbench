@@ -10,11 +10,14 @@ const ProjectMaterialLibrary = lazy(() => import('./ProjectMaterialLibrary'));
 const EnhancementPanel = lazy(() => import('./EnhancementPanel'));
 const MediaToolsPanel = lazy(() => import('./MediaToolsPanel'));
 const AudioEditPanel = lazy(() => import('./AudioEditPanel'));
+const KeyframePanel = lazy(() => import('./KeyframePanel'));
+const SpeechPanel = lazy(() => import('./SpeechPanel'));
+import { projectMaterialOptions } from './materialOptions';
 import './studio-flow.css';
 
 type Step = 1 | 2 | 3 | 4 | 5 | 6;
 type Tool = 'script' | 'reference' | 'materials' | 'tasks' | 'post';
-type PostTab = 'enhance' | 'media' | 'audio';
+type PostTab = 'enhance' | 'media' | 'audio' | 'keyframe' | 'speech';
 type ProjectAsset = { id: string; title?: string; kind?: string };
 type ProjectDetail = { assets?: ProjectAsset[] };
 type ProjectSummary = { id: string; title: string; series: string; selected?: boolean };
@@ -248,10 +251,12 @@ function ToolPage({ tool, projectId, plan, projectDetail, postTab, setPostTab, o
   const assets = projectDetail?.assets || [];
   const audioAssets = assets.filter(asset => asset.kind === 'audio').map(asset => ({ id: asset.id, title: asset.title || asset.id }));
   const mediaAssets = assets.filter(asset => asset.kind === 'audio' || asset.kind === 'video').map(asset => ({ id: asset.id, title: asset.title || asset.id, kind: asset.kind || 'video' }));
-  return <div className="sf-step-panel sf-tool-panel"><p className="sf-step-label">工具</p><h1>后期</h1><div className="sf-post-tabs"><button className={postTab === 'enhance' ? 'selected' : ''} onClick={() => setPostTab('enhance')}>清晰化</button><button className={postTab === 'media' ? 'selected' : ''} onClick={() => setPostTab('media')}>图片 / 视频</button><button className={postTab === 'audio' ? 'selected' : ''} onClick={() => setPostTab('audio')}>音频</button></div>
+  return <div className="sf-step-panel sf-tool-panel"><p className="sf-step-label">工具</p><h1>后期</h1><div className="sf-post-tabs"><button className={postTab === 'enhance' ? 'selected' : ''} onClick={() => setPostTab('enhance')}>清晰化</button><button className={postTab === 'media' ? 'selected' : ''} onClick={() => setPostTab('media')}>图片 / 视频</button><button className={postTab === 'audio' ? 'selected' : ''} onClick={() => setPostTab('audio')}>音频</button><button className={postTab === 'keyframe' ? 'selected' : ''} onClick={() => setPostTab('keyframe')}>关键帧</button><button className={postTab === 'speech' ? 'selected' : ''} onClick={() => setPostTab('speech')}>配音</button></div>
     {postTab === 'enhance' && <EnhancementPanel projectId={projectId} onBack={() => setPostTab('media')} />}
     {postTab === 'media' && <MediaToolsPanel projectId={projectId} assets={mediaAssets} onComplete={() => void onRefreshProject()} onBrowse={onBrowse} />}
     {postTab === 'audio' && <AudioEditPanel projectId={projectId} audioAssets={audioAssets} onComplete={() => void onRefreshProject()} onBrowse={onBrowse} />}
+    {postTab === 'keyframe' && <KeyframePanel projectId={projectId} options={projectMaterialOptions(projectDetail as never, plan?.segments as never || [])} onBrowse={onBrowse} onComplete={() => void onRefreshProject()} />}
+    {postTab === 'speech' && <SpeechPanel projectId={projectId} options={projectMaterialOptions(projectDetail as never, plan?.segments as never || [])} onBrowse={onBrowse} onComplete={() => void onRefreshProject()} />}
   </div>;
 }
 

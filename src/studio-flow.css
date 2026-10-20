@@ -573,3 +573,5 @@
 .sf-post-tabs button:hover { background: #f2f4f7; color: var(--sf-ink); }
 .sf-post-tabs button.selected { color: var(--sf-ink); background: #fff; border: 1px solid var(--sf-line); border-bottom-color: #fff; margin-bottom: -1px; font-weight: 600; }
 .sf-tool-panel .media-tools-panel, .sf-tool-panel .audio-edit-panel, .sf-tool-panel .enhancement-panel { margin-top: 16px; }
+.sf-post-tabs { overflow-x: auto; }
+.sf-post-tabs button { flex: none; }
