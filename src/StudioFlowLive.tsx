@@ -336,6 +336,11 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
     if (deepLink) { void openProject(deepLink); } else { void loadProjects(); }
   }, []);
   useEffect(() => {
+    if (step === 2 && projectId && presets.length === 0) {
+      void api<{ presets: Preset[] }>('/api/production-presets').then(catalog => setPresets(catalog.presets || [])).catch(() => setError('无法读取制作方案'));
+    }
+  }, [step, projectId]);
+  useEffect(() => {
     if (!projectId || !plan) return;
     if (step === 4) {
       const shot = plan.segments.find(segment => segment.video?.path)?.id || plan.segments[0]?.id;
