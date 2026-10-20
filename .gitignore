@@ -112,8 +112,6 @@
 !/.github/pull_request_template.md
 !/.gitignore
 !/prototype.html
-!/src/QuickStudioPrototype.tsx
-!/src/quick-studio-prototype.css
 !/tests/quick_generation.browser.mjs
 !/tests/quick_generation_bridge.py
 !/AGENTS.md
@@ -400,6 +398,5 @@
 !/tests/test_mcp_contract.py
 
 # UI flow prototype (review-only; remove or merge after approval).
-!/src/StudioFlowPrototype.tsx
-!/src/studio-flow-prototype.css
+!/src/studio-flow.css
 !/src/StudioFlowLive.tsx

@@ -1,13 +1,17 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
-  ArrowRight, Check, ChevronLeft, ChevronRight, Clapperboard, FileText,
+  ArrowRight, BookOpen, Check, ChevronLeft, ChevronRight, Clapperboard, FileText, FolderOpen, ListTodo, ScanEye,
   Film, Image, Layers3, LoaderCircle, Plus, Play, Sparkles, Upload, Volume2, Wand2, X,
 } from 'lucide-react';
-import './studio-flow-prototype.css';
+const ScriptWorkbench = lazy(() => import('./ScriptWorkbench'));
+const ReverseWorkbench = lazy(() => import('./ReverseWorkbench'));
+const ProjectMaterialLibrary = lazy(() => import('./ProjectMaterialLibrary'));
+import './studio-flow.css';
 
 type Step = 1 | 2 | 3 | 4 | 5 | 6;
 type QuickTool = 'text-video' | 'image-video' | 'text-image' | 'enhance';
+type Tool = 'script' | 'reference' | 'materials' | 'tasks';
 type ProjectSummary = { id: string; title: string; series: string; selected?: boolean };
 type Segment = { id: string; duration_seconds?: number; prompt?: string; status?: string; video?: { path?: string } };
 type Plan = { revision: number; segments: Segment[]; assembly?: { output?: string; prompt_id?: string; status?: string } };
@@ -26,9 +30,9 @@ const steps = [
   { id: 1, label: '愿望', hint: '故事与规格' },
   { id: 2, label: '方案', hint: '显式选择' },
   { id: 3, label: '分镜', hint: '逐段准备' },
-  { id: 4, label: '候选', hint: '现有工作台' },
-  { id: 5, label: '装配', hint: '现有工作台' },
-  { id: 6, label: '交付', hint: '现有工作台' },
+  { id: 4, label: '候选', hint: '逐段采用' },
+  { id: 5, label: '装配', hint: '检查与成片' },
+  { id: 6, label: '交付', hint: '预览与下载' },
 ] as const;
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -52,14 +56,14 @@ function Thumb({ tone = 'rain', label, film = false }: { tone?: string; label?: 
   return <div className={`sf-thumb sf-thumb-${tone}`} aria-hidden="true"><span>{label ?? '01'}</span>{film && <Clapperboard size={22} />}</div>;
 }
 
-function TopBar({ username, onHome, onLogout }: { username: string; onHome: () => void; onLogout: () => void }) {
+function TopBar({ username, projectTitle, onHome, onLogout }: { username: string; projectTitle?: string; onHome: () => void; onLogout: () => void }) {
   return (
     <header className="sf-topbar">
       <button className="sf-brand" onClick={onHome} aria-label="返回首页">
         <span className="sf-brand-mark"><Clapperboard size={18} /></span><span><strong>导演工作台</strong></span>
       </button>
-      <div className="sf-topbar-center"><span className="sf-dot" /> 本机工作区 <span className="sf-sep">/</span> 新界面预览</div>
-      <div className="sf-topbar-actions"><button className="sf-ghost" onClick={() => { window.location.href = '/'; }}>完整工作台</button><span className="sf-account">{(username || 'U').slice(0, 1).toUpperCase()}</span><button className="sf-ghost" onClick={onLogout}>退出</button></div>
+      <div className="sf-topbar-center"><span className="sf-dot" /> {projectTitle || '作品库'}</div>
+      <div className="sf-topbar-actions"><span className="sf-account">{(username || 'U').slice(0, 1).toUpperCase()}</span><button className="sf-ghost" onClick={onLogout}>退出</button></div>
     </header>
   );
 }
@@ -68,53 +72,61 @@ function Home({ projects, continueProject, loading, error, onStart, onQuick, onO
   projects: ProjectView[]; continueProject: ProjectView | null; loading: boolean; error: string;
   onStart: () => void; onQuick: (tool: QuickTool) => void; onOpen: (id: string) => void; onRetry: () => void;
 }) {
-  if (loading) return <main className="sf-page sf-center"><LoaderCircle className="sf-spin" size={22} /><p>正在读取作品…</p></main>;
+  if (loading) return <main className="sf-page sf-center"><LoaderCircle className="sf-spin" size={20} /><p>正在读取作品…</p></main>;
   if (error) return <main className="sf-page sf-center"><p role="alert">{error}</p><button className="sf-secondary" onClick={onRetry}>重试</button></main>;
   return (
     <main className="sf-page sf-home">
-      <section className="sf-home-head">
-        <div><h1>继续上次</h1><p className="sf-lede">打开就能接着上次的分镜、候选或装配继续。</p></div>
-        <button className="sf-secondary sf-large" onClick={onStart}><Plus size={17} /> 新建影片</button>
-      </section>
+      <header className="sf-home-head">
+        <div><h1>继续上次</h1><p>打开就能接着上次的分镜、候选或装配继续。</p></div>
+        <button className="sf-primary" onClick={onStart}><Plus size={16} /> 新建作品</button>
+      </header>
+
       {continueProject ? (
-        <button className="sf-continue-hero" onClick={() => onOpen(continueProject.id)}>
-          <Thumb tone="rain" label={continueProject.title} film />
-          <div className="sf-continue-main">
-            <div className="sf-continue-meta"><span className="sf-chip sf-chip-live">草稿 · {continueProject.step}</span><span>{continueProject.plan?.segments.length ?? 0} 个镜头</span></div>
-            <h2>{continueProject.title}</h2>
-            <p>{continueProject.series} · 继续准备分镜或进入现有工作台生成候选。</p>
-            <div className="sf-progress"><span style={{ width: `${continueProject.progress}%` }} /></div>
-            <small>继续制作</small>
-          </div>
-          <span className="sf-continue-cta"><span className="sf-primary">继续创作 <ArrowRight size={17} /></span><small>{continueProject.step}</small></span>
+        <button className="sf-continue-row" onClick={() => onOpen(continueProject.id)}>
+          <span className="sf-work-mark">{continueProject.title.slice(0, 1)}</span>
+          <span className="sf-continue-copy">
+            <span className="sf-continue-line"><strong>{continueProject.title}</strong><span>{continueProject.series}</span></span>
+            <span className="sf-continue-sub">{continueProject.step} · {continueProject.plan?.segments.length ?? 0} 个镜头 · 最近编辑</span>
+            <span className="sf-progress"><span style={{ width: `${Math.max(continueProject.progress, 4)}%` }} /></span>
+          </span>
+          <span className="sf-continue-action">继续创作 <ArrowRight size={15} /></span>
         </button>
       ) : (
-        <section className="sf-empty-card"><Film size={22} /><div><h2>还没有作品</h2><p>从一句愿望开始，工作台会一步步让你决定方案、分镜和候选。</p></div><button className="sf-primary" onClick={onStart}>新建第一部作品</button></section>
+        <section className="sf-empty-card"><Film size={20} /><div><h2>还没有作品</h2><p>从一句愿望开始，按步骤选择方案、拆分镜、看候选、装配交付。</p></div><button className="sf-primary" onClick={onStart}>新建作品</button></section>
       )}
+
       {projects.length > 0 && <section className="sf-section">
-        <div className="sf-section-head"><h2>最近作品</h2><span>{projects.length} 部</span></div>
-        <div className="sf-recent-grid">
-          {projects.slice(0, 8).map(project => (
-            <button className="sf-recent-card" key={project.id} onClick={() => onOpen(project.id)}>
-              <Thumb tone={project.id === continueProject?.id ? 'rain' : 'sage'} label={project.title} />
-              <div className="sf-recent-copy"><span className="sf-chip">{project.step}</span><h3>{project.title}</h3><p>{project.series}</p></div>
-              <span className="sf-recent-progress">{project.progress}%</span>
+        <div className="sf-section-head"><h2>作品</h2><span>{projects.length} 部</span></div>
+        <div className="sf-work-list">
+          {projects.map(project => (
+            <button className="sf-work-row" key={project.id} onClick={() => onOpen(project.id)}>
+              <span className="sf-work-mark">{project.title.slice(0, 1)}</span>
+              <span className="sf-work-main"><strong>{project.title}</strong><small>{project.series}</small></span>
+              <span className="sf-work-step">{project.step}</span>
+              <span className="sf-work-progress">{project.progress ? `${project.progress}%` : ''}</span>
+              <ChevronRight size={15} className="sf-work-arrow" />
             </button>
           ))}
         </div>
       </section>}
-      <section className="sf-section sf-quick-section"><details className="sf-quick"><summary><span><strong>快速开始</strong><small>单步工具，使用现有工作台</small></span><ChevronRight size={17} /></summary><div className="sf-quick-grid">
-        <button onClick={() => onQuick('text-video')}><Play size={19} /><strong>文生视频</strong><span>只生成一个镜头</span></button>
-        <button onClick={() => onQuick('image-video')}><Film size={19} /><strong>图生视频</strong><span>让一张图动起来</span></button>
-        <button onClick={() => onQuick('text-image')}><Image size={19} /><strong>文生图</strong><span>先生成一张素材</span></button>
-        <button onClick={() => onQuick('enhance')}><Wand2 size={19} /><strong>清晰化</strong><span>处理已有图片或视频</span></button>
-      </div></details></section>
+
+      <section className="sf-section sf-quick-section">
+        <details className="sf-quick">
+          <summary><span><strong>单步工具</strong><small>文生视频 · 图生视频 · 文生图 · 清晰化</small></span><ChevronRight size={16} /></summary>
+          <div className="sf-quick-grid">
+            <button onClick={() => onQuick('text-video')}><Play size={18} /><strong>文生视频</strong><span>只生成一个镜头</span></button>
+            <button onClick={() => onQuick('image-video')}><Film size={18} /><strong>图生视频</strong><span>让一张图动起来</span></button>
+            <button onClick={() => onQuick('text-image')}><Image size={18} /><strong>文生图</strong><span>先生成一张素材</span></button>
+            <button onClick={() => onQuick('enhance')}><Wand2 size={18} /><strong>清晰化</strong><span>处理已有图片或视频</span></button>
+          </div>
+        </details>
+      </section>
     </main>
   );
 }
 
 function Intent({ onClose, onFull, onQuick }: { onClose: () => void; onFull: () => void; onQuick: (tool: QuickTool) => void }) {
-  return <div className="sf-modal-backdrop" role="dialog" aria-modal="true" aria-label="选择创作意图"><div className="sf-modal">
+  return <div className="sf-modal-backdrop" role="dialog" aria-modal="true" aria-label="选择创作意图" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}><div className="sf-modal">
     <button className="sf-modal-close" onClick={onClose} aria-label="关闭"><X size={18} /></button>
     <p className="sf-step-label">新建</p><h2>你想做什么？</h2><p className="sf-modal-lede">整片流程和单步工具分开。</p>
     <button className="sf-intent-primary" onClick={onFull}><span className="sf-intent-icon"><Clapperboard size={20} /></span><span><strong>做一部完整影片</strong><small>愿望 → 方案 → 分镜 → 候选 → 装配 → 成片</small></span><ArrowRight size={18} /></button>
@@ -132,20 +144,30 @@ function QuickGateway({ tool, onBack }: { tool: QuickTool; onBack: () => void })
     'text-video': ['文生视频', '只生成一个镜头'], 'image-video': ['图生视频', '让一张图动起来'],
     'text-image': ['文生图', '先生成一张素材'], enhance: ['清晰化', '处理已有图片或视频'],
   }[tool];
-  return <main className="sf-quick-page"><button className="sf-back" onClick={onBack}><ChevronLeft size={16} /> 返回首页</button><section className="sf-quick-panel"><div className="sf-quick-icon"><Wand2 size={24} /></div><p className="sf-step-label">快速工具</p><h1>{info[0]}</h1><p>{info[1]}。该入口仍使用现有工作台，下一步再并入新流程。</p><div className="sf-quick-actions"><button className="sf-primary" onClick={() => { window.location.href = '/'; }}>打开现有工作台 <ArrowRight size={16} /></button><button className="sf-secondary" onClick={onBack}>返回</button></div></section></main>;
+  return <main className="sf-quick-page"><button className="sf-back" onClick={onBack}><ChevronLeft size={16} /> 返回首页</button><section className="sf-quick-panel"><div className="sf-quick-icon"><Wand2 size={24} /></div><p className="sf-step-label">快速工具</p><h1>{info[0]}</h1><p>{info[1]}。单步工具尚未并入新工作流，暂时在旧版入口中完成。</p><div className="sf-quick-actions"><button className="sf-primary" onClick={() => { window.location.href = '/?legacy=1'; }}>打开旧版单步工具 <ArrowRight size={16} /></button><button className="sf-secondary" onClick={onBack}>返回</button></div></section></main>;
 }
 
-function StepRail({ step, onStep }: { step: Step; onStep: (step: Step) => void }) {
-  return <aside className="sf-rail"><div className="sf-rail-head"><span>创作流程</span><strong>新作品</strong><small>草稿自动保存</small></div><ol>{steps.map(item => <li key={item.id} className={item.id === step ? 'active' : item.id < step ? 'done' : ''}><button onClick={() => onStep(item.id as Step)} disabled={item.id > step}><span className="sf-step-dot">{item.id < step ? <Check size={12} /> : item.id}</span><span><strong>{item.label}</strong><small>{item.hint}</small></span></button></li>)}</ol></aside>;
+function StepRail({ step, tool, projectReady, projectTitle, onStep, onTool }: { step: Step; tool: Tool | null; projectReady: boolean; projectTitle: string; onStep: (step: Step) => void; onTool: (tool: Tool | null) => void }) {
+  const tools: { id: Tool; label: string; icon: ReactNode }[] = [
+    { id: 'script', label: '剧本', icon: <BookOpen size={14} /> },
+    { id: 'reference', label: '参考', icon: <ScanEye size={14} /> },
+    { id: 'materials', label: '素材', icon: <FolderOpen size={14} /> },
+    { id: 'tasks', label: '任务', icon: <ListTodo size={14} /> },
+  ];
+  return <aside className="sf-rail">
+    <div className="sf-rail-head"><span>创作流程</span><strong>{projectTitle || '新作品'}</strong><small>草稿自动保存</small></div>
+    <ol>{steps.map(item => <li key={item.id} className={!tool && item.id === step ? 'active' : item.id < step ? 'done' : ''}><button onClick={() => { onTool(null); onStep(item.id as Step); }} disabled={item.id > step}><span className="sf-step-dot">{item.id < step ? <Check size={12} /> : item.id}</span><span><strong>{item.label}</strong><small>{item.hint}</small></span></button></li>)}</ol>
+    <div className="sf-rail-tools"><span>工具</span>{tools.map(item => <button key={item.id} className={tool === item.id ? 'active' : ''} disabled={!projectReady} onClick={() => onTool(item.id)}>{item.icon}{item.label}</button>)}</div>
+  </aside>;
 }
 
-function Wizard({ step, onStep, onHome, children }: { step: Step; onStep: (step: Step) => void; onHome: () => void; children: ReactNode }) {
-  return <div className="sf-workspace"><StepRail step={step} onStep={onStep} /><main className="sf-main"><div className="sf-workspace-top"><button className="sf-back" onClick={onHome}><ChevronLeft size={15} /> 全部作品</button><span className="sf-save-state"><span className="sf-dot" /> 自动保存</span></div>{children}</main></div>;
+function Wizard({ step, tool, projectReady, projectTitle, onStep, onTool, onHome, children }: { step: Step; tool: Tool | null; projectReady: boolean; projectTitle: string; onStep: (step: Step) => void; onTool: (tool: Tool | null) => void; onHome: () => void; children: ReactNode }) {
+  return <div className="sf-workspace"><StepRail step={step} tool={tool} projectReady={projectReady} projectTitle={projectTitle} onStep={onStep} onTool={onTool} /><main className="sf-main"><div className="sf-workspace-top"><button className="sf-back" onClick={onHome}><ChevronLeft size={15} /> 全部作品</button><span className="sf-save-state"><span className="sf-dot" /> 自动保存</span></div>{children}</main></div>;
 }
 
-function StepOne({ title, setTitle, series, setSeries, duration, setDuration, onNext, busy, error }: {
+function StepOne({ title, setTitle, series, setSeries, duration, setDuration, onNext, busy, error, existing }: {
   title: string; setTitle: (value: string) => void; series: string; setSeries: (value: string) => void;
-  duration: number; setDuration: (value: number) => void; onNext: () => void; busy: boolean; error: string;
+  duration: number; setDuration: (value: number) => void; onNext: () => void; busy: boolean; error: string; existing: boolean;
 }) {
   return <div className="sf-step-panel"><p className="sf-step-label">① 愿望</p><h1>这部片想讲什么</h1><p className="sf-lede">先写清楚故事和规格。后面每一步都会给你明确的选择。</p>
     <div className="sf-form-grid">
@@ -155,7 +177,7 @@ function StepOne({ title, setTitle, series, setSeries, duration, setDuration, on
       <div className="sf-field sf-wide"><span>起点</span><div className="sf-choice-row"><button className="sf-choice selected"><Sparkles size={17} /><strong>原创</strong><small>从文字开始</small></button><button className="sf-choice"><Upload size={17} /><strong>参考</strong><small>后续接入</small></button><button className="sf-choice"><FileText size={17} /><strong>剧本</strong><small>后续接入</small></button></div></div>
     </div>
     {error && <p className="sf-error" role="alert">{error}</p>}
-    <div className="sf-step-actions"><button className="sf-primary" disabled={busy || !title.trim()} onClick={onNext}>{busy ? '创建中…' : '创建并选择方案'} <ArrowRight size={16} /></button></div>
+    <div className="sf-step-actions"><button className="sf-primary" disabled={busy || !title.trim()} onClick={onNext}>{busy ? '处理中…' : existing ? '继续选择方案' : '创建并选择方案'} <ArrowRight size={16} /></button></div>
   </div>;
 }
 
@@ -175,7 +197,7 @@ function StepThree({ segments, planRevision, prompt, setPrompt, duration, setDur
   segments: Segment[]; planRevision: number; prompt: string; setPrompt: (value: string) => void;
   duration: number; setDuration: (value: number) => void; onAdd: () => void; busy: boolean; error: string; onNext: () => void;
 }) {
-  return <div className="sf-step-panel"><p className="sf-step-label">③ 分镜</p><h1>准备分镜</h1><p className="sf-lede">每一段独立准备；先生成、审核和重做的能力仍由现有工作台完成。</p>
+  return <div className="sf-step-panel"><p className="sf-step-label">③ 分镜</p><h1>准备分镜</h1><p className="sf-lede">每一段独立准备。生成、查看候选和重做都在后面的候选步骤完成。</p>
     <div className="sf-shot-list">{segments.map((segment, index) => <article className="sf-shot" key={segment.id}><div className="sf-shot-number">{String(index + 1).padStart(2, '0')}</div><Thumb tone={index % 2 ? 'sage' : 'amber'} label={segment.id} /><div className="sf-shot-copy"><div className="sf-shot-head"><strong>{segment.id}</strong><span className="sf-chip">{segment.duration_seconds ?? '—'}s</span></div><p>{segment.prompt || '尚未填写提示词'}</p></div><div className="sf-shot-side"><span className={`sf-state ${segment.video?.path ? 'ok' : ''}`}>{segment.video?.path ? '已有候选' : '待生成'}</span></div></article>)}</div>
     <div className="sf-inline-form"><label className="sf-field"><span>新镜头提示词</span><textarea rows={2} value={prompt} onChange={event => setPrompt(event.target.value)} placeholder="描述这个镜头…" /></label><label className="sf-field sf-duration"><span>时长（秒）</span><input type="number" min={1} max={15} value={duration} onChange={event => setDuration(Number(event.target.value))} /></label><button className="sf-secondary" disabled={busy || !prompt.trim()} onClick={onAdd}>{busy ? '添加中…' : <><Plus size={15} /> 添加镜头</>}</button></div>
     {error && <p className="sf-error" role="alert">{error}</p>}
@@ -185,25 +207,25 @@ function StepThree({ segments, planRevision, prompt, setPrompt, duration, setDur
 
 function mediaFile(path: string) { return `/media-file?path=${encodeURIComponent(path)}`; }
 
-function StepFour({ segments, shotId, setShotId, versions, busy, error, onLoad, onAdopt, onOld, onNext, onGenerate, generating, task }: {
+function StepFour({ segments, shotId, setShotId, versions, busy, error, onLoad, onAdopt, onNext, onGenerate, generating, task }: {
   segments: Segment[]; shotId: string; setShotId: (id: string) => void; versions: Version[]; busy: boolean; error: string;
-  onLoad: (id: string) => void; onAdopt: (version: Version) => void; onOld: () => void; onNext: () => void; onGenerate: (segment: Segment) => void; generating: boolean; task: { id?: string; status?: string; error?: string } | null;
+  onLoad: (id: string) => void; onAdopt: (version: Version) => void; onNext: () => void; onGenerate: (segment: Segment) => void; generating: boolean; task: { id?: string; status?: string; error?: string } | null;
 }) {
   const current = segments.find(segment => segment.id === shotId) || segments[0];
   return <div className="sf-step-panel"><p className="sf-step-label">④ 候选</p><h1>比较候选</h1><p className="sf-lede">选择一段查看已有生成结果。工作台不会自动选“最佳”，采用只影响这一段。</p>
     <div className="sf-shot-tabs">{segments.map(segment => <button key={segment.id} className={segment.id === (current?.id || '') ? 'selected' : ''} onClick={() => { setShotId(segment.id); onLoad(segment.id); }}>{segment.id}<span>{segment.video?.path ? '有候选' : '待生成'}</span></button>)}</div>
     {versions.length ? <div className="sf-version-grid">{versions.map(version => <article className="sf-version" key={version.task_id}><video src={mediaFile(version.video_path)} controls preload="metadata" /><div><strong>{version.is_current ? '当前版本' : '历史候选'}</strong><small>{version.generated_at || version.task_id.slice(0, 8)}</small><button className="sf-secondary" disabled={busy} onClick={() => onAdopt(version)}>采用这个候选</button></div></article>)}</div>
-      : <div className="sf-next-card"><Film size={22} /><div><strong>这一段还没有生成候选</strong><small>生成和重做仍使用现有工作台；先生成，再回来做逐段采用。</small></div><button className="sf-primary" disabled={generating} onClick={() => current && onGenerate(current)}>{generating ? '生成中…' : '生成当前段候选'} <ArrowRight size={16} /></button><button className="sf-secondary" onClick={onOld}>现有工作台</button></div>}
+      : <div className="sf-next-card"><Film size={22} /><div><strong>这一段还没有生成候选</strong><small>先生成，再回来看画面、声音和动作，逐段采用。</small></div><button className="sf-primary" disabled={generating} onClick={() => current && onGenerate(current)}>{generating ? '生成中…' : '生成当前段候选'} <ArrowRight size={16} /></button></div>}
     {error && <p className="sf-error" role="alert">{error}</p>}{task && <p className="sf-task-note">生成任务：{task.status || '已提交…'}{task.error ? ` · ${task.error}` : ''}</p>}
     <div className="sf-step-actions"><span className="sf-fine">采用是显式操作；不会自动采用其他镜头。</span><button className="sf-primary" disabled={!segments.every(segment => segment.video?.path)} onClick={onNext}>下一步：装配 <ArrowRight size={16} /></button></div>
   </div>;
 }
 
-function StepFive({ assembly, task, busy, error, onSound, onJoin, onSubmit, onReload, onOld }: {
+function StepFive({ assembly, task, busy, error, onSound, onJoin, onSubmit, onReload }: {
   assembly: AssemblyView | null; task: { id?: string; status?: string; error?: string } | null; busy: boolean; error: string; onSound: () => void; onJoin: (join: Join) => void;
-  onSubmit: () => void; onReload: () => void; onOld: () => void;
+  onSubmit: () => void; onReload: () => void;
 }) {
-  if (!assembly) return <div className="sf-step-panel"><p className="sf-step-label">⑤ 装配</p><h1>检查后生成成片</h1><div className="sf-next-card"><Layers3 size={22} /><div><strong>正在读取装配状态</strong><small>需要先生成至少一个采用候选。</small></div><button className="sf-secondary" onClick={onReload}>重新读取</button><button className="sf-secondary" onClick={onOld}>现有工作台</button></div>{error && <p className="sf-error">{error}</p>}</div>;
+  if (!assembly) return <div className="sf-step-panel"><p className="sf-step-label">⑤ 装配</p><h1>检查后生成成片</h1><div className="sf-next-card"><Layers3 size={22} /><div><strong>正在读取装配状态</strong><small>需要先生成至少一个采用候选。</small></div><button className="sf-secondary" onClick={onReload}>重新读取</button></div>{error && <p className="sf-error">{error}</p>}</div>;
   const joins = assembly.joins || [];
   return <div className="sf-step-panel"><p className="sf-step-label">⑤ 装配</p><h1>检查后生成成片</h1><p className="sf-lede">采用、接点、音轨和连续性都确认后，才允许生成成片。</p>
     <div className="sf-checklist">
@@ -220,7 +242,35 @@ function StepFive({ assembly, task, busy, error, onSound, onJoin, onSubmit, onRe
 }
 
 function StepSix({ output, busy, error, assembly, onFinal, onOld }: { output: string; busy: boolean; error: string; assembly: AssemblyView | null; onFinal: () => void; onOld: () => void }) {
-  return <div className="sf-step-panel"><p className="sf-step-label">⑥ 交付</p><h1>成片</h1>{output ? <div className="sf-final-grid"><div className="sf-film"><video src={mediaFile(output)} controls preload="metadata" /><span className="sf-film-duration">{assembly?.revision !== undefined ? `计划 revision ${assembly.revision}` : ''}</span></div><div className="sf-final-meta"><h2>成片候选</h2><p>通过全片审核后才算交付；下载不等于采用。</p><div className="sf-final-actions"><button className="sf-primary" disabled={busy} onClick={onFinal}>{busy ? '提交中…' : '通过全片审核'}</button><a className="sf-secondary" href={mediaFile(output)} download>下载</a></div><button className="sf-secondary sf-wide-button" onClick={onOld}>返回现有工作台</button></div></div> : <div className="sf-next-card"><Film size={22} /><div><strong>还没有成片</strong><small>完成装配后在这里预览和审核。</small></div><button className="sf-secondary" onClick={onOld}>现有工作台</button></div>}{error && <p className="sf-error">{error}</p>}</div>;
+  return <div className="sf-step-panel"><p className="sf-step-label">⑥ 交付</p><h1>成片</h1>{output ? <div className="sf-final-grid"><div className="sf-film"><video src={mediaFile(output)} controls preload="metadata" /><span className="sf-film-duration">{assembly?.revision !== undefined ? `计划 revision ${assembly.revision}` : ''}</span></div><div className="sf-final-meta"><h2>成片候选</h2><p>通过全片审核后才算交付；下载不等于采用。</p><div className="sf-final-actions"><button className="sf-primary" disabled={busy} onClick={onFinal}>{busy ? '提交中…' : '通过全片审核'}</button><a className="sf-secondary" href={mediaFile(output)} download>下载</a></div><button className="sf-secondary sf-wide-button" onClick={onOld}>返回作品库</button></div></div> : <div className="sf-next-card"><Film size={22} /><div><strong>还没有成片</strong><small>完成装配后在这里预览和审核。</small></div><button className="sf-secondary" onClick={onOld}>返回作品库</button></div>}{error && <p className="sf-error">{error}</p>}</div>;
+}
+
+function TaskPage({ projectId }: { projectId: string }) {
+  const [tasks, setTasks] = useState<{ id: string; asset_id?: string; kind?: string; status?: string; created_at?: string; error?: string }[]>([]);
+  const statusLabel: Record<string, string> = { queued: '排队中', scheduler_waiting: '等待调度', running: '运行中', succeeded: '已完成', failed: '失败', stopped: '已停止', needs_reconcile: '待核对' };
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const load = async () => {
+    setLoading(true); setError('');
+    try { const data = await api<{ tasks: typeof tasks }>(`/api/projects/${projectId}/tasks?limit=50`); setTasks(data.tasks || []); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : '读取任务失败'); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { void load(); }, [projectId]);
+  return <div className="sf-step-panel sf-tool-panel"><p className="sf-step-label">工具</p><h1>任务</h1><p className="sf-lede">生成、装配和后期任务的实际状态。</p>
+    <div className="sf-tool-toolbar"><button className="sf-secondary" onClick={() => void load()}>刷新</button></div>
+    {loading ? <p className="sf-fine">正在读取…</p> : error ? <p className="sf-error">{error}</p> : tasks.length ? <div className="sf-task-list">{tasks.map(task => <div className="sf-task-row" key={task.id}><span className={`sf-task-state ${task.status === 'succeeded' ? 'done' : task.status === 'failed' ? 'failed' : ''}`}>{statusLabel[task.status || ''] || task.status || '—'}</span><span className="sf-task-main"><strong>{task.asset_id || 'MASTER'}</strong><small>{task.kind === 'workflow' ? '生成任务' : task.kind || '任务'} · {task.created_at ? new Date(task.created_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : task.id.slice(0, 8)}</small>{task.error && <small className="sf-task-error">{task.error}</small>}</span></div>)}</div> : <p className="sf-fine">还没有任务。</p>}
+  </div>;
+}
+
+function ToolPage({ tool, projectId, plan, onStep, onRefreshPlan, onOpenShot }: {
+  tool: Tool; projectId: string; plan: Plan | null; onStep: (step: Step) => void;
+  onRefreshPlan: () => Promise<void>; onOpenShot: (shotId: string) => void;
+}) {
+  if (tool === 'script') return <div className="sf-step-panel sf-tool-panel"><p className="sf-step-label">工具</p><h1>剧本</h1><p className="sf-lede">编辑本作剧本；从场景生成镜头时，明确回到分镜步骤添加。</p><ScriptWorkbench projectId={projectId} shots={(plan?.segments || []).map(segment => ({ id: segment.id }))} request={fetch} onCreateShot={() => onStep(3)} onSelectShot={shotId => onOpenShot(shotId)} /></div>;
+  if (tool === 'reference') return <div className="sf-step-panel sf-tool-panel"><p className="sf-step-label">工具</p><h1>参考</h1><p className="sf-lede">拆解参考视频；转成分镜需要你明确确认，不会自动写入创作计划。</p><ReverseWorkbench projectId={projectId} onConverted={() => { void onRefreshPlan(); onStep(3); }} /></div>;
+  if (tool === 'materials') return <div className="sf-step-panel sf-tool-panel"><p className="sf-step-label">工具</p><h1>素材</h1><p className="sf-lede">登记、查看和复用本作素材。</p><ProjectMaterialLibrary projectId={projectId} onRegistered={() => { void onRefreshPlan(); }} /></div>;
+  return <TaskPage projectId={projectId} />;
 }
 
 export default function StudioFlowLive({ username, onLogout }: { username: string; onLogout: () => void }) {
@@ -242,6 +292,8 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [quickTool, setQuickTool] = useState<QuickTool>('text-video');
+  const [tool, setTool] = useState<Tool | null>(null);
+  const [projectTitle, setProjectTitle] = useState('');
   const [stageId, setStageId] = useState('');
   const [versions, setVersions] = useState<Version[]>([]);
   const [generationTask, setGenerationTask] = useState<{ id?: string; status?: string; error?: string } | null>(null);
@@ -275,6 +327,11 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
   };
 
   useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && screen === 'intent') setScreen('home'); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [screen]);
+  useEffect(() => {
     const deepLink = new URLSearchParams(window.location.search).get('project');
     if (deepLink) { void openProject(deepLink); } else { void loadProjects(); }
   }, []);
@@ -293,8 +350,9 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
     setBusy(true); setError('');
     try {
       const projectPlan = await api<Plan>(`/api/projects/${id}/plan`);
-      const detail = await api<{ production_preset?: { id?: string }; pipeline?: { id: string; execution?: { references?: string[] } }[] }>(`/api/projects/${id}`);
-      setProjectId(id); setPlan(projectPlan); setPresetId(detail.production_preset?.id || ''); setWorkflow(detail.pipeline?.[0]?.execution?.references?.[0] || ''); setStageId(detail.pipeline?.[0]?.id || '');
+      const detail = await api<{ title?: string; series?: string; production_preset?: { id?: string }; pipeline?: { id: string; execution?: { references?: string[] } }[] }>(`/api/projects/${id}`);
+      setProjectId(id); setTool(null); setProjectTitle(detail.title || '');
+      setTitle(detail.title || ''); setSeries(detail.series || '新作品'); setPlan(projectPlan); setPresetId(detail.production_preset?.id || ''); setWorkflow(detail.pipeline?.[0]?.execution?.references?.[0] || ''); setStageId(detail.pipeline?.[0]?.id || '');
       setStep(projectPlan.assembly?.output ? 6 : projectPlan.segments.length ? 3 : 1); setScreen('wizard');
     } catch (reason) { setError(reason instanceof Error ? reason.message : '无法读取作品计划'); }
     finally { setBusy(false); }
@@ -304,8 +362,13 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
     if (!title.trim()) return;
     setBusy(true); setError('');
     try {
+      if (projectId) {
+        if (!presets.length) { const catalog = await api<{ presets: Preset[] }>('/api/production-presets'); setPresets(catalog.presets || []); }
+        setStep(2);
+        return;
+      }
       const created = await api<{ project: ProjectSummary }>('/api/projects/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ series: series.trim() || '新作品', title: title.trim(), creation_mode: 'advanced' }) });
-      setProjectId(created.project.id); setPlan({ revision: 0, segments: [] });
+      setProjectId(created.project.id); setTool(null); setProjectTitle(created.project.title || title.trim()); setPlan({ revision: 0, segments: [] });
       const catalog = await api<{ presets: Preset[] }>('/api/production-presets');
       setPresets(catalog.presets || []); setStep(2);
     } catch (reason) { setError(reason instanceof Error ? reason.message : '创建作品失败'); }
@@ -425,7 +488,7 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
   };
 
   const generateCandidate = async (segment: Segment) => {
-    if (!projectId || !stageId) { setError('当前作品没有已安装的制作方案，请先在现有工作台安装方案。'); return; }
+    if (!projectId || !stageId) { setError('当前作品没有已安装的制作方案，请先完成方案选择。'); return; }
     setBusy(true); setError(''); setGenerationTask({ status: '预检中…' });
     try {
       const values = { prompt: segment.prompt || '', seed: 42, duration: segment.duration_seconds || shotDuration, 'turbo-sampling': 'enable' };
@@ -445,26 +508,33 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
     finally { setBusy(false); }
   };
 
-  const startFull = () => { setTitle(''); setSeries('新作品'); setDuration(15); setPlan(null); setProjectId(''); setPresetId(''); setError(''); setStep(1); setScreen('wizard'); };
+  const refreshPlan = async () => { if (projectId) setPlan(await api<Plan>(`/api/projects/${projectId}/plan`)); };
+
+  const openShot = (shotId: string) => { setTool(null); setVersionShot(shotId); setStep(4); void loadVersions(shotId); };
+
+  const startFull = () => { setTitle(''); setSeries('新作品'); setDuration(15); setPlan(null); setProjectId(''); setProjectTitle(''); setPresetId(''); setTool(null); setError(''); setStep(1); setScreen('wizard'); };
   const newProject = () => setScreen('intent');
   const quick = (tool: QuickTool) => { setQuickTool(tool); setScreen('quick'); };
   const home = () => { setScreen('home'); setError(''); void loadProjects(); };
 
   return <div className="sf-root">
-    <TopBar username={username} onHome={home} onLogout={onLogout} />
+    <TopBar username={username} projectTitle={screen === 'wizard' ? projectTitle : undefined} onHome={home} onLogout={onLogout} />
     {screen === 'home' && <Home projects={projects} continueProject={projects[0] || null} loading={loading} error={loadError} onStart={newProject} onQuick={quick} onOpen={id => void openProject(id)} onRetry={() => void loadProjects()} />}
     {screen === 'intent' && <Intent onClose={() => setScreen('home')} onFull={startFull} onQuick={quick} />}
     {screen === 'quick' && <QuickGateway tool={quickTool} onBack={() => setScreen('home')} />}
-    {screen === 'wizard' && <Wizard step={step} onStep={setStep} onHome={home}>
-      {step === 1 && <StepOne title={title} setTitle={setTitle} series={series} setSeries={setSeries} duration={duration} setDuration={setDuration} busy={busy} error={error} onNext={() => void createProject()} />}
+    {screen === 'wizard' && <Wizard step={step} tool={tool} projectReady={Boolean(projectId)} projectTitle={projectTitle} onStep={next => { setTool(null); setStep(next); }} onTool={setTool} onHome={home}>
+      {tool && projectId ? <Suspense fallback={<div className="sf-center"><LoaderCircle className="sf-spin" size={20} /><p>正在载入工具…</p></div>}><ToolPage tool={tool} projectId={projectId} plan={plan} onStep={next => { setTool(null); setStep(next); }} onRefreshPlan={refreshPlan} onOpenShot={openShot} /></Suspense> : <>
+      {step === 1 && <StepOne title={title} setTitle={setTitle} series={series} setSeries={setSeries} duration={duration} setDuration={setDuration} busy={busy} error={error} existing={Boolean(projectId)} onNext={() => void createProject()} />}
       {step === 2 && <StepTwo presets={presets} selected={presetId} setSelected={setPresetId} busy={busy} error={error} onNext={() => void installPreset()} />}
       {step === 3 && <StepThree segments={plan?.segments || []} planRevision={plan?.revision ?? 0} prompt={prompt} setPrompt={setPrompt} duration={shotDuration} setDuration={setShotDuration} onAdd={() => void addShot()} busy={busy} error={error} onNext={() => setStep(4)} />}
-      {step === 4 && <StepFour segments={plan?.segments || []} shotId={versionShot} setShotId={setVersionShot} versions={versions} busy={busy} error={error} onLoad={id => void loadVersions(id)} onAdopt={version => void adoptVersion(version)} onOld={() => void openOldWorkspace()} onNext={() => setStep(5)} onGenerate={segment => void generateCandidate(segment)} generating={busy} task={generationTask} />}
-      {step === 5 && <StepFive assembly={assembly} task={assemblyTask} busy={busy} error={error} onSound={() => void setNativeSound()} onJoin={join => void approveJoin(join)} onSubmit={() => void submitAssembly()} onReload={() => void loadAssembly()} onOld={() => void openOldWorkspace()} />}
+      {step === 4 && <StepFour segments={plan?.segments || []} shotId={versionShot} setShotId={setVersionShot} versions={versions} busy={busy} error={error} onLoad={id => void loadVersions(id)} onAdopt={version => void adoptVersion(version)} onNext={() => setStep(5)} onGenerate={segment => void generateCandidate(segment)} generating={busy} task={generationTask} />}
+      {step === 5 && <StepFive assembly={assembly} task={assemblyTask} busy={busy} error={error} onSound={() => void setNativeSound()} onJoin={join => void approveJoin(join)} onSubmit={() => void submitAssembly()} onReload={() => void loadAssembly()} />}
       {step === 6 && <StepSix output={assemblyOutput} assembly={assembly} busy={busy} error={error} onFinal={() => void approveFinal()} onOld={() => void openOldWorkspace()} />}
       {step > 1 && step < 4 && <div className="sf-bottom-bar"><button className="sf-secondary" onClick={() => setStep((step - 1) as Step)}><ChevronLeft size={15} /> 上一步</button><span>每一步都可以保存后离开</span></div>}
+      </>}
     </Wizard>}
   </div>;
 }
+
 
 
