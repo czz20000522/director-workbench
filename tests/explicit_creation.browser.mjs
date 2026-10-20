@@ -32,7 +32,7 @@ try {
     }
     return route.fulfill({contentType:'text/html',body:`<div id="root"></div><script>${bundle.outputFiles[0].text}</script>`});
   });
-  await page.goto('http://localhost:4194/');
+  await page.goto('http://localhost:4194/?legacy=1');
   await page.getByRole('button',{name:'作品、片段与更多功能',exact:true}).click();
   await page.getByRole('button',{name:'分镜制作',exact:true}).click();
   const plan=async()=> (await call('GET',`/api/projects/${initial.project_id}/plan`)).data;

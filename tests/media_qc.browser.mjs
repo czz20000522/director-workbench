@@ -81,7 +81,7 @@ try {
     .length === 2 && [...document.querySelectorAll('img.director-material-preview')]
       .every(image => image.complete && image.naturalWidth === 32 && image.naturalHeight === 48));
   // The same real contact sheet and frames remain available in their QC task.
-  await page.getByRole('group', { name: '媒体工具' }).locator(':scope > summary').click();
+  
   await page.getByRole('region', { name: '媒体检查报告' }).waitFor();
   const outputs = page.locator('figure img');
   assert.equal(await outputs.count(), 4);
@@ -90,7 +90,7 @@ try {
       .every(image => image.complete && image.naturalWidth > 0));
   assert.equal(await page.locator('figure a', { hasText: '查看报告文件' }).count(), 1);
   await page.reload();
-  await page.getByRole('group', { name: '媒体工具' }).locator(':scope > summary').click();
+  
   await page.waitForFunction(() => [...document.querySelectorAll('figure img')]
     .length === 4 && [...document.querySelectorAll('figure img')]
       .every(image => image.complete && image.naturalWidth > 0));

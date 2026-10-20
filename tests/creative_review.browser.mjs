@@ -104,9 +104,7 @@ try {
   await page.getByRole('button', { name: '保存音轨方案', exact: true }).click();
   assert.deepEqual(writes[1].body, { expected_revision: 1, policy: 'mute', audio_asset_id: null });
   await page.evaluate(() => window.mount('audio'));
-  await page.getByRole('group', { name: '编辑音频' }).locator(':scope > summary').click();
   await page.getByLabel('原音频', { exact: true }).selectOption('mp3');
-  await page.getByText('高级：裁切、音量与淡变', { exact: true }).click();
   await page.getByLabel('保留时长（秒）', { exact: true }).fill('1.5');
   await page.getByLabel('源不足所选时长时，明确在尾部补静音').check();
   await page.getByRole('button', { name: '保存编辑候选', exact: true }).click();
@@ -120,7 +118,6 @@ try {
   assert.ok(await page.getByRole('button', { name: '继续编辑', exact: true }).isEnabled());
   await page.reload(); // Original idempotency receipt restores the audition; no new submit.
   await page.evaluate(() => window.mount('audio'));
-  await page.getByRole('group', { name: '编辑音频' }).locator(':scope > summary').click();
   await page.getByLabel('音频编辑候选试听', { exact: true }).waitFor();
   assert.equal(writes.filter(row => row.path.endsWith('/audio-edit-tasks')).length, 1);
   assert.deepEqual(errors, []);

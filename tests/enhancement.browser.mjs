@@ -69,7 +69,7 @@ try {
     return route.fulfill({ status: value.status, headers: value.headers, body: value.binary ? Buffer.from(value.binary, 'base64') : JSON.stringify(value.data) });
   });
   page = await context.newPage(); page.on('pageerror', error => errors.push(error.message));
-  await page.goto('http://localhost:4197');
+  await page.goto('http://localhost:4197/?legacy=1');
   await page.getByLabel('用户名').fill('user001'); await page.getByLabel('密码').fill('one');
   await page.getByRole('button', { name: '进入工作台', exact: true }).click();
   const entry = page.getByRole('button', { name: '图像／视频清晰化 先生成，再用 AI 提高分辨率' });
