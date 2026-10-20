@@ -45,12 +45,13 @@ VIDEO_VAE = 'minimax_h3_video_vae_fp16.safetensors'
 AUDIO_VAE = 'minimax_h3_audio_vae_fp32.safetensors'
 
 ASPECT_SIZES = {'16:9': (1344, 768), '9:16': (768, 1344), '1:1': (768, 768)}
+PREVIEW_ASPECT_SIZES = {'16:9': (864, 480), '9:16': (480, 864), '1:1': (640, 640)}
 MIN_DURATION = 4.0
 MAX_DURATION = 15.0
 MAX_REF_IMAGES = 8
 MAX_PICTURES = 9
-DEFAULT_STILL_STEPS = 20
-DEFAULT_VIDEO_STEPS = 20
+DEFAULT_STILL_STEPS = 8
+DEFAULT_VIDEO_STEPS = 8
 DEFAULT_STILL_TARGET = 'direct_1_frame'
 IMAGE_SUFFIXES = {'.png', '.jpg', '.jpeg', '.webp', '.bmp'}
 FORBIDDEN_NODE_PREFIXES = ('ComfyCloud',)
@@ -147,6 +148,7 @@ class MultiRefRequest(BaseModel):
     seed: int = Field(default=42, ge=0, le=2147483647)
     still_steps: int = Field(default=DEFAULT_STILL_STEPS, ge=1, le=100)
     video_steps: int = Field(default=DEFAULT_VIDEO_STEPS, ge=1, le=100)
+    preview: bool = True
     output_prefix: str = 'director-workbench/multiref'
 
 
@@ -267,7 +269,7 @@ def validate_request(request: MultiRefRequest) -> dict[str, Any]:
         first = blockers[0]
         raise MultiRefError(first['code'], first['message'], 422, blockers=blockers)
     requested_frames, frames, actual_duration = _snap_frames(request.duration_seconds)
-    width, height = ASPECT_SIZES[request.aspect_ratio]
+    width, height = (PREVIEW_ASPECT_SIZES if request.preview else ASPECT_SIZES)[request.aspect_ratio]
     prompt = request.prompt
     video_prompt = prompt
     if reference_prompt_tags:

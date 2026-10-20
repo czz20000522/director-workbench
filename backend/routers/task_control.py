@@ -307,6 +307,28 @@ def reconcile_task(task: dict[str, Any]) -> dict[str, Any]:
             previous_candidate = payload.get('previous_assembly_candidate')
             replaces_previous = (is_assembly and isinstance(previous_candidate, dict)
                                  and previous_candidate == {key: target.get(key) for key in ('prompt_id', 'output')})
+            timeout_recovery = bool(task.get('error') and ('超时' in str(task.get('error')) or 'timeout' in str(task.get('error')).lower()))
+            if timeout_recovery and recorded_prompt and recorded_prompt != prompt_id and not replaces_previous and not is_assembly:
+                # A timed-out task may finish after a newer/older candidate is
+                # already current. Keep the current candidate untouched and
+                # retain this receipt as an explicit history version; never
+                # silently replace or discard a completed generation.
+                recovered = str((done.get('published_outputs') or [''])[0] or '')
+                history = target.setdefault('generation_history', [])
+                if not any(isinstance(entry, dict) and entry.get('task_id') == task['id'] for entry in history):
+                    history.append({
+                        'task_id': task['id'], 'prompt_id': prompt_id,
+                        'generated_at': time.time(), 'video_path': recovered,
+                        'snapshot': payload.get('segment_snapshot') or {},
+                        'workflow': str(payload.get('workflow') or ''),
+                        'recovered_history_candidate': True,
+                    })
+                    backend.write_plan_version(target_plan, document)
+                done['recovered_history_candidate'] = True
+                done['current_candidate_preserved'] = True
+                backend.set_task(task['id'], status='succeeded', stop_requested=0, error=None,
+                                 result=json.dumps(done, ensure_ascii=False))
+                return backend.get_task(task['id']) or task
             if recorded_prompt and recorded_prompt != prompt_id and not replaces_previous:
                 raise HTTPException(409, "该片段已有其他生成版本；保留现有版本，请先人工核对历史结果")
             if not recorded_prompt and not replaces_previous and (target.get("output") if is_assembly else (target.get("video") or {}).get("path")):

@@ -72,6 +72,9 @@ class MultiRefTaskRequest(BaseModel):
     duration_seconds: float
     aspect_ratio: str
     seed: int = Field(default=42, ge=0, le=2147483647)
+    still_steps: int = Field(default=8, ge=1, le=100)
+    video_steps: int = Field(default=8, ge=1, le=100)
+    preview: bool = True
 
 
 def _backend():
@@ -336,6 +339,9 @@ def create_task(project_id: str, request: MultiRefTaskRequest, *,
             duration_seconds=request.duration_seconds,
             aspect_ratio=request.aspect_ratio,
             seed=request.seed,
+            still_steps=request.still_steps,
+            video_steps=request.video_steps,
+            preview=request.preview,
             output_prefix=f'导演工作台工作目录/{project_id}/{request.segment_id}/multiref-{task_id}',
         )
         prepared = recipe.prepare(

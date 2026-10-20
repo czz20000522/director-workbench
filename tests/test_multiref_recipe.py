@@ -84,7 +84,7 @@ def test_build_graph_freezes_reference_order_and_connects_still_to_i2v():
     assert still_inputs['ref_images.ref_image_0'] == ['load_ref_0', 0]
     assert still_inputs['ref_images.ref_image_1'] == ['load_ref_1', 0]
     assert still_inputs['canvas_mode'] == 'custom'
-    assert still_inputs['width'] == 1344 and still_inputs['height'] == 768
+    assert still_inputs['width'] == 864 and still_inputs['height'] == 480
     assert still_inputs['target_mode'] == 'direct_1_frame'
     assert graph['still']['class_type'] == 'MiniMaxH3StillConditioningT8'
     assert graph['still_unet']['inputs']['unet_name'] == STILL_UNET
