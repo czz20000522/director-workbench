@@ -683,3 +683,20 @@
 }
 .sf-intent-field { min-height: 128px; resize: vertical; line-height: 1.7; }
 .sf-field .sf-fine { display: block; margin-top: 2px; }
+.qt-tools { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 4px 0 28px; }
+.qt-tools button { text-align: left; padding: 16px; border: 1px solid var(--sf-line); border-radius: 10px; background: #fff; display: grid; gap: 5px; }
+.qt-tools button:hover { border-color: #b9c8e8; background: #fbfcff; }
+.qt-tools button svg { color: var(--sf-amber); margin-bottom: 4px; }
+.qt-tools button strong { font-size: 14px; }
+.qt-tools button span { color: var(--sf-muted); font-size: 11px; }
+.qt-page { width: min(900px, calc(100% - 48px)); }
+.qt-head { display: flex; gap: 14px; align-items: flex-start; margin: 18px 0 24px; }
+.qt-icon { width: 44px; height: 44px; flex: none; display: grid; place-items: center; border-radius: 10px; background: #eef2fb; color: var(--sf-amber); }
+.qt-head h1 { font-size: 30px; margin: 2px 0 5px; letter-spacing: -.025em; }
+.qt-head p:not(.sf-step-label) { color: var(--sf-muted); font-size: 12px; }
+.qt-form { display: grid; gap: 14px; margin-top: 20px; }
+.qt-note, .qt-status { color: var(--sf-muted); font-size: 11px; display: flex; align-items: center; gap: 6px; }
+.qt-result { display: grid; gap: 10px; margin-top: 14px; }
+.qt-result video { width: 100%; max-height: 480px; background: #111; border-radius: 8px; }
+.qt-result a { justify-self: start; }
+@media (max-width: 760px) { .qt-tools { grid-template-columns: 1fr 1fr; } .qt-page { width: calc(100% - 32px); } .qt-head h1 { font-size: 26px; } }
