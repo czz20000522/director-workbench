@@ -555,6 +555,35 @@ def publish_pack(series: str, pack_id: str) -> dict[str, Any]:
         return {'series': series, 'pack': document, 'published': True}
 
 
+
+def delete_pack(series: str, pack_id: str, *, confirm: bool = False) -> dict[str, Any]:
+    """Delete one whole resource pack after an explicit confirmation.
+
+    Published packs are user-owned data, so this is deliberately not a silent
+    cleanup primitive: the caller must pass ``confirm=true`` and the pack is
+    removed directory-first, not merged into another pack.
+    """
+    _, _, context = _require_context()
+    pack_dir, document = _read_pack(context, series, _pack_identifier(pack_id))
+    if not confirm:
+        raise HTTPException(409, {
+            'code': 'confirm_pack_delete',
+            'message': '删除资源包需要显式确认',
+            'pack_id': document.get('id'),
+            'title': document.get('title'),
+            'assets': len(document.get('assets') or []),
+        })
+    with _LOCK:
+        pack_dir, document = _read_pack(context, series, _pack_identifier(pack_id))
+        shutil.rmtree(pack_dir)
+    return {
+        'deleted': True,
+        'series': series,
+        'pack_id': document.get('id'),
+        'title': document.get('title'),
+        'asset_count': len(document.get('assets') or []),
+    }
+
 def available_for_project(project_id: str) -> dict[str, Any]:
     backend, _, context = _require_context()
     project_key = _project_identifier(project_id)

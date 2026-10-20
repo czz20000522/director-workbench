@@ -2779,6 +2779,7 @@ from .routers.resource_packs import (
     ResourcePackCreate,
     add_series_resource_pack_asset,
     create_series_resource_pack,
+    delete_series_resource_pack,
     list_project_resource_packs,
     list_series_resource_packs,
     publish_series_resource_pack,

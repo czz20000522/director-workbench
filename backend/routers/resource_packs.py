@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -69,6 +69,14 @@ def read_series_resource_pack_asset(series: str, pack_id: str, asset_id: str) ->
 @ROUTER.post('/api/series/{series}/resource-packs/{pack_id}/publish')
 def publish_series_resource_pack(series: str, pack_id: str) -> dict[str, Any]:
     return resource_packs.publish_pack(series, pack_id)
+
+
+@ROUTER.delete('/api/series/{series}/resource-packs/{pack_id}')
+def delete_series_resource_pack(
+    series: str, pack_id: str,
+    confirm: bool = Query(default=False, description='显式确认删除整个资源包'),
+) -> dict[str, Any]:
+    return resource_packs.delete_pack(series, pack_id, confirm=confirm)
 
 
 @ROUTER.get('/api/projects/{project_id}/resource-packs')
