@@ -109,7 +109,7 @@ function Home({ projects, continueProject, loading, error, onStart, onOpen, onRe
           <span className="sf-continue-action">打开项目 <ArrowRight size={15} /></span>
         </button>
       ) : (
-        <section className="sf-empty-card"><Film size={20} /><div><h2>还没有作品</h2><p>单步工具可以直接生成；多镜头项目可以新建项目后逐步管理。</p></div><button className="sf-primary" onClick={onStart}>新建作品</button></section>
+        <section className="sf-empty-card"><Film size={20} /><div><h2>还没有作品</h2><p>单步工具可以直接生成；多镜头项目可以新建项目后逐步管理。</p></div><button className="sf-primary" onClick={onStart}>新建项目</button></section>
       )}
 
       {projects.length > 0 && <section className="sf-section">
