@@ -38,7 +38,7 @@ type AssemblyView = {
 type ReviewState = { reviews?: Record<string, Record<string, { revision?: number; status?: string; candidate_ref?: string }>> };
 
 const steps = [
-  { id: 1, label: '愿望', hint: '故事与规格' },
+  { id: 1, label: '愿望', hint: '写给自己/代理' },
   { id: 2, label: '方案', hint: '显式选择' },
   { id: 3, label: '分镜', hint: '逐段准备' },
   { id: 4, label: '候选', hint: '逐段采用' },
@@ -135,22 +135,24 @@ function StepRail({ step, tool, projectReady, projectTitle, onStep, onTool }: { 
     { id: 'post', label: '后期', icon: <Wand2 size={14} /> },
   ];
   return <aside className="sf-rail">
-    <div className="sf-rail-head"><span>创作流程</span><strong>{projectTitle || '新作品'}</strong><small>草稿自动保存</small></div>
+    <div className="sf-rail-head"><span>创作流程</span><strong>{projectTitle || '新作品'}</strong><small>人工确认后继续</small></div>
     <ol>{steps.map(item => <li key={item.id} className={!tool && item.id === step ? 'active' : item.id < step ? 'done' : ''}><button onClick={() => { onTool(null); onStep(item.id as Step); }} disabled={item.id > step}><span className="sf-step-dot">{item.id < step ? <Check size={12} /> : item.id}</span><span><strong>{item.label}</strong><small>{item.hint}</small></span></button></li>)}</ol>
     <div className="sf-rail-tools"><span>工具</span>{tools.map(item => <button key={item.id} className={tool === item.id ? 'active' : ''} disabled={!projectReady} onClick={() => onTool(item.id)}>{item.icon}{item.label}</button>)}</div>
   </aside>;
 }
 
 function Wizard({ step, tool, projectReady, projectTitle, onStep, onTool, onHome, children }: { step: Step; tool: Tool | null; projectReady: boolean; projectTitle: string; onStep: (step: Step) => void; onTool: (tool: Tool | null) => void; onHome: () => void; children: ReactNode }) {
-  return <div className="sf-workspace"><StepRail step={step} tool={tool} projectReady={projectReady} projectTitle={projectTitle} onStep={onStep} onTool={onTool} /><main className="sf-main"><div className="sf-workspace-top"><button className="sf-back" onClick={onHome}><ChevronLeft size={15} /> 全部作品</button><span className="sf-save-state"><span className="sf-dot" /> 自动保存</span></div>{children}</main></div>;
+  return <div className="sf-workspace"><StepRail step={step} tool={tool} projectReady={projectReady} projectTitle={projectTitle} onStep={onStep} onTool={onTool} /><main className="sf-main"><div className="sf-workspace-top"><button className="sf-back" onClick={onHome}><ChevronLeft size={15} /> 全部作品</button><span className="sf-save-state"><span className="sf-dot" /> 人工确认后继续</span></div>{children}</main></div>;
 }
 
-function StepOne({ title, setTitle, series, setSeries, duration, setDuration, onNext, busy, error, existing }: {
+function StepOne({ title, setTitle, series, setSeries, duration, setDuration, intent, setIntent, onNext, busy, error, existing }: {
   title: string; setTitle: (value: string) => void; series: string; setSeries: (value: string) => void;
-  duration: number; setDuration: (value: number) => void; onNext: () => void; busy: boolean; error: string; existing: boolean;
+  duration: number; setDuration: (value: number) => void; intent: string; setIntent: (value: string) => void;
+  onNext: () => void; busy: boolean; error: string; existing: boolean;
 }) {
-  return <div className="sf-step-panel"><p className="sf-step-label">① 愿望</p><h1>这部片想讲什么</h1><p className="sf-lede">先写清楚故事和规格。后面每一步都会给你明确的选择。</p>
+  return <div className="sf-step-panel"><p className="sf-step-label">① 愿望</p><h1>记录你的愿望</h1><p className="sf-lede">这段文字写给你自己或你的 Agent，不是写给工作台的。工作台只原样保存，不解读、不推荐、不自动生成。</p>
     <div className="sf-form-grid">
+      <label className="sf-field sf-wide"><span>愿望 / 创作意图（给自己或你的 Agent）</span><textarea className="sf-intent-field" rows={5} value={intent} onChange={event => setIntent(event.target.value)} placeholder="这部片想表达什么？给谁看？边界和禁区是什么？" /><small className="sf-fine">工作台不会理解、补全或根据这段文字替你做决定。</small></label>
       <label className="sf-field sf-wide"><span>作品名</span><input value={title} onChange={event => setTitle(event.target.value)} placeholder="例如：雨停之前" /></label>
       <label className="sf-field"><span>系列</span><input value={series} onChange={event => setSeries(event.target.value)} placeholder="例如：短片 · 概念" /></label>
       <label className="sf-field"><span>目标时长</span><select value={duration} onChange={event => setDuration(Number(event.target.value))}><option value={15}>15 秒</option><option value={30}>30 秒</option><option value={60}>60 秒</option></select></label>
@@ -275,6 +277,9 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
   const [presetId, setPresetId] = useState('');
   const [workflow, setWorkflow] = useState('');
   const [title, setTitle] = useState('');
+  const [intent, setIntent] = useState('');
+  const [creativeRevision, setCreativeRevision] = useState(0);
+  const [creativeValues, setCreativeValues] = useState<Record<string, unknown>>({});
   const [series, setSeries] = useState('新作品');
   const [duration, setDuration] = useState(15);
   const [prompt, setPrompt] = useState('');
@@ -347,12 +352,22 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
     setBusy(true); setError('');
     try {
       const projectPlan = await api<Plan>(`/api/projects/${id}/plan`);
-      const detail = await api<{ title?: string; series?: string; production_preset?: { id?: string }; pipeline?: { id: string; execution?: { references?: string[] } }[] }>(`/api/projects/${id}`);
+      const [detail, projectState] = await Promise.all([
+        api<{ title?: string; series?: string; production_preset?: { id?: string }; pipeline?: { id: string; execution?: { references?: string[] } }[] }>(`/api/projects/${id}`),
+        api<{ creative?: { revision: number; values?: Record<string, unknown> } }>(`/api/projects/${id}/state`).catch(() => ({ creative: undefined })),
+      ]);
       setProjectId(id); setTool(null); setProjectTitle(detail.title || '');
+      setIntent(String(projectState.creative?.values?.intent ?? '')); setCreativeRevision(projectState.creative?.revision ?? 0); setCreativeValues(projectState.creative?.values ?? {});
       setTitle(detail.title || ''); setSeries(detail.series || '新作品'); setPlan(projectPlan); setPresetId(detail.production_preset?.id || ''); setWorkflow(detail.pipeline?.[0]?.execution?.references?.[0] || ''); setStageId(detail.pipeline?.[0]?.id || '');
       setStep(projectPlan.assembly?.output ? 6 : projectPlan.segments.length ? 3 : 1); setScreen('wizard');
     } catch (reason) { setError(reason instanceof Error ? reason.message : '无法读取作品计划'); }
     finally { setBusy(false); }
+  };
+
+  const persistIntent = async (id: string, revision: number) => {
+    const values = { ...creativeValues, intent: intent.trim() };
+    const saved = await api<{ revision: number; values?: Record<string, unknown> }>(`/api/projects/${id}/creative`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expected_revision: revision, values, status: 'draft', source: 'director-ui' }) });
+    setCreativeRevision(saved.revision); setCreativeValues(saved.values || values);
   };
 
   const createProject = async () => {
@@ -360,12 +375,14 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
     setBusy(true); setError('');
     try {
       if (projectId) {
+        await persistIntent(projectId, creativeRevision);
         if (!presets.length) { const catalog = await api<{ presets: Preset[] }>('/api/production-presets'); setPresets(catalog.presets || []); }
         setStep(2);
         return;
       }
       const created = await api<{ project: ProjectSummary }>('/api/projects/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ series: series.trim() || '新作品', title: title.trim(), creation_mode: 'advanced' }) });
       setProjectId(created.project.id); setTool(null); setProjectTitle(created.project.title || title.trim()); setPlan({ revision: 0, segments: [] });
+      await persistIntent(created.project.id, 0);
       const catalog = await api<{ presets: Preset[] }>('/api/production-presets');
       setPresets(catalog.presets || []); setStep(2);
     } catch (reason) { setError(reason instanceof Error ? reason.message : '创建作品失败'); }
@@ -510,7 +527,7 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
 
   const openShot = (shotId: string) => { setTool(null); setVersionShot(shotId); setStep(4); void loadVersions(shotId); };
 
-  const startFull = () => { setTitle(''); setSeries('新作品'); setDuration(15); setPlan(null); setProjectId(''); setProjectTitle(''); setPresetId(''); setTool(null); setError(''); setStep(1); setScreen('wizard'); };
+  const startFull = () => { setTitle(''); setSeries('新作品'); setDuration(15); setPlan(null); setProjectId(''); setProjectTitle(''); setPresetId(''); setIntent(''); setCreativeRevision(0); setCreativeValues({}); setTool(null); setError(''); setStep(1); setScreen('wizard'); };
   const home = () => { setScreen('home'); setError(''); void loadProjects(); };
 
   return <div className="sf-root">
@@ -518,7 +535,7 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
     {screen === 'home' && <Home projects={projects} continueProject={projects[0] || null} loading={loading} error={loadError} onStart={startFull} onOpen={id => void openProject(id)} onRetry={() => void loadProjects()} />}
     {screen === 'wizard' && <Wizard step={step} tool={tool} projectReady={Boolean(projectId)} projectTitle={projectTitle} onStep={next => { setTool(null); setStep(next); }} onTool={setTool} onHome={home}>
       {tool && projectId ? <Suspense fallback={<div className="sf-center"><LoaderCircle className="sf-spin" size={20} /><p>正在载入工具…</p></div>}><ToolPage tool={tool} projectId={projectId} plan={plan} projectDetail={projectDetail} postTab={postTab} setPostTab={setPostTab} onStep={next => { setTool(null); setStep(next); }} onRefreshPlan={refreshPlan} onRefreshProject={refreshProject} onOpenShot={openShot} onBrowse={() => setTool('materials')} /></Suspense> : <>
-      {step === 1 && <StepOne title={title} setTitle={setTitle} series={series} setSeries={setSeries} duration={duration} setDuration={setDuration} busy={busy} error={error} existing={Boolean(projectId)} onNext={() => void createProject()} />}
+      {step === 1 && <StepOne title={title} setTitle={setTitle} series={series} setSeries={setSeries} duration={duration} setDuration={setDuration} intent={intent} setIntent={setIntent} busy={busy} error={error} existing={Boolean(projectId)} onNext={() => void createProject()} />}
       {step === 2 && <StepTwo presets={presets} selected={presetId} setSelected={setPresetId} busy={busy} error={error} onNext={() => void installPreset()} />}
       {step === 3 && <StepThree segments={plan?.segments || []} planRevision={plan?.revision ?? 0} prompt={prompt} setPrompt={setPrompt} duration={shotDuration} setDuration={setShotDuration} onAdd={() => void addShot()} busy={busy} error={error} onNext={() => setStep(4)} />}
       {step === 4 && <StepFour segments={plan?.segments || []} shotId={versionShot} setShotId={setVersionShot} versions={versions} busy={busy} error={error} onLoad={id => void loadVersions(id)} onAdopt={version => void adoptVersion(version)} onNext={() => setStep(5)} onGenerate={segment => void generateCandidate(segment)} generating={busy} task={generationTask} />}

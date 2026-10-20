@@ -681,3 +681,5 @@
   .sf-tool-panel .script-reading { padding: 20px 16px; }
   .sf-tool-panel .enhancement-panel > section { padding: 14px; }
 }
+.sf-intent-field { min-height: 128px; resize: vertical; line-height: 1.7; }
+.sf-field .sf-fine { display: block; margin-top: 2px; }
