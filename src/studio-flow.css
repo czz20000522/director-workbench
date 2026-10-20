@@ -566,3 +566,10 @@
 
 .sf-step-panel { max-width: 900px; }
 .sf-tool-panel { max-width: 920px; }
+
+/* Post-production tab strip */
+.sf-post-tabs { display: flex; gap: 4px; margin: 18px 0 6px; border-bottom: 1px solid var(--sf-line); }
+.sf-post-tabs button { padding: 8px 11px; border-radius: 6px 6px 0 0; color: var(--sf-muted); font-size: 12px; }
+.sf-post-tabs button:hover { background: #f2f4f7; color: var(--sf-ink); }
+.sf-post-tabs button.selected { color: var(--sf-ink); background: #fff; border: 1px solid var(--sf-line); border-bottom-color: #fff; margin-bottom: -1px; font-weight: 600; }
+.sf-tool-panel .media-tools-panel, .sf-tool-panel .audio-edit-panel, .sf-tool-panel .enhancement-panel { margin-top: 16px; }

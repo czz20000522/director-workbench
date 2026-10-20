@@ -1,16 +1,22 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
-  ArrowRight, BookOpen, Check, ChevronLeft, ChevronRight, Clapperboard, FileText, FolderOpen, ListTodo, ScanEye,
+  ArrowRight, BookOpen, Check, ChevronLeft, ChevronRight, Clapperboard, FileText, FolderOpen, ListTodo, ScanEye, Wand2,
   Film, Layers3, LoaderCircle, Plus, Sparkles, Upload, Volume2,
 } from 'lucide-react';
 const ScriptWorkbench = lazy(() => import('./ScriptWorkbench'));
 const ReverseWorkbench = lazy(() => import('./ReverseWorkbench'));
 const ProjectMaterialLibrary = lazy(() => import('./ProjectMaterialLibrary'));
+const EnhancementPanel = lazy(() => import('./EnhancementPanel'));
+const MediaToolsPanel = lazy(() => import('./MediaToolsPanel'));
+const AudioEditPanel = lazy(() => import('./AudioEditPanel'));
 import './studio-flow.css';
 
 type Step = 1 | 2 | 3 | 4 | 5 | 6;
-type Tool = 'script' | 'reference' | 'materials' | 'tasks';
+type Tool = 'script' | 'reference' | 'materials' | 'tasks' | 'post';
+type PostTab = 'enhance' | 'media' | 'audio';
+type ProjectAsset = { id: string; title?: string; kind?: string };
+type ProjectDetail = { assets?: ProjectAsset[] };
 type ProjectSummary = { id: string; title: string; series: string; selected?: boolean };
 type Segment = { id: string; duration_seconds?: number; prompt?: string; status?: string; video?: { path?: string } };
 type Plan = { revision: number; segments: Segment[]; assembly?: { output?: string; prompt_id?: string; status?: string } };
@@ -120,6 +126,7 @@ function StepRail({ step, tool, projectReady, projectTitle, onStep, onTool }: { 
     { id: 'reference', label: '参考', icon: <ScanEye size={14} /> },
     { id: 'materials', label: '素材', icon: <FolderOpen size={14} /> },
     { id: 'tasks', label: '任务', icon: <ListTodo size={14} /> },
+    { id: 'post', label: '后期', icon: <Wand2 size={14} /> },
   ];
   return <aside className="sf-rail">
     <div className="sf-rail-head"><span>创作流程</span><strong>{projectTitle || '新作品'}</strong><small>草稿自动保存</small></div>
@@ -230,14 +237,22 @@ function TaskPage({ projectId }: { projectId: string }) {
   </div>;
 }
 
-function ToolPage({ tool, projectId, plan, onStep, onRefreshPlan, onOpenShot }: {
-  tool: Tool; projectId: string; plan: Plan | null; onStep: (step: Step) => void;
-  onRefreshPlan: () => Promise<void>; onOpenShot: (shotId: string) => void;
+function ToolPage({ tool, projectId, plan, projectDetail, postTab, setPostTab, onStep, onRefreshPlan, onRefreshProject, onOpenShot, onBrowse }: {
+  tool: Tool; projectId: string; plan: Plan | null; projectDetail: ProjectDetail | null; postTab: PostTab; setPostTab: (tab: PostTab) => void; onStep: (step: Step) => void;
+  onRefreshPlan: () => Promise<void>; onRefreshProject: () => Promise<void>; onOpenShot: (shotId: string) => void; onBrowse: () => void;
 }) {
   if (tool === 'script') return <div className="sf-step-panel sf-tool-panel"><p className="sf-step-label">工具</p><h1>剧本</h1><p className="sf-lede">编辑本作剧本；从场景生成镜头时，明确回到分镜步骤添加。</p><ScriptWorkbench projectId={projectId} shots={(plan?.segments || []).map(segment => ({ id: segment.id }))} request={fetch} onCreateShot={() => onStep(3)} onSelectShot={shotId => onOpenShot(shotId)} /></div>;
   if (tool === 'reference') return <div className="sf-step-panel sf-tool-panel"><p className="sf-step-label">工具</p><h1>参考</h1><p className="sf-lede">拆解参考视频；转成分镜需要你明确确认，不会自动写入创作计划。</p><ReverseWorkbench projectId={projectId} onConverted={() => { void onRefreshPlan(); onStep(3); }} /></div>;
   if (tool === 'materials') return <div className="sf-step-panel sf-tool-panel"><p className="sf-step-label">工具</p><h1>素材</h1><p className="sf-lede">登记、查看和复用本作素材。</p><ProjectMaterialLibrary projectId={projectId} onRegistered={() => { void onRefreshPlan(); }} /></div>;
-  return <TaskPage projectId={projectId} />;
+  if (tool === 'tasks') return <TaskPage projectId={projectId} />;
+  const assets = projectDetail?.assets || [];
+  const audioAssets = assets.filter(asset => asset.kind === 'audio').map(asset => ({ id: asset.id, title: asset.title || asset.id }));
+  const mediaAssets = assets.filter(asset => asset.kind === 'audio' || asset.kind === 'video').map(asset => ({ id: asset.id, title: asset.title || asset.id, kind: asset.kind || 'video' }));
+  return <div className="sf-step-panel sf-tool-panel"><p className="sf-step-label">工具</p><h1>后期</h1><div className="sf-post-tabs"><button className={postTab === 'enhance' ? 'selected' : ''} onClick={() => setPostTab('enhance')}>清晰化</button><button className={postTab === 'media' ? 'selected' : ''} onClick={() => setPostTab('media')}>图片 / 视频</button><button className={postTab === 'audio' ? 'selected' : ''} onClick={() => setPostTab('audio')}>音频</button></div>
+    {postTab === 'enhance' && <EnhancementPanel projectId={projectId} onBack={() => setPostTab('media')} />}
+    {postTab === 'media' && <MediaToolsPanel projectId={projectId} assets={mediaAssets} onComplete={() => void onRefreshProject()} onBrowse={onBrowse} />}
+    {postTab === 'audio' && <AudioEditPanel projectId={projectId} audioAssets={audioAssets} onComplete={() => void onRefreshProject()} onBrowse={onBrowse} />}
+  </div>;
 }
 
 export default function StudioFlowLive({ username, onLogout }: { username: string; onLogout: () => void }) {
@@ -260,6 +275,8 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
   const [error, setError] = useState('');
   const [tool, setTool] = useState<Tool | null>(null);
   const [projectTitle, setProjectTitle] = useState('');
+  const [projectDetail, setProjectDetail] = useState<ProjectDetail | null>(null);
+  const [postTab, setPostTab] = useState<PostTab>('enhance');
   const [stageId, setStageId] = useState('');
   const [versions, setVersions] = useState<Version[]>([]);
   const [generationTask, setGenerationTask] = useState<{ id?: string; status?: string; error?: string } | null>(null);
@@ -296,6 +313,12 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
     const deepLink = new URLSearchParams(window.location.search).get('project');
     if (deepLink) { void openProject(deepLink); } else { void loadProjects(); }
   }, []);
+  useEffect(() => {
+    if (!projectId) { setProjectDetail(null); return; }
+    let cancelled = false;
+    void api<ProjectDetail>(`/api/projects/${projectId}`).then(detail => { if (!cancelled) setProjectDetail(detail); }).catch(() => { if (!cancelled) setProjectDetail(null); });
+    return () => { cancelled = true; };
+  }, [projectId]);
   useEffect(() => {
     if (step === 2 && projectId && presets.length === 0) {
       void api<{ presets: Preset[] }>('/api/production-presets').then(catalog => setPresets(catalog.presets || [])).catch(() => setError('无法读取制作方案'));
@@ -475,6 +498,7 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
   };
 
   const refreshPlan = async () => { if (projectId) setPlan(await api<Plan>(`/api/projects/${projectId}/plan`)); };
+  const refreshProject = async () => { if (projectId) setProjectDetail(await api<ProjectDetail>(`/api/projects/${projectId}`)); };
 
   const openShot = (shotId: string) => { setTool(null); setVersionShot(shotId); setStep(4); void loadVersions(shotId); };
 
@@ -485,7 +509,7 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
     <TopBar username={username} projectTitle={screen === 'wizard' ? projectTitle : undefined} onHome={home} onLogout={onLogout} />
     {screen === 'home' && <Home projects={projects} continueProject={projects[0] || null} loading={loading} error={loadError} onStart={startFull} onOpen={id => void openProject(id)} onRetry={() => void loadProjects()} />}
     {screen === 'wizard' && <Wizard step={step} tool={tool} projectReady={Boolean(projectId)} projectTitle={projectTitle} onStep={next => { setTool(null); setStep(next); }} onTool={setTool} onHome={home}>
-      {tool && projectId ? <Suspense fallback={<div className="sf-center"><LoaderCircle className="sf-spin" size={20} /><p>正在载入工具…</p></div>}><ToolPage tool={tool} projectId={projectId} plan={plan} onStep={next => { setTool(null); setStep(next); }} onRefreshPlan={refreshPlan} onOpenShot={openShot} /></Suspense> : <>
+      {tool && projectId ? <Suspense fallback={<div className="sf-center"><LoaderCircle className="sf-spin" size={20} /><p>正在载入工具…</p></div>}><ToolPage tool={tool} projectId={projectId} plan={plan} projectDetail={projectDetail} postTab={postTab} setPostTab={setPostTab} onStep={next => { setTool(null); setStep(next); }} onRefreshPlan={refreshPlan} onRefreshProject={refreshProject} onOpenShot={openShot} onBrowse={() => setTool('materials')} /></Suspense> : <>
       {step === 1 && <StepOne title={title} setTitle={setTitle} series={series} setSeries={setSeries} duration={duration} setDuration={setDuration} busy={busy} error={error} existing={Boolean(projectId)} onNext={() => void createProject()} />}
       {step === 2 && <StepTwo presets={presets} selected={presetId} setSelected={setPresetId} busy={busy} error={error} onNext={() => void installPreset()} />}
       {step === 3 && <StepThree segments={plan?.segments || []} planRevision={plan?.revision ?? 0} prompt={prompt} setPrompt={setPrompt} duration={shotDuration} setDuration={setShotDuration} onAdd={() => void addShot()} busy={busy} error={error} onNext={() => setStep(4)} />}
