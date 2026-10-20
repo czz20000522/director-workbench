@@ -13,6 +13,7 @@ const MediaToolsPanel = lazy(() => import('./MediaToolsPanel'));
 const AudioEditPanel = lazy(() => import('./AudioEditPanel'));
 const KeyframePanel = lazy(() => import('./KeyframePanel'));
 const SpeechPanel = lazy(() => import('./SpeechPanel'));
+import SeriesResources from './SeriesResources';
 import { projectMaterialOptions } from './materialOptions';
 import './studio-flow.css';
 import './reverse-workbench.css';
@@ -79,9 +80,9 @@ function TopBar({ username, projectTitle, onHome, onLogout }: { username: string
   );
 }
 
-function Home({ projects, continueProject, loading, error, onStart, onOpen, onRetry, onQuick }: {
-  projects: ProjectView[]; continueProject: ProjectView | null; loading: boolean; error: string;
-  onStart: () => void; onOpen: (id: string) => void; onRetry: () => void; onQuick: (tool: 'image' | 'text-video' | 'image-video' | 'enhance') => void;
+function Home({ projects, seriesNames, continueProject, loading, error, onStart, onOpen, onSeries, onRetry, onQuick }: {
+  projects: ProjectView[]; seriesNames: string[]; continueProject: ProjectView | null; loading: boolean; error: string;
+  onStart: () => void; onOpen: (id: string) => void; onSeries: (series: string) => void; onRetry: () => void; onQuick: (tool: 'image' | 'text-video' | 'image-video' | 'enhance') => void;
 }) {
   if (loading) return <main className="sf-page sf-center"><LoaderCircle className="sf-spin" size={20} /><p>正在读取作品…</p></main>;
   if (error) return <main className="sf-page sf-center"><p role="alert">{error}</p><button className="sf-secondary" onClick={onRetry}>重试</button></main>;
@@ -255,7 +256,9 @@ function ToolPage({ tool, projectId, plan, projectDetail, postTab, setPostTab, o
 }
 
 export default function StudioFlowLive({ username, onLogout }: { username: string; onLogout: () => void }) {
-  const [screen, setScreen] = useState<'home' | 'wizard' | 'quick'>('home');
+  const [screen, setScreen] = useState<'home' | 'series' | 'wizard' | 'quick'>('home');
+  const [seriesNames, setSeriesNames] = useState<string[]>([]);
+  const [activeSeries, setActiveSeries] = useState('');
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [quickTool, setQuickTool] = useState<'image' | 'text-video' | 'image-video' | 'enhance'>('image');
   const [projects, setProjects] = useState<ProjectView[]>([]);
@@ -290,7 +293,12 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
     setLoading(true); setLoadError('');
     try {
       const data = await api<{ projects: ProjectSummary[]; current_project_id?: string; default_project_id?: string }>('/api/projects');
-      const summaries = (data.projects || []).slice(0, 8);
+      const allSummaries = data.projects || [];
+    setSeriesNames(Array.from(new Set(allSummaries.map(item => item.series).filter(Boolean))).sort());
+    void api<{ series: { name: string }[] }>('/api/private/series')
+      .then(data => setSeriesNames((data.series || []).map(item => item.name).filter(Boolean).sort()))
+      .catch(() => undefined);
+    const summaries = allSummaries.slice(0, 8);
       const selectedId = data.current_project_id || data.default_project_id || summaries[0]?.id;
       const targets = [selectedId, ...summaries.map(item => item.id).filter(id => id !== selectedId)].filter(Boolean).slice(0, 5);
       const planById = new Map<string, Plan | null>();
@@ -498,14 +506,15 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
   const openShot = (shotId: string) => { setTool(null); setVersionShot(shotId); setStep(4); void loadVersions(shotId); };
 
   const startFull = () => { setTitle(''); setSeries('新作品'); setPlan(null); setProjectId(''); setProjectTitle(''); setPresetId(''); setTool(null); setError(''); setNewProjectOpen(true); };
-  const home = () => { setScreen('home'); setError(''); void loadProjects(); };
+  const home = () => { setScreen('home'); setActiveSeries(''); setError(''); void loadProjects(); };
 
   return <div className="sf-root">
     <TopBar username={username} projectTitle={screen === 'wizard' ? projectTitle : undefined} onHome={home} onLogout={onLogout} />
-    {screen === 'home' && <Home projects={projects} continueProject={projects[0] || null} loading={loading} error={loadError} onStart={startFull} onOpen={id => void openProject(id)} onRetry={() => void loadProjects()} onQuick={tool => { setQuickTool(tool); setScreen('quick'); }} />}
+    {screen === 'home' && <Home projects={projects} seriesNames={seriesNames} continueProject={projects[0] || null} loading={loading} error={loadError} onStart={startFull} onOpen={id => void openProject(id)} onSeries={name => { setActiveSeries(name); setScreen('series'); }} onRetry={() => void loadProjects()} onQuick={tool => { setQuickTool(tool); setScreen('quick'); }} />}
     {screen === 'quick' && <Suspense fallback={<div className="sf-center"><LoaderCircle className="sf-spin" size={20} /><p>正在载入工具…</p></div>}><QuickToolPage tool={quickTool} onBack={() => setScreen('home')} /></Suspense>}
     {newProjectOpen && <div className="sf-modal-backdrop" role="dialog" aria-modal="true" aria-label="新建项目"><div className="sf-modal"><button className="sf-modal-close" onClick={() => setNewProjectOpen(false)} aria-label="关闭"><X size={18} /></button><p className="sf-step-label">新建</p><h2>新建项目</h2><p className="sf-modal-lede">项目只是一个结果容器；创建后再选择方案、镜头和生成工具。</p><label className="sf-field"><span>项目名</span><input value={title} onChange={event => setTitle(event.target.value)} placeholder="例如：咖啡测试" /></label><label className="sf-field"><span>系列</span><input value={series} onChange={event => setSeries(event.target.value)} placeholder="例如：单步工具" /></label>{error && <p className="sf-error">{error}</p>}<div className="sf-step-actions"><button className="sf-primary" disabled={busy || !title.trim()} onClick={() => { void createProject().then(created => { if (created) { setNewProjectOpen(false); setScreen('wizard'); } }); }}>{busy ? '创建中…' : '创建项目'}</button></div></div></div>}
-    {screen === 'wizard' && <Wizard step={step} tool={tool} projectReady={Boolean(projectId)} projectTitle={projectTitle} onStep={next => { setTool(null); setStep(next); }} onTool={setTool} onHome={home}>
+    {screen === 'series' && <SeriesResources series={activeSeries} episodes={projects.filter(project => project.series === activeSeries)} onBack={() => setScreen('home')} onOpen={id => void openProject(id)} />}
+        {screen === 'wizard' && <Wizard step={step} tool={tool} projectReady={Boolean(projectId)} projectTitle={projectTitle} onStep={next => { setTool(null); setStep(next); }} onTool={setTool} onHome={home}>
       {tool && projectId ? <Suspense fallback={<div className="sf-center"><LoaderCircle className="sf-spin" size={20} /><p>正在载入工具…</p></div>}><ToolPage tool={tool} projectId={projectId} plan={plan} projectDetail={projectDetail} postTab={postTab} setPostTab={setPostTab} onStep={next => { setTool(null); setStep(next); }} onRefreshPlan={refreshPlan} onRefreshProject={refreshProject} onOpenShot={openShot} onBrowse={() => setTool('materials')} /></Suspense> : <>
       {step === 2 && <StepTwo presets={presets} selected={presetId} setSelected={setPresetId} busy={busy} error={error} onNext={() => void installPreset()} />}
       {step === 3 && <StepThree segments={plan?.segments || []} planRevision={plan?.revision ?? 0} prompt={prompt} setPrompt={setPrompt} duration={shotDuration} setDuration={setShotDuration} onAdd={() => void addShot()} busy={busy} error={error} onNext={() => setStep(4)} />}

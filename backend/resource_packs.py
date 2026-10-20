@@ -425,6 +425,24 @@ def get_pack(series: str, pack_id: str) -> dict[str, Any]:
     return {'series': series, 'pack': document}
 
 
+def asset_file(series: str, pack_id: str, asset_id: str) -> Path:
+    """Resolve one asset file inside a pack without accepting arbitrary paths."""
+    backend, _, context = _require_context()
+    _series_directory(context, series)
+    pack_dir, document = _read_pack(context, series, _pack_identifier(pack_id))
+    asset = next((item for item in document.get('assets', []) if item.get('asset_id') == asset_id), None)
+    if asset is None:
+        raise HTTPException(404, '资源包中不存在此资产')
+    relative = str(asset.get('media_ref') or '')
+    if not relative or PurePosixPath(relative).is_absolute() or '..' in PurePosixPath(relative).parts:
+        raise HTTPException(409, '资源包资产路径无效')
+    path = context.path(pack_dir / relative)
+    assets_root = context.path(pack_dir / ASSETS_DIRECTORY)
+    if not path.is_file() or not path.is_relative_to(assets_root):
+        raise HTTPException(404, '资源包资产不可读')
+    return path
+
+
 def create_pack(series: str, *, pack_id: str | None, kind: str, title: str) -> dict[str, Any]:
     _, _, context = _require_context()
     if kind not in PACK_KINDS:

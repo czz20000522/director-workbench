@@ -2783,6 +2783,7 @@ from .routers.resource_packs import (
     list_series_resource_packs,
     publish_series_resource_pack,
     read_series_resource_pack,
+    read_series_resource_pack_asset,
 )
 
 

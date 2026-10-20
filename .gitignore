@@ -432,3 +432,4 @@
 !/backend/continuity_transfer.py
 !/backend/routers/continuity_transfer.py
 !/tests/test_continuity_transfer.py
+!/src/SeriesResources.tsx

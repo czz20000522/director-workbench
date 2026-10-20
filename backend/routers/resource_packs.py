@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from fastapi import APIRouter
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from .. import resource_packs
@@ -57,6 +58,12 @@ def add_series_resource_pack_asset(
         media_ref=request.media_ref,
         asset_id=request.asset_id,
     )
+
+
+@ROUTER.get('/api/series/{series}/resource-packs/{pack_id}/assets/{asset_id}')
+def read_series_resource_pack_asset(series: str, pack_id: str, asset_id: str) -> FileResponse:
+    path = resource_packs.asset_file(series, pack_id, asset_id)
+    return FileResponse(path)
 
 
 @ROUTER.post('/api/series/{series}/resource-packs/{pack_id}/publish')

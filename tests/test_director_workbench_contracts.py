@@ -45,7 +45,7 @@ def _openapi_contract_snapshot() -> dict[str, object]:
 def test_openapi_route_and_schema_snapshot() -> None:
     snapshot = _openapi_contract_snapshot()
     encoded = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
-    assert hashlib.sha256(encoded).hexdigest() == "eae15d74b9679cbe0d22094014861209bd9064b6e236e12fc63fb307bd6d8d2a"
+    assert hashlib.sha256(encoded).hexdigest() == "8c8b6aad3324fe6ddd98d3283436459199f6fa5a7968304c1357a0a32d5dca57"
     assert {"StartRequest", "AssemblyRequest", "ProjectCreateRequest"} <= set(snapshot["schemas"])
 
 
@@ -591,5 +591,6 @@ def test_published_motion_duration_contract_matches_the_h3_range() -> None:
         served = next(spec for spec in production_presets.input_specs(preset_id) if spec["id"] == "duration")
         assert (served["min"], served["max"]) == (declared["min"], declared["max"]), preset_id
         assert served["description"] == declared["description"], preset_id
+
 
 
