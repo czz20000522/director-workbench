@@ -3748,6 +3748,7 @@ app.include_router(_workbench_status_router)
 from .routers.workbench_status import (
     health,
     mark_orphans,
+    model_catalog,
     pipeline,
     pipeline_contract,
     pipeline_control,
@@ -3766,6 +3767,24 @@ from .routers.workbench_status import (
     validate_pipeline,
     validate_pipeline_values,
     validate_project_pipeline,
+)
+
+
+# 项目恢复计划已拆到 backend/routers/recovery.py。
+# 只读事实，不自动重试、不自动采用、不自动装配。
+from .routers.recovery import ROUTER as _recovery_router
+app.include_router(_recovery_router)
+from .recovery import build_resume_plan
+from .routers.recovery import project_resume_plan
+
+
+# 分镜局部重做合同已拆到 backend/routers/refinement.py。
+# 只登记显式重做请求；第一版不提交生成、不改计划、不自动采用。
+from .routers.refinement import ROUTER as _refinement_router
+app.include_router(_refinement_router)
+from .routers.refinement import (
+    create_refinement,
+    refinement_capability,
 )
 
 
@@ -3822,6 +3841,25 @@ from .routers.task_media import (
     start_media_operation,
     start_speech_task,
     validate_creative_prompt,
+)
+
+
+# 音频响度分析与归一候选已拆到 backend/routers/audio_delivery.py。
+# 放在 task_media 再导出之后，保证 backend.audio_edit_source 已可用。
+from .routers.audio_delivery import ROUTER as _audio_delivery_router
+app.include_router(_audio_delivery_router)
+from .routers.audio_delivery import (
+    get_project_audio_analysis,
+    normalize_project_audio,
+)
+
+
+# 2K/4K 交付超分候选已拆到 backend/routers/delivery_upscale.py。
+from .routers.delivery_upscale import ROUTER as _delivery_upscale_router
+app.include_router(_delivery_upscale_router)
+from .routers.delivery_upscale import (
+    start_upscale_task,
+    upscale_capability,
 )
 
 

@@ -12,7 +12,7 @@ description: 通过用户给出的导演工作台 URL 和本人凭据，使用�
 ## 版本与合同快照
 
 - Skill 版本：`1.1.0`（2026-10-19）。
-- 合同快照：远程 MCP 固定开放 **61** 个工具；本机 stdio 全量 **68** 个工具；远程固定名单见[附录 A](#附录-a远程-mcp-工具清单61)，仅本机工具见[附录 B](#附录-b仅本机-stdio-的-7-个工具)。
+- 合同快照：远程 MCP 固定开放 **68** 个工具；本机 stdio 全量 **75** 个工具；远程固定名单见[附录 A](#附录-a远程-mcp-工具清单68)，仅本机工具见[附录 B](#附录-b仅本机-stdio-的-7-个工具)。
 - 工具数量、名称或关键合同变化时，必须同步更新本版本号、附录和 `mcp_server/README.md`、`docs/public-api-guide.md`，不能只改实现。
 - 工作台当前只注册 MCP **tools**，没有注册 MCP **resources** 或 **prompts**。因此不能通过 MCP 资源接口拉取本 Skill；这是当前限制，不是“已支持”。本 Skill 由仓库或公开源代码快照分发。
 
@@ -67,7 +67,7 @@ description: 通过用户给出的导演工作台 URL 和本人凭据，使用�
 
 ### 1.6 工具发现与 schema
 
-- 对远程 MCP：初始化后调用 `tools/list`，读取实际工具名和 `input_schema`（JSON Schema object）。本版本远程 61 个，名称见附录 A。
+- 对远程 MCP：初始化后调用 `tools/list`，读取实际工具名和 `input_schema`（JSON Schema object）。本版本远程 68 个，名称见附录 A。
 - 对 HTTP：认证后读取 `GET /openapi.json`，以当前部署的路径、参数和枚举为准；服务没有匿名发现入口。
 - MCP 工具上的 `read_only_hint`、`idempotent_hint` 等 annotations 只是客户端提示，不是授权；服务端仍会校验账号、作品归属、版本和状态。`idempotent_hint=true` 只表示能用同一 `idempotency_key` 和相同参数重放并找回原记录；无键写入仍要未知回执先核对。
 - 业务结果只有两种形状：成功 `{ok: true, data: ...}`；失败为 `isError=true` 且同一次调用带结构化 `{ok: false, error: ...}`。`error` 必含 `code`、`message`、`kind`、`retryable`；`kind` 为 `business`（HTTP 业务拒绝，含 `http_status`/`detail`）、`argument`（适配器参数/语义错误）、`transport`（读取暂时失败可重试）或 `outcome_unknown`（写入结果未知，先核对）。MCP 传输成功不代表业务成功。
@@ -386,7 +386,7 @@ description: 通过用户给出的导演工作台 URL 和本人凭据，使用�
 结论：PASS / FAIL / NOT_RUN
 ```
 
-## 附录 A：远程 MCP 工具清单（61）
+## 附录 A：远程 MCP 工具清单（68）
 
 以下为 2026-10-19 代码快照的固定远程名单；服务端 `tools/list` 为最终权威。所有远程工具都通过同一 Bearer 和既有 HTTP 业务路由执行。
 
@@ -397,6 +397,10 @@ description: 通过用户给出的导演工作台 URL 和本人凭据，使用�
 **模型（1）**
 
 `list_models`
+
+**恢复与交付（7）**
+
+`plan_resume`、`analyze_audio`、`normalize_audio`、`get_upscale_capability`、`submit_upscale`、`get_refinement_capability`、`submit_refinement`
 
 **参考（14）**
 

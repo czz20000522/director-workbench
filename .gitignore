@@ -404,3 +404,16 @@
 !/src/QuickTools.tsx
 
 !/tests/test_model_catalog.py
+!/backend/refinement.py
+!/backend/routers/refinement.py
+!/tests/test_shot_refinement.py
+!/backend/recovery.py
+!/backend/routers/recovery.py
+!/tests/test_recovery_plan.py
+!/backend/audio_normalization.py
+!/backend/routers/audio_delivery.py
+!/tests/test_audio_normalization.py
+!/backend/delivery_upscale.py
+!/backend/routers/delivery_upscale.py
+!/tests/test_delivery_upscale.py
+!/mcp_server/tools_delivery.py

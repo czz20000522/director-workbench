@@ -43,6 +43,9 @@ REMOTE_TOOLS = (
     'list_media', 'get_media_url', 'download_media',
     'submit_audio_edit', 'submit_audio_master', 'get_media_capability', 'create_silence',
     'inspect_video', 'transcribe_audio', 'export_silent_video',
+    # Recovery, audio normalization, delivery upscale and shot refinement.
+    'plan_resume', 'analyze_audio', 'normalize_audio', 'get_upscale_capability',
+    'submit_upscale', 'get_refinement_capability', 'submit_refinement',
 )
 
 

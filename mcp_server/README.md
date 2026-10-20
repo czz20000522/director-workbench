@@ -12,7 +12,7 @@ MCP 是工作台 HTTP 业务的薄适配。账号权限、版本检查、任务�
 
 服务器使用已固定的 `mcp==2.2.0`，远程接口为 stateless、JSON 响应，生命周期由私人工作台进程管理。首批支持可配置 Bearer 的 Streamable HTTP 客户端；没有 OAuth 登录发现，只能 OAuth 且不能配置现有 Bearer 的宿主尚未支持。远程客户端无需 Windows Python 或 SSH 管理员凭据。服务仍使用维护者已配置的私人网络或隧道。
 
-**远程工具范围：**当前远程入口由 [remote_mcp.py](../backend/remote_mcp.py) 的固定名单过滤，开放 **61** 个工具；本机 stdio 全量工具为 **68** 个。远程工具按能力覆盖：
+**远程工具范围：**当前远程入口由 [remote_mcp.py](../backend/remote_mcp.py) 的固定名单过滤，开放 **75** 个工具；本机 stdio 全量工具为 **68** 个。远程工具按能力覆盖：
 
 - 作品、剧本、计划、分镜、素材复用、审核、预检、队列/任务/历史、请求停止与原键回执；
 - 参考拆解的列表/详情、从已上传素材或 base64 内容登记参考、显式范围/采样/音频观察、ASR、模型观察与回执、校订和转制作草案；
@@ -85,7 +85,7 @@ stdio 供服务器本机客户端或主动诊断使用，需要项目 Python 环
 - `create_project` 必须显式传 `creation_mode="advanced"`；`preflight` 必须传实际 `stage_id`；`create_shot`／`update_shot` 可传 `workflow` 或已安装的 `preset_id`。自动方案、`stage_id="auto"` 和 `generation.mode` 已移除；缺省或未安装时 HTTP 返回结构化阻塞和可选项，不写计划。`read_project` 的 `section:"state"` 返回同一准备度（无显式方案时为 `stage_required`/`recipe_unresolved` 并带显式方案事实），`section:"reusable-templates"` 返回 `available_templates` 事实清单，不含 `recommended` 或默认选择。
 - `submit_shot` 必须显式提供 `asset_id`；`submit_batch` 必须提供至少一个 `asset_ids`，不会隐式选择默认或全部分镜。分镜还必须绑定明确 workflow/制作方案，缺失时 HTTP 返回结构化 `workflow_required` blocker。`approve_candidate` 需要真实候选、当前计划/审核版本、非空说明和严格布尔 `confirm_adoption=true`。任务成功或技术检查不自动批准画面、音色、表演、采用或交付；明确采用也不表示用户亲自验收。
 
-可分发创作 Skill 位于 [director-workbench/SKILL.md](../.agents/skills/director-workbench/SKILL.md)。它描述外部 Agent 从认证到交付的执行阶段、必须询问用户的选择、显式方案/采用边界、错误/分页/长任务处理和最小验收清单，不含凭据或服务器部署地址。外部客户端从公开源代码快照或维护者提供的 Skill 目录取得该文件，按自己的项目级/用户级 Skill 机制安装；工作台不会自动写入任何客户端目录。当前 MCP 服务只注册 tools，没有注册 resources 或 prompts，因此不能通过 MCP 资源接口拉取 Skill；这是当前限制。Skill 版本与远程/全量工具数量会随合同更新，当前快照为远程 61 / stdio 68。
+可分发创作 Skill 位于 [director-workbench/SKILL.md](../.agents/skills/director-workbench/SKILL.md)。它描述外部 Agent 从认证到交付的执行阶段、必须询问用户的选择、显式方案/采用边界、错误/分页/长任务处理和最小验收清单，不含凭据或服务器部署地址。外部客户端从公开源代码快照或维护者提供的 Skill 目录取得该文件，按自己的项目级/用户级 Skill 机制安装；工作台不会自动写入任何客户端目录。当前 MCP 服务只注册 tools，没有注册 resources 或 prompts，因此不能通过 MCP 资源接口拉取 Skill；这是当前限制。Skill 版本与远程/全量工具数量会随合同更新，当前快照为远程 68 / stdio 68。
 
 ## 验证与反馈
 

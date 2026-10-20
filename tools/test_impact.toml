@@ -114,6 +114,11 @@ tests = [
   "tests/test_static_ui.py",
   "tests/test_public_source.py",
   "tests/test_model_catalog.py",
+  "tests/test_recovery_plan.py",
+  "tests/test_audio_normalization.py",
+  "tests/test_delivery_upscale.py",
+  "tests/test_shot_refinement.py",
+  "tests/test_backend_module_split.py",
 ]
 
 # ---------------------------------------------------------------------------
@@ -276,6 +281,26 @@ tests = [
 browser = [
   "tests/media_tools_panel.browser.mjs",
   "tests/media_qc.browser.mjs",
+]
+
+[[mapping]]
+name = "recovery-and-delivery"
+paths = [
+  "backend/recovery.py",
+  "backend/routers/recovery.py",
+  "backend/audio_normalization.py",
+  "backend/routers/audio_delivery.py",
+  "backend/delivery_upscale.py",
+  "backend/routers/delivery_upscale.py",
+  "backend/refinement.py",
+  "backend/routers/refinement.py",
+  "mcp_server/tools_delivery.py",
+]
+tests = [
+  "tests/test_recovery_plan.py",
+  "tests/test_audio_normalization.py",
+  "tests/test_delivery_upscale.py",
+  "tests/test_shot_refinement.py",
 ]
 
 [[mapping]]
