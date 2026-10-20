@@ -259,10 +259,14 @@ def _prepare_payload(project_id: str, manifest: dict[str, Any], request: Deliver
         raise UpscaleError('unknown_method', f'方法必须是 {", ".join(METHODS)}')
     target = target_dimensions(int(source['facts']['width']), int(source['facts']['height']),
                                request.target_resolution)
+    backend = _backend()
+    principal = backend.current_principal.get()
+    owner_user = principal.identity.username if principal is not None else None
     return {
         'kind': 'delivery_upscale',
         'asset_id': f'UP-{task_id[:8]}',
         'project_id': project_id,
+        'owner_user': owner_user,
         'workspace_root': str(manifest['workspace_root']),
         'source': _source_record(source),
         'target': target,
