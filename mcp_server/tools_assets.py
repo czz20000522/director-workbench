@@ -59,6 +59,29 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         return await request('GET', project_path(project_id) + '/resource-packs')
 
     @server.tool(annotations=read_only)
+    async def get_segment_resources(project_id: str, segment_id: str) -> dict[str, Any]:
+        """读取分镜已绑定的角色/场景/声音资源包；只读，不生成。"""
+        return await request('GET', project_path(project_id) + '/segments/' + path_id(segment_id, '镜头') + '/resources')
+
+    @server.tool(annotations=write_record)
+    async def bind_segment_resources(project_id: str, segment_id: str,
+                                     character_pack_ids: list[str] | None = None,
+                                     scene_pack_id: str | None = None,
+                                     sound_pack_id: str | None = None,
+                                     asset_ids: list[str] | None = None) -> dict[str, Any]:
+        """显式绑定资源包到分镜；不自动生成、不自动使用首帧。"""
+        return await request('PUT', project_path(project_id) + '/segments/' + path_id(segment_id, '镜头') + '/resources',
+                             json={'character_pack_ids': character_pack_ids or [],
+                                   'scene_pack_id': scene_pack_id, 'sound_pack_id': sound_pack_id,
+                                   'asset_ids': asset_ids or []})
+
+    @server.tool(annotations=write_record)
+    async def use_segment_resource_frame(project_id: str, segment_id: str, pack_id: str, asset_id: str) -> dict[str, Any]:
+        """把已发布资源包图片设为分镜首帧；不提交生成、不改采用。"""
+        return await request('POST', project_path(project_id) + '/segments/' + path_id(segment_id, '镜头') + '/use-resource-frame',
+                             json={'pack_id': pack_id, 'asset_id': asset_id})
+
+    @server.tool(annotations=read_only)
     async def get_task_recovery_plan() -> dict[str, Any]:
         """读取 ownerless needs_reconcile 恢复计划；管理员/本机只读，不自动处置。"""
         return await request('GET', '/api/admin/tasks/recovery-plan')
@@ -104,3 +127,22 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
         if audio_asset_id is not None:
             body['audio_asset_id'] = audio_asset_id
         return await request('POST', project_path(project_id) + '/audio/extract', json=body)
+
+    @server.tool(annotations=write_record)
+    async def start_multiref_task(project_id: str, segment_id: str,
+                                  reference_asset_ids: list[str],
+                                  prompt: Annotated[str, Field(min_length=1, max_length=20000)],
+                                  duration_seconds: Annotated[float, Field(ge=4, le=15)],
+                                  aspect_ratio: Annotated[str, Field(min_length=1, max_length=8)] = '16:9',
+                                  scene_asset_id: Annotated[str | None, Field(max_length=160)] = None,
+                                  seed: Annotated[int, Field(ge=0, le=4294967295)] = 42) -> dict[str, Any]:
+        """提交 H3 多参考图任务；参考图必须显式给出，不自动选择，不自动采用。"""
+        return await request('POST', project_path(project_id) + '/multiref-tasks', json={
+            'segment_id': segment_id, 'reference_asset_ids': reference_asset_ids,
+            'scene_asset_id': scene_asset_id, 'prompt': prompt,
+            'duration_seconds': duration_seconds, 'aspect_ratio': aspect_ratio, 'seed': seed})
+
+    @server.tool(annotations=read_only)
+    async def get_multiref_task(project_id: str, task_id: str) -> dict[str, Any]:
+        """读取多参考图任务回执；不提交、不重试。"""
+        return await request('GET', project_path(project_id) + '/multiref-tasks/' + path_id(task_id, '任务'))

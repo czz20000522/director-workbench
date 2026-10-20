@@ -123,6 +123,9 @@ tests = [
   "tests/test_queue_recovery.py",
   "tests/test_continuity_transfer.py",
   "tests/test_audio_asset.py",
+  "tests/test_multiref_recipe.py",
+  "tests/test_multiref_tasks.py",
+  "tests/test_resource_bindings.py",
 ]
 
 # ---------------------------------------------------------------------------
@@ -288,6 +291,17 @@ browser = [
 ]
 
 [[mapping]]
+name = "multiref-and-bindings"
+paths = [
+  "backend/multiref_recipe.py",
+  "backend/multiref_tasks.py",
+  "backend/routers/multiref_tasks.py",
+  "backend/resource_bindings.py",
+  "backend/routers/resource_bindings.py",
+]
+tests = ["tests/test_multiref_recipe.py", "tests/test_multiref_tasks.py", "tests/test_resource_bindings.py"]
+
+[[mapping]]
 name = "resource-packs-and-recovery"
 paths = [
   "backend/resource_packs.py",
@@ -305,6 +319,9 @@ tests = [
   "tests/test_queue_recovery.py",
   "tests/test_continuity_transfer.py",
   "tests/test_audio_asset.py",
+  "tests/test_multiref_recipe.py",
+  "tests/test_multiref_tasks.py",
+  "tests/test_resource_bindings.py",
 ]
 
 [[mapping]]

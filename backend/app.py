@@ -2787,6 +2787,16 @@ from .routers.resource_packs import (
 )
 
 
+# 分镜资源包绑定已拆到 backend/routers/resource_bindings.py。
+from .routers.resource_bindings import ROUTER as _resource_bindings_router
+app.include_router(_resource_bindings_router)
+from .routers.resource_bindings import (
+    bind_segment_resources,
+    read_segment_resources,
+    use_segment_resource_frame,
+)
+
+
 # 作品目录与选择领域已拆到 backend/routers/project_catalog.py。
 # 下面两行必须留在原位置：路由注册顺序决定 /api/... 的匹配结果。
 from .routers.project_catalog import ROUTER as _project_catalog_router
@@ -3896,6 +3906,12 @@ from .routers.audio_delivery import (
 from .routers.audio_asset import ROUTER as _audio_asset_router
 app.include_router(_audio_asset_router)
 from .routers.audio_asset import extract_project_audio, list_project_audio_assets
+
+
+# 多参考图任务已拆到 backend/routers/multiref_tasks.py。
+from .routers.multiref_tasks import ROUTER as _multiref_tasks_router
+app.include_router(_multiref_tasks_router)
+from .routers.multiref_tasks import get_multiref_task, start_multiref_task
 
 
 # 2K/4K 交付超分候选已拆到 backend/routers/delivery_upscale.py。
