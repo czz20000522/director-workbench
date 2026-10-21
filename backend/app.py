@@ -3914,6 +3914,11 @@ from .routers.multiref_tasks import ROUTER as _multiref_tasks_router
 app.include_router(_multiref_tasks_router)
 from .routers.multiref_tasks import get_multiref_task, start_multiref_task
 
+# 对白镜头：语音生成与 H3 音频条件是同一条任务内的两个阶段。
+from .routers.dialogue_shots import ROUTER as _dialogue_shots_router
+from .routers.dialogue_shots import get_dialogue_shot, start_dialogue_shot
+app.include_router(_dialogue_shots_router)
+
 
 # 2K/4K 交付超分候选已拆到 backend/routers/delivery_upscale.py。
 from .routers.delivery_upscale import ROUTER as _delivery_upscale_router

@@ -313,15 +313,18 @@ if (Test-TcpPort '127.0.0.1' $WorkbenchPort) {
     $previousCookieSecure = $env:DIRECTOR_COOKIE_SECURE
     $previousMcpHosts = $env:DIRECTOR_MCP_ALLOWED_HOSTS
     $previousMcpOrigins = $env:DIRECTOR_MCP_ALLOWED_ORIGINS
+    $previousIndexTts = $env:DIRECTOR_INDEX_TTS_HOME
     try {
         if ($secureCookie) { $env:DIRECTOR_COOKIE_SECURE = '1' } else { Remove-Item Env:DIRECTOR_COOKIE_SECURE -ErrorAction SilentlyContinue }
         if ($mcpAllowedHosts) { $env:DIRECTOR_MCP_ALLOWED_HOSTS = $mcpAllowedHosts } else { Remove-Item Env:DIRECTOR_MCP_ALLOWED_HOSTS -ErrorAction SilentlyContinue }
         if ($mcpAllowedOrigins) { $env:DIRECTOR_MCP_ALLOWED_ORIGINS = $mcpAllowedOrigins } else { Remove-Item Env:DIRECTOR_MCP_ALLOWED_ORIGINS -ErrorAction SilentlyContinue }
+        if (-not $env:DIRECTOR_INDEX_TTS_HOME) { $env:DIRECTOR_INDEX_TTS_HOME = 'D:\Comfy-Desktop\ComfyUI-Shared\tools\index-tts' }
         $workbenchProcess = Start-Process -FilePath 'pwsh.exe' -ArgumentList $arguments -WorkingDirectory $projectRoot -WindowStyle Hidden -PassThru
     } finally {
         if ($null -ne $previousCookieSecure) { $env:DIRECTOR_COOKIE_SECURE = $previousCookieSecure } else { Remove-Item Env:DIRECTOR_COOKIE_SECURE -ErrorAction SilentlyContinue }
         if ($null -ne $previousMcpHosts) { $env:DIRECTOR_MCP_ALLOWED_HOSTS = $previousMcpHosts } else { Remove-Item Env:DIRECTOR_MCP_ALLOWED_HOSTS -ErrorAction SilentlyContinue }
         if ($null -ne $previousMcpOrigins) { $env:DIRECTOR_MCP_ALLOWED_ORIGINS = $previousMcpOrigins } else { Remove-Item Env:DIRECTOR_MCP_ALLOWED_ORIGINS -ErrorAction SilentlyContinue }
+        if ($null -ne $previousIndexTts) { $env:DIRECTOR_INDEX_TTS_HOME = $previousIndexTts } else { Remove-Item Env:DIRECTOR_INDEX_TTS_HOME -ErrorAction SilentlyContinue }
     }
     Wait-TcpPort '127.0.0.1' $WorkbenchPort 30 '导演工作台' $workbenchProcess
     $null = Invoke-RestMethod -Uri "http://127.0.0.1:$WorkbenchPort/api/auth/config" -TimeoutSec 5

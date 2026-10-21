@@ -45,7 +45,7 @@ def _openapi_contract_snapshot() -> dict[str, object]:
 def test_openapi_route_and_schema_snapshot() -> None:
     snapshot = _openapi_contract_snapshot()
     encoded = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
-    assert hashlib.sha256(encoded).hexdigest() == "91d69e2ffa9ccdaf9b7028af7e5047a3a5bc75786d328e32d8d6087373eace69"
+    assert hashlib.sha256(encoded).hexdigest() == "b9e26f8dc0d1695207405e7cc4e1254d534d93dfde8015cbccee7083524f4fff"
     assert {"StartRequest", "AssemblyRequest", "ProjectCreateRequest"} <= set(snapshot["schemas"])
 
 

@@ -43,9 +43,12 @@
 !/backend/routers/gpu_idle.py
 !/backend/routers/queue_scheduler.py
 !/backend/routers/events_media.py
+!/backend/routers/dialogue_shots.py
 !/backend/assembly_continuity.py
 !/backend/assembly_continuity_check.py
 !/backend/audio_master_tasks.py
+!/backend/dialogue_shot_recipe.py
+!/backend/dialogue_shot_tasks.py
 !/contracts/
 /contracts/*
 !/docs/
@@ -81,6 +84,7 @@
 !/tools/
 /tools/*
 !/tools/qwen_image_t2i.py
+!/tools/index_tts_generate.py
 # Test-impact selection: the tool, its impact map and their contract tests. The map
 # names only repository-relative public paths.
 !/tools/select_tests.py
@@ -222,6 +226,7 @@
 !/tests/test_creative_inspection.py
 !/tests/test_creative_template.py
 !/tests/test_director_workbench_contracts.py
+!/tests/test_dialogue_shots.py
 !/tests/test_first_frame_preset.py
 !/tests/test_generate_auk_flash.py
 !/tests/test_generate_speech.py
