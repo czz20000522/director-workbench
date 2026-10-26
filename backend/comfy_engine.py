@@ -37,7 +37,9 @@ def launch_command() -> tuple[Path, list[str], Path]:
         raise RuntimeError(f"找不到本地 ComfyUI：{python}")
     arguments = [
         "-s", "ComfyUI\\main.py",
-        "--windows-standalone-build", "--offline", "--reserve-vram", "1.0",
+        # --windows-standalone-build 默认会顺带在系统浏览器里打开 ComfyUI 页面；
+        # 工作台自己在用 8188，不需要再弹一个网页出来。
+        "--windows-standalone-build", "--disable-auto-launch", "--offline", "--reserve-vram", "1.0",
     ]
     return python, arguments, home
 
