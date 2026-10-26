@@ -36,8 +36,8 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictInt, field_validator, model_validator
-from . import production_presets, background_jobs, speech, keyframes, audio_edit_tasks, audio_master_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, assembly_continuity, assembly_continuity_check, guide, readiness, task_scheduler, creative_inspection
-from . import output_resolution, enhancement, task_store, media_refs
+from . import production_presets, background_jobs, speech, dubbing, vlm, music, creative_settings, keyframes, audio_edit_tasks, audio_master_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, assembly_continuity, assembly_continuity_check, guide, readiness, task_scheduler, creative_inspection
+from . import output_resolution, enhancement, task_store, media_refs, comfy_progress, comfy_engine, quality_intent
 import av
 import paths
 from . import queue_recovery
@@ -59,6 +59,8 @@ from .workbench_config import (
     RENDERER,
     TEMPLATE,
     STORAGE_ROOTS,
+    ASSETS_ROOT,
+    WORKS_ARCHIVE_ROOT,
     INPUT_ROOT,
     OUTPUT_ROOT,
     FINISH_BUILDER,
@@ -367,6 +369,12 @@ def registered_candidate(value: str | Path) -> Path:
             candidate = SHARED_ROOT / text[len('ComfyUI-Shared/'):]
         elif text.startswith('ComfyUI-'):
             candidate = COMFY_ROOT / text
+        elif text == 'workspaces' or text.startswith('workspaces/'):
+            # root_relative_path emits workspaces paths relative to the data root,
+            # so the inverse mapping must land on the configured workspaces root.
+            candidate = DIRECTOR_WORKSPACES_ROOT / text[len('workspaces/'):].lstrip('/')
+        elif text == '素材库' or text.startswith('素材库/'):
+            candidate = ASSETS_ROOT / text[len('素材库/'):].lstrip('/')
         else:
             candidate = SHARED_ROOT / text
     if not paths.storage_config(ROOT).is_file():
@@ -374,6 +382,8 @@ def registered_candidate(value: str | Path) -> Path:
     return relocate_asset(candidate, ROOT, {
         'input': INPUT_ROOT, 'output': OUTPUT_ROOT, 'workspaces': DIRECTOR_WORKSPACES_ROOT,
         'private': PRIVATE_WORKSPACES.layout.root if PRIVATE_WORKSPACES else STORAGE_ROOTS['private'],
+        'assets': ASSETS_ROOT,
+        'works_archive': WORKS_ARCHIVE_ROOT,
     }, shared_root=SHARED_ROOT)
 
 
@@ -383,7 +393,7 @@ def resolve_registered_path(value: str | Path) -> Path:
     if PRIVATE_WORKSPACES is not None and current_principal.get() is not None:
         return PRIVATE_WORKSPACES.file(candidate)
     resolved = candidate.resolve()
-    allowed = [INPUT_ROOT.resolve(), OUTPUT_ROOT.resolve(), PROJECT.resolve(), DIRECTOR_WORKSPACES_ROOT.resolve()]
+    allowed = [INPUT_ROOT.resolve(), OUTPUT_ROOT.resolve(), PROJECT.resolve(), DIRECTOR_WORKSPACES_ROOT.resolve(), ASSETS_ROOT.resolve()]
     allowed.extend(destination for _, destination in legacy_mappings(ROOT))
     if PRIVATE_WORKSPACES is not None:
         allowed.append(PRIVATE_WORKSPACES.layout.root)
@@ -399,11 +409,18 @@ def shared_path(value: str | Path) -> Path:
 def initial_project_manifest() -> dict[str, Any]:
     catalog = load_project_catalog()
     if catalog.get("default_project_id") or os.environ.get("DIRECTOR_PROJECT_ID"):
-        return load_project_manifest()
+        try:
+            manifest = load_project_manifest()
+            # 登记的默认作品可能属于另一台机器/另一个数据根；导入不能因此崩溃。
+            shared_path(str(manifest["plan_path"]))
+            return manifest
+        except (RuntimeError, ValueError, OSError) as exc:
+            LOGGER.warning('默认作品路径不可用，按未选作品启动: %s', exc)
     # No catalog, plan, work directory or sample media is created by importing.
     return {"id": "", "title": "", "plan_path": str(PROJECT / "runtime/unselected-plan.json")}
 
 
+LOGGER = logging.getLogger("director.app")
 CURRENT_PROJECT = initial_project_manifest()
 CURRENT_PROJECT_ID = str(CURRENT_PROJECT["id"])
 PLAN_PATH = shared_path(str(CURRENT_PROJECT["plan_path"]))
@@ -486,7 +503,16 @@ def project_entries() -> list[dict[str, Any]]:
 
 
 def unique_project_id(requested: str, existing: set[str] | None = None) -> str:
-    value = "".join(char if char.isalnum() or char in "-_" else "-" for char in requested).strip("-")[:80] or "new-project"
+    # user_context.identifier() only accepts ASCII [A-Za-z0-9_-], so a Chinese title must
+    # not reach the id; the readable label is directory_label()'s job, the hash keeps
+    # distinct titles from colliding once their non-ASCII characters are dropped.
+    if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", requested):
+        value = requested
+    else:
+        label = "".join(char if char.isascii() and (char.isalnum() or char in "-_") else "-"
+                        for char in requested).strip("-")[:60]
+        digest = hashlib.sha256(requested.encode("utf-8")).hexdigest()[:8]
+        value = f"{label or 'project'}-{digest}"[:80]
     known = existing or {str(item.get("id")) for item in project_entries()}
     if value not in known:
         return value
@@ -660,6 +686,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Director Workbench API", version="0.1.0", lifespan=lifespan)
 # Subsystems mounted onto this app append their lifespan factory here; see lifespan above.
 app.state.lifespan_subsystems = []
+# ComfyUI 只把 progress_state 回给提交方那个 clientId，所以监听身份与提交身份必须同源。
+app.state.lifespan_subsystems.append(lambda: comfy_progress.lifespan(COMFY_URL))
 
 
 @app.exception_handler(Exception)
@@ -785,6 +813,7 @@ def get_task(task_id: str) -> dict[str, Any] | None:
         PRIVATE_WORKSPACES.verify_task(task)
     if task:
         task['queue'] = TASK_SCHEDULER.queue_info(task_id)
+        task['progress'] = comfy_progress.visible_progress(task)
     return task
 
 
@@ -919,7 +948,14 @@ def resolve_workflow_path(value: str | Path) -> Path:
     candidate = Path(value)
     if not candidate.is_absolute():
         raw = str(value).replace("\\", "/")
-        candidate = ROOT / raw[len("ComfyUI-Workspace/"):] if raw.startswith("ComfyUI-Workspace/") else PROJECT / raw
+        if raw.startswith("ComfyUI-Workspace/"):
+            candidate = ROOT / raw[len("ComfyUI-Workspace/"):]
+        elif raw == "workspaces" or raw.startswith("workspaces/"):
+            # Keep it relative: registered_candidate() owns the alias onto the
+            # configured workspaces root, so the mapping lives in exactly one place.
+            candidate = Path(raw)
+        else:
+            candidate = PROJECT / raw
     candidate = registered_candidate(candidate)
     if PRIVATE_WORKSPACES is not None and current_principal.get() is not None:
         resolved = PRIVATE_WORKSPACES.file(candidate)
@@ -1153,13 +1189,16 @@ def prepare_pipeline_payload(payload: dict[str, Any], stage_id: str, values: dic
     prepared["executed_prompt"] = executed_prompt
     if 'segment' in locals() and isinstance(segment, dict):
         settings = segment.get('generation') or {}
-        resolution = settings.get('output_resolution', 'native')
+        # 提示词里写明的画质优先于生成设置；视频 8K 会显式限到 4K 并记录原因。
+        resolution, quality = quality_intent.resolve(executed_prompt, settings.get('output_resolution', 'native'), video=True)
         if resolution != 'native':
             try:
                 output_resolution.require_available(resolution)
             except ValueError as exc:
                 raise HTTPException(422, str(exc)) from exc
             prepared['output_size'] = {'resolution': resolution, 'aspect_ratio': settings.get('aspect_ratio', '16:9')}
+        if quality:
+            prepared['quality_intent'] = quality
     prepared["_graph_bindings"] = bindings
     if h3_preset_id:
         prepared['h3_duration'] = {
@@ -1274,7 +1313,7 @@ def freeze_task_payload(payload: dict[str, Any], *, project_id: str) -> dict[str
     return frozen
 
 
-def history_done(prompt_id: str, *, include_images: bool = False) -> dict[str, Any] | None:
+def history_done(prompt_id: str, *, include_images: bool = False, audio: bool = False) -> dict[str, Any] | None:
     try:
         history = request_json(f"/history/{prompt_id}")
     except (OSError, ValueError, HTTPError, URLError):
@@ -1287,14 +1326,18 @@ def history_done(prompt_id: str, *, include_images: bool = False) -> dict[str, A
         return None
     outputs: list[str] = []
     for output in entry.get("outputs", {}).values():
-        for item in output.get("images", []):
+        # SaveAudio/SaveAudioMP3 report under "audio"; image and video nodes
+        # report under "images". Only the requested media kind is collected.
+        items = [item for key in (('audio', 'images') if audio else ('images',)) for item in output.get(key, [])]
+        for item in items:
             # ComfyUI exposes loaded input videos as images too. Only record
             # saved output artifacts when the node supplies an explicit type;
             # this keeps an assembly task from mistaking S01 input for its
             # resulting `assembly_*.mp4`.
             if item.get("type") not in {None, "output"}:
                 continue
-            extensions = (".mp4", ".webm", ".mov", ".mkv", ".png") if include_images else (".mp4", ".webm", ".mov", ".mkv")
+            extensions = music.AUDIO_SUFFIXES if audio else ((
+                ".mp4", ".webm", ".mov", ".mkv", ".png") if include_images else (".mp4", ".webm", ".mov", ".mkv"))
             if str(item.get("filename", "")).lower().endswith(extensions):
                 subfolder = str(item.get("subfolder", "")).strip("/\\")
                 outputs.append(f"{subfolder}/{item['filename']}" if subfolder else item["filename"])
@@ -1815,7 +1858,6 @@ def run_submission(task_id: str, payload: dict[str, Any]) -> None:
     _task_log(task_id, payload, "started", started)
     try:
         _check_task_timeout(task_id, payload, started)
-        set_task(task_id, status="submitting")
         first = shared_path(payload["first_frame"])
         last = shared_path(payload["last_frame"])
         guide = shared_path(payload["audio_guide"])
@@ -1824,6 +1866,9 @@ def run_submission(task_id: str, payload: dict[str, Any]) -> None:
         missing = [str(path) for path in required if not path.is_file()]
         if missing:
             raise FileNotFoundError("缺少 ComfyUI 输入或工作流: " + "; ".join(missing))
+        if comfy_engine.ensure_online().get("started"):
+            _task_log(task_id, payload, "engine_started", started)
+        set_task(task_id, status="submitting")
         command = [sys.executable, str(renderer), "submit", "--api-url", COMFY_URL,
                    "--template", str(TEMPLATE), "--prompt", payload["prompt"],
                    "--first-frame", str(first), "--last-frame", str(last),
@@ -2077,18 +2122,20 @@ def run_workflow_submission(task_id: str, payload: dict[str, Any]) -> None:
         _check_task_timeout(task_id, payload, started)
         if PRIVATE_WORKSPACES is not None:
             PRIVATE_WORKSPACES.verify_task({'project_id': payload.get('project_id'), 'payload': payload})
-        set_task(task_id, status="submitting")
         workflow_path = Path(payload["workflow"])
         if not workflow_path.is_file():
             raise FileNotFoundError(f"缺少 ComfyUI 工作流: {workflow_path}")
         graph = json.loads(workflow_path.read_text(encoding="utf-8"))
+        if comfy_engine.ensure_online().get("started"):
+            _task_log(task_id, payload, "engine_started", started)
+        set_task(task_id, status="submitting")
         # This ComfyUI installation accepts a client-provided UUID. Persist it
         # before sending so a lost HTTP response still has a lookup identity.
         prompt_id = task_id
         set_task(task_id, prompt_id=prompt_id)
         submission_attempted = True
         _task_log(task_id, payload, "submitting", started)
-        submitted = request_json("/prompt", {"prompt": graph, "prompt_id": prompt_id, "client_id": "director-workbench-assembly-v2"})
+        submitted = request_json("/prompt", {"prompt": graph, "prompt_id": prompt_id, "client_id": comfy_progress.CLIENT_WORKBENCH})
         prompt_id = submitted.get("prompt_id")
         if not prompt_id:
             raise RuntimeError(f"ComfyUI 未返回 prompt_id: {submitted}")
@@ -2107,6 +2154,7 @@ def run_workflow_submission(task_id: str, payload: dict[str, Any]) -> None:
             sample_resources(task_id)
             done = (keyframes.read_result(request_json(f'/history/{prompt_id}'), str(prompt_id), payload, OUTPUT_ROOT)
                      if payload.get('kind') == 'keyframe' else
+                     history_done(prompt_id, audio=True) if payload.get('kind') == 'music' else
                      history_done(prompt_id, include_images=True) if payload.get('pipeline_stage_id') == 'media-enhancement' else history_done(prompt_id))
             if done:
                 done = attach_h3_duration_result(done, payload)
@@ -2115,6 +2163,9 @@ def run_workflow_submission(task_id: str, payload: dict[str, Any]) -> None:
                         complete_keyframe_task(current, done)
                         return
                     done = publish_task_outputs(current, done)
+                    if payload.get('kind') == 'music':
+                        music.complete_music_task(current, done)
+                        return
                     target_plan = Path(str(payload.get("plan_path"))) if payload.get("plan_path") else PLAN_PATH
                     if payload.get('pipeline_stage_id') == 'media-enhancement':
                         set_task(task_id, result=json.dumps(done, ensure_ascii=False))
@@ -2802,6 +2853,27 @@ from .routers.resource_bindings import (
 # 下面两行必须留在原位置：路由注册顺序决定 /api/... 的匹配结果。
 from .routers.project_catalog import ROUTER as _project_catalog_router
 app.include_router(_project_catalog_router)
+from .routers.project_deletion import ROUTER as _project_deletion_router
+app.include_router(_project_deletion_router)
+# 这些名称定义在拆分模块里，模块内部与测试都以 backend.<名称> 取用，身份必须保持同一对象。
+from .routers.project_deletion import (
+    _entries, _load_plan, _plan_dir, _prune_series_directory, _purge_task_rows, _release_active_project,
+    _retire_catalog_entries, _snapshot, _task_snapshots, _workspace_of, _workspace_root,
+    deletion_apply, deletion_plan, project_dossier,
+)
+from .routers.task_queue import ROUTER as _task_queue_router
+app.include_router(_task_queue_router)
+from .routers.task_queue import (
+    _delete_blocker, _edit_blocker, _prompt_of, _rebuild_keyframe, _snapshot_files, _task_project_titles,
+    _unreferenced, delete_task, edit_task, queue_tasks, revise_task,
+)
+from .routers.quick_tasks import ROUTER as _quick_tasks_router
+app.include_router(_quick_tasks_router)
+from .routers.quick_tasks import (
+    QUICK_PROJECT_ID, QUICK_SERIES, QUICK_TITLE, QUICK_WORKSPACE_DIRECTORY, TASK_PLAN_TTL_SECONDS,
+    TOOL_LABELS, _batch_rows, _load_task_plan, ensure_quick_project, quick_prompt_excerpt, quick_task_card,
+    quick_task_list, quick_workspace, task_plan_directory, task_tool, tasks_deletion_apply, tasks_deletion_plan,
+)
 # 这些名称原本定义在 app.py 模块层，拆出后按原样再导出：
 # app.py、private_mode.py 与既有测试都以 backend.<名称> 取用它们。
 from .routers.project_catalog import (
@@ -3844,8 +3916,10 @@ app.include_router(_task_entry_router)
 # 这些名称原本定义在 app.py 模块层，拆出后按原样再导出：
 # app.py、private_mode.py 与既有测试都以 backend.<名称> 取用它们。
 from .routers.task_entry import (
+    archive_enhancement,
     build_finish_workflow_snapshot,
     describe_enhancement_result,
+    enhance_library_files,
     enhancement_capability,
     enhancement_sources,
     find_submission_task,
@@ -3871,26 +3945,66 @@ from .routers.task_media import (
     audio_edit_owner_alive,
     audio_master_owner_alive,
     audio_edit_source,
+    audio_swap_capability,
+    audio_swap_overlay,
+    complete_anchor_dubbing_task,
     complete_audio_master_task,
     complete_audio_edit_task,
+    complete_audio_swap_task,
     complete_keyframe_task,
     complete_media_operation_task,
     complete_speech_task,
+    dubbing_capability,
     keyframe_capability,
     media_capability,
     media_operation_source,
+    run_anchor_dubbing_task,
     run_audio_edit_task,
     run_audio_master_task,
+    run_audio_swap_task,
     run_media_operation_task,
     run_speech_task,
     speech_capability,
+    start_anchor_dubbing,
     start_audio_edit_task,
     start_audio_master_task,
+    start_audio_swap_task,
     start_keyframe_task,
     start_media_operation,
     start_speech_task,
     validate_creative_prompt,
 )
+
+
+# 画面观察（本机 Ollama + Qwen2.5-VL，只读）已拆到 backend/routers/vlm_tasks.py。
+from .routers.vlm_tasks import ROUTER as _vlm_tasks_router
+app.include_router(_vlm_tasks_router)
+from .routers.vlm_tasks import (
+    complete_vlm_observation_task,
+    run_vlm_observation_task,
+    start_vlm_observation,
+    vlm_capability,
+)
+
+
+# ACE-Step 配乐任务已拆到 backend/routers/music_tasks.py。
+from .routers.music_tasks import ROUTER as _music_tasks_router
+app.include_router(_music_tasks_router)
+from .routers.music_tasks import music_capability, start_music_task
+
+
+# 剧本库（草稿/归档）已拆到 backend/routers/script_library.py。
+from .routers.script_library import ROUTER as _script_library_router
+app.include_router(_script_library_router)
+from .routers.script_library import (archive_script_draft, create_script_draft, delete_script_draft,
+                                     list_script_library, update_script_draft)
+
+
+# 命名设定库与预设库（配乐/配音可复用参数、音色库/配乐库起点卡片）已拆到 backend/routers/settings_library.py。
+from .routers.settings_library import ROUTER as _settings_library_router
+app.include_router(_settings_library_router)
+from .routers.settings_library import (delete_creative_setting, delete_preset_card, list_creative_settings,
+                                       list_preset_library, save_creative_setting, save_preset_card)
 
 
 # 音频响度分析与归一候选已拆到 backend/routers/audio_delivery.py。
@@ -4052,6 +4166,11 @@ from .routers.media_access import (
     list_media,
     read_media,
 )
+
+
+# 本地提示词库与素材参考库：只读索引 + 明确点击后的素材复制。
+from .routers.reference_library import ROUTER as _reference_library_router
+app.include_router(_reference_library_router)
 
 
 class WorkbenchStaticFiles(StaticFiles):

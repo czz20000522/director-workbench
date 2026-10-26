@@ -14,7 +14,7 @@ from typing import Any
 import uuid
 from fastapi import APIRouter, HTTPException
 from urllib.error import HTTPError, URLError
-from .. import audio_edit_tasks, audio_master_tasks, background_jobs, keyframes, media_operations, speech, task_scheduler
+from .. import audio_edit_tasks, audio_master_tasks, background_jobs, dubbing, keyframes, media_operations, music, speech, task_scheduler, vlm
 from ..schemas import MissingExecutionResolution
 from .. import app as backend
 
@@ -250,6 +250,22 @@ def reconcile_task(task: dict[str, Any]) -> dict[str, Any]:
         except (OSError, ValueError) as exc:
             raise HTTPException(409, f'声音完成回执尚未核实，不会重新生成: {exc}') from exc
         return backend.complete_speech_task(task, receipt)
+    if task['payload'].get('kind') == 'anchor_dubbing':
+        if task['status'] == 'stopped':
+            return task
+        try:
+            receipt = dubbing.read_receipt(task['payload'])
+        except (OSError, ValueError) as exc:
+            raise HTTPException(409, f'锚点配音回执尚未核实，不会重新生成: {exc}') from exc
+        return backend.complete_anchor_dubbing_task(task, receipt)
+    if task['payload'].get('kind') == 'vlm_observation':
+        if task['status'] == 'stopped':
+            return task
+        try:
+            receipt = vlm.read_receipt(task['payload'])
+        except (OSError, ValueError) as exc:
+            raise HTTPException(409, f'画面观察回执尚未核实，不会重新生成: {exc}') from exc
+        return backend.complete_vlm_observation_task(task, receipt)
     prompt_id = task.get("prompt_id")
     if not prompt_id:
         raise HTTPException(409, "该任务没有提交回执，无法确认是否已生成；已阻止重复提交")
@@ -273,7 +289,8 @@ def reconcile_task(task: dict[str, Any]) -> dict[str, Any]:
             backend.set_task(task['id'], status='failed', result=json.dumps(done, ensure_ascii=False), error=backend.comfy_execution_error(task['payload'], done))
             return backend.get_task(task['id']) or task
         return backend.complete_keyframe_task(task, done)
-    done = (backend.history_done(str(prompt_id), include_images=True)
+    done = (backend.history_done(str(prompt_id), audio=True) if task['payload'].get('kind') == 'music'
+            else backend.history_done(str(prompt_id), include_images=True)
             if task['payload'].get('pipeline_stage_id') == 'media-enhancement' else backend.history_done(str(prompt_id)))
     if not done:
         raise HTTPException(409, "尚未找到原任务的完成记录，可能仍在执行或历史已清理；已阻止重复提交")
@@ -291,6 +308,11 @@ def reconcile_task(task: dict[str, Any]) -> dict[str, Any]:
     payload = task["payload"]
     target_plan = Path(str(payload.get("plan_path"))) if payload.get("plan_path") else backend.PLAN_PATH
     done = backend.publish_task_outputs(task, done)
+    if payload.get('kind') == 'music':
+        try:
+            return music.complete_music_task(task, done)
+        except ValueError as exc:
+            raise HTTPException(409, f'配乐候选尚未核实，不会重新生成: {exc}') from exc
     if payload.get('pipeline_stage_id') == 'media-enhancement':
         try:
             done = backend.describe_enhancement_result(payload, done)
@@ -383,7 +405,7 @@ def task_in_project_context(task: dict[str, Any], manifest: dict[str, Any]) -> d
 def resume_saved_task(task: dict[str, Any] | None) -> dict[str, Any]:
     if not task or task["status"] not in {"stopped", "failed", "needs_reconcile"}:
         raise HTTPException(409, "只有已停止、失败或待核对任务可以恢复")
-    if task['payload'].get('kind') in {'speech', 'keyframe', 'audio_edit', 'audio_master', 'media_operation',
+    if task['payload'].get('kind') in {'speech', 'anchor_dubbing', 'vlm_observation', 'keyframe', 'audio_edit', 'audio_master', 'media_operation',
                                       'reference_decomposition', 'reference_semantic'}:
         return backend.reconcile_task(task)
     if task["status"] == "needs_reconcile" or task.get("prompt_id"):

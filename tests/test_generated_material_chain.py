@@ -11,7 +11,7 @@ def test_generated_candidates_feed_shot_without_manual_workflow(preset_client, m
     client, project = preset_client
     install(client)
     monkeypatch.setattr(backend, 'keyframe_capability', lambda **kwargs: {'available': True})
-    monkeypatch.setattr(backend.speech, 'capability', lambda: {'available': True})
+    monkeypatch.setattr(backend.speech, 'capability', lambda *args, **kwargs: {'available': True})
     monkeypatch.setattr(backend, 'comfy_status', lambda: {'online': False})
     image = reference_image(project)
     voice = project / 'voice.wav'

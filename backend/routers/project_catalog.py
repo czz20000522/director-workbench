@@ -25,6 +25,9 @@ def projects() -> dict[str, Any]:
     selected = backend.PRIVATE_WORKSPACES.selected() if backend.PRIVATE_WORKSPACES is not None and principal else backend.CURRENT_PROJECT_ID
     for entry in backend.project_entries():
         project_id = str(entry.get("id", ""))
+        if project_id == getattr(backend, "QUICK_PROJECT_ID", ""):
+            # 单步任务的隐藏容器只承载任务与产物，它不是一部作品，不该出现在作品列表里。
+            continue
         if backend.PRIVATE_WORKSPACES is not None and principal:
             try:
                 backend.PRIVATE_WORKSPACES.require(project_id)

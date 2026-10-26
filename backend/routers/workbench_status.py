@@ -121,7 +121,8 @@ def health() -> dict[str, Any]:
 @ROUTER.get("/api/status")
 def status() -> dict[str, Any]:
     """Engine status only: the runtime root is a machine path the browser never needs."""
-    return {"comfy": backend.comfy_status()}
+    return {"comfy": backend.comfy_status(),
+            "progress": backend.comfy_progress.BOARD.snapshot()}
 
 
 @ROUTER.get("/api/plan")
@@ -306,6 +307,10 @@ def validate_project_pipeline(stage_id: str, request: PipelineValidateRequest, m
     result["parameters"] = prepared.get("parameters", {})
     if isinstance(prepared.get('h3_duration'), dict):
         result['h3_duration'] = prepared['h3_duration']
+    if prepared.get('output_size'):
+        result['output_size'] = prepared['output_size']
+    if prepared.get('quality_intent'):
+        result['quality_intent'] = prepared['quality_intent']
     if prepared.get('creative_inspection'):
         result['creative_inspection'] = prepared['creative_inspection']
     blockers = backend.segment_dependency_blockers(document, segment or {})

@@ -144,9 +144,10 @@ def register(server: MCPServer, client: Any, *, read_only: ToolAnnotations, writ
                             gen_seconds: Annotated[float | None, Field(gt=0, le=30, allow_inf_nan=False)] = None,
                             seed: Annotated[int | None, Field(strict=True, ge=0, le=4294967295)] = None,
                             mode: Literal['reference', 'design'] = 'reference',
-                            voice_description: Annotated[str | None, Field(min_length=1, max_length=2000)] = None) -> dict[str, Any]:
-        """使用本地 AuK-Flash 生成台词候选。默认mode=reference须提供作品内voice_reference且不传voice_description；mode=design须提供非空voice_description且不传参考，可在无音频的新作品设计声音。请求时长默认4.5秒，范围(0,30]，参考与请求总时长不超过30秒；不保证台词完整。seed默认20260923（uint32）。候选试听后可作后续参考，不自动采用。相同标识和参数返回原任务，历史请求重查勿追加参数。断线先get_submission_receipt核对。"""
-        body = {'text': text, 'idempotency_key': idempotency_key}
+                            voice_description: Annotated[str | None, Field(min_length=1, max_length=2000)] = None,
+                            engine: Literal['auk-flash', 'indextts-2.5', 'voxcpm-2'] = 'voxcpm-2') -> dict[str, Any]:
+        """生成台词候选；默认 engine=voxcpm-2（48kHz、可用文字设计音色、有随机编号）。voxcpm-2 与 indextts-2.5 都不接收 gen_seconds，时长由台词决定；只有 auk-flash 接收并冻结请求时长（默认4.5秒，范围(0,30]，参考与请求总时长≤30秒，不保证台词完整）。默认mode=reference须提供作品内voice_reference且不传voice_description；mode=design只允许 voxcpm-2/auk-flash，须提供非空voice_description且不传参考。voxcpm-2 的情绪仅支持 none/text；seed默认20260923（uint32），IndexTTS 无随机编号。候选试听后可作后续参考，不自动采用。相同标识和参数返回原任务，历史请求重查勿追加参数。断线先get_submission_receipt核对。"""
+        body = {'text': text, 'engine': engine, 'idempotency_key': idempotency_key}
         if mode != 'reference':
             body['mode'] = mode
         if voice_reference is not None:

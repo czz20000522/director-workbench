@@ -34,13 +34,19 @@ def storage_roots(root, shared_root=None):
         'output': shared / 'output',
         'workspaces': root / 'projects/director-workbench/workspaces',
         'private': root / 'private-workspaces',
+        # 用户素材库（音色/配乐/参考图归档）。旧配置没有这一项时退回数据根下。
+        'assets': shared / '素材库',
+        # 归档成片：按作品与日期分文件夹，删除临时作品时不能碰这里。
+        'works_archive': shared / '作品',
     }
     if not config.exists():
         return defaults  # Existing test fixtures and unconfigured checkouts.
     document = json.loads(config.read_text(encoding='utf-8-sig'))
-    if document.get('schema_version') != 1 or set(document.get('roots', {})) != set(defaults):
+    required = set(defaults) - {'assets', 'works_archive'}
+    configured = document.get('roots', {})
+    if document.get('schema_version') != 1 or set(configured) not in (required, set(defaults)):
         raise ValueError('Invalid machine storage configuration')
-    roots = {key: checked_root(value) for key, value in document['roots'].items()}
+    roots = {key: checked_root(value) for key, value in {**defaults, **configured}.items()}
     for key, path in roots.items():
         for other, candidate in roots.items():
             if key == 'workspaces' and other == 'private' and path == candidate / 'user001/series':

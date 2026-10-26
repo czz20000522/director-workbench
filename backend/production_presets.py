@@ -20,13 +20,12 @@ ADULT_REALISM_TEXT_PRESET_ID = 'h3-text-realism-people'
 ADULT_REALISM_IMAGE_PRESET_ID = 'h3-first-realism-people'
 ADULT_PRESET_IDS = (ADULT_REALISM_TEXT_PRESET_ID, ADULT_REALISM_IMAGE_PRESET_ID)
 TEXT_PRESET_IDS = (TEXT_LANDSCAPE_PRESET_ID, TEXT_SQUARE_PRESET_ID, TEXT_PORTRAIT_PRESET_ID, ADULT_REALISM_TEXT_PRESET_ID)
-# H3's local model was trained around the 768p canvas (1344x768 for 16:9).
-# The previous 0.4MP/Turbo combination is useful for quick previews, but is
-# visibly soft for text-to-video because it renders only 864x480. Keep the
-# fast profile for image-guided work and give text-only shots a quality-first
-# default that stays within H3's ~1MP canvas limit.
-TEXT_MEGAPIXELS = 0.98
-TEXT_TURBO_DEFAULT = False
+# Deck profile for this machine: RTX 4060 Ti 8GB. A 0.98MP text shot with
+# turbo off (20 steps) measured ~38 minutes; 0.4MP with the 8-step turbo LoRA
+# measured ~5.5 minutes for 5s. Keep text presets on that tested profile so
+# installing a preset can never silently queue the 38-minute variant.
+TEXT_MEGAPIXELS = 0.4
+TEXT_TURBO_DEFAULT = True
 END_PRESET_IDS = ('h3-frames-native-landscape', 'h3-frames-native-square', 'h3-frames-native-portrait')
 SQUARE_PRESET_IDS = (NATIVE_SQUARE_PRESET_ID, TEXT_SQUARE_PRESET_ID, END_PRESET_IDS[1])
 LANDSCAPE_PRESET_IDS = (NATIVE_LANDSCAPE_PRESET_ID, TEXT_LANDSCAPE_PRESET_ID, ADULT_REALISM_TEXT_PRESET_ID, END_PRESET_IDS[0])
@@ -216,14 +215,14 @@ def catalog(model_root: Path, preset_id: str = PRESET_ID) -> dict[str, Any]:
             if name and not any(any((model_root / directory).rglob(name)) for directory in directories):
                 missing.append(name)
     return {
-        'id': preset_id, 'title': label, 'available': True,
+        'id': preset_id, 'title': label, 'available': True, 'aspect_ratio': aspect_ratio(preset_id),
         'description': (f'H3 · 首尾帧 · {aspect_ratio(preset_id)} · 0.4MP · 4–15 秒；原生声音待小样验证。'
                         if preset_id in END_PRESET_IDS else
-                        f'H3 · 纯文本 · {aspect_ratio(preset_id)} · 约1.0MP · 8步 Euler/beta + v4 LoRA + Kitchen attention · 4–15 秒。已在本机 RTX 5070 Ti 实测跨场景速度与可用画质，仍需逐条审核。'
+                        f'H3 · 纯文本 · {aspect_ratio(preset_id)} · 0.4MP · 8步 Euler/beta + v4 LoRA + Kitchen attention · 4–15 秒。已在本机 RTX 5070 Ti 实测跨场景速度与可用画质，仍需逐条审核。'
                         if preset_id == FAST_TEXT_LANDSCAPE_PRESET_ID else
-                        f'H3 · 成人向真人质感 · {aspect_ratio(preset_id)} · Realism People LoRA · 标准20步 · 4–15 秒。仅用于虚构成年人和非露骨内容。'
+                        f'H3 · 成人向真人质感 · {aspect_ratio(preset_id)} · 0.4MP · Realism People LoRA · 标准20步 · 4–15 秒。仅限虚构成年人；不支持真人影像与未成年内容。'
                         if preset_id in ADULT_PRESET_IDS else
-                        f'H3 · 纯文本 · {aspect_ratio(preset_id)} · 约1.0MP（768p画布）· 标准20步采样 · 4–15 秒。只需提示词与参数，不需图片或外部音频；本机音画 latent 路径，原生声音待真实小样验收。'
+                        f'H3 · 纯文本 · {aspect_ratio(preset_id)} · 0.4MP · 8步 Turbo 采样 · 4–15 秒。只需提示词与参数，不需图片或外部音频；本机音画 latent 路径，原生声音待真实小样验收。'
                         if preset_id in TEXT_PRESET_IDS else
                         'H3 · 横屏 · 0.4MP · 8步 + Kitchen attention；首帧与提示词，已完成本机加速实测，仍需逐条审核。'
                         if preset_id == FAST_IMAGE_LANDSCAPE_PRESET_ID else

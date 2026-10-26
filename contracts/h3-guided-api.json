@@ -125,16 +125,15 @@
     }
   },
   "105:6": {
-    "class_type": "UNETLoader",
+    "class_type": "UnetLoaderGGUF",
     "inputs": {
-      "unet_name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
-      "weight_dtype": "default"
+      "unet_name": "minimax_h3_fl2va_pruned-UD-Q3_K_XL.gguf"
     }
   },
   "105:13": {
     "class_type": "CLIPLoader",
     "inputs": {
-      "clip_name": "qwen3vl_32b_heretic_minimax_h3_nvfp4.safetensors",
+      "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
       "type": "minimax",
       "device": "default"
     }

@@ -176,15 +176,15 @@ def test_native_landscape_preset_freezes_first_frame_without_audio_guide(preset_
     assert frozen['115']['inputs']['aspect_ratio'] == '16:9 (Widescreen)'
 
 
-def test_text_video_preset_uses_quality_canvas_and_standard_sampling(preset_client):
+def test_text_video_preset_uses_8gb_safe_canvas_and_turbo_sampling(preset_client):
     client, _ = preset_client
     preset_id = production_presets.TEXT_LANDSCAPE_PRESET_ID
     response = client.post(f'/api/projects/preset-test/production-presets/{preset_id}')
     assert response.status_code == 200, response.text
     manifest = response.json()['project']
     graph = json.loads(backend.resolve_registered_path(manifest['production_preset']['workflow']).read_text(encoding='utf-8'))
-    assert graph['115']['inputs'] == {'aspect_ratio': '16:9 (Widescreen)', 'megapixels': 0.98, 'multiple': 32}
-    assert graph['105:126']['inputs']['value'] is False
+    assert graph['115']['inputs'] == {'aspect_ratio': '16:9 (Widescreen)', 'megapixels': 0.4, 'multiple': 32}
+    assert graph['105:126']['inputs']['value'] is True
     assert '114' not in graph and 'aigc:load-audio-guide' not in graph
 
 
@@ -195,7 +195,7 @@ def test_validated_fast_profiles_are_explicit_and_keep_standard_recipe(preset_cl
     image_id = production_presets.FAST_IMAGE_LANDSCAPE_PRESET_ID
     text_graph = production_presets.load_recipe(text_id)
     image_graph = production_presets.load_recipe(image_id)
-    assert text_graph['115']['inputs'] == {'aspect_ratio': '16:9 (Widescreen)', 'megapixels': 0.98, 'multiple': 32}
+    assert text_graph['115']['inputs'] == {'aspect_ratio': '16:9 (Widescreen)', 'megapixels': 0.4, 'multiple': 32}
     assert text_graph['105:121']['inputs']['lora_name'] == 'minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors'
     assert text_graph['105:17']['inputs']['sampler_name'] == 'euler'
     assert text_graph['105:9']['inputs']['scheduler'] == 'beta'

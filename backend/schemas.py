@@ -381,15 +381,28 @@ class KeyframeRequest(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=160)
 
 
+class EmotionSpec(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    mode: Literal['none', 'reference', 'text', 'vector'] = 'none'
+    alpha: float = Field(default=1.0, ge=0, le=1, strict=True, allow_inf_nan=False)
+    reference: str | None = Field(default=None, min_length=1, max_length=1000)
+    text: str | None = Field(default=None, min_length=1, max_length=200)
+    vector: list[float] | None = Field(default=None, min_length=8, max_length=8)
+
+
 class SpeechRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     text: str = Field(min_length=1, max_length=2000)
+    engine: Literal['auk-flash', 'indextts-2.5', 'voxcpm-2'] = 'voxcpm-2'
     mode: Literal['reference', 'design'] = 'reference'
     voice_reference: str | None = Field(default=None, min_length=1, max_length=1000)
     voice_description: str | None = Field(default=None, min_length=1, max_length=2000)
+    emotion: EmotionSpec | None = None
     idempotency_key: str = Field(min_length=1, max_length=160)
     gen_seconds: float = Field(default=4.5, gt=0, le=30, allow_inf_nan=False)
     seed: int = Field(default=20260923, ge=0, le=4294967295, strict=True)
+    inference_timesteps: int = Field(default=10, ge=1, le=60, strict=True)
+    cfg_value: float = Field(default=2.0, ge=0, le=20, strict=True, allow_inf_nan=False)
 
 
     @model_validator(mode='after')
@@ -399,7 +412,127 @@ class SpeechRequest(BaseModel):
                 raise ValueError('参考模式须提供音色参考，不能同时提供声音设计描述')
         elif not self.voice_description or not self.voice_description.strip() or self.voice_reference is not None:
             raise ValueError('设计模式须提供声音描述，不能同时提供参考音频')
+        if self.engine == 'indextts-2.5':
+            if self.mode != 'reference':
+                raise ValueError('IndexTTS 仅支持参考音色模式')
+            if self.model_fields_set & {'gen_seconds', 'seed'}:
+                raise ValueError('IndexTTS 不接收时长与随机编号参数')
+        if self.engine == 'voxcpm-2':
+            if self.model_fields_set & {'gen_seconds'}:
+                raise ValueError('VoxCPM2 不接收请求时长，台词长度决定时长')
+            if self.emotion is not None and self.emotion.mode not in {'none', 'text'}:
+                raise ValueError('VoxCPM2 的情绪只能用文本描述')
         return self
+
+
+class DubbingCue(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    at_seconds: float = Field(ge=0, le=86400, strict=True, allow_inf_nan=False)
+    text: str = Field(min_length=1, max_length=500)
+    gain: float = Field(default=1, ge=0, le=4, strict=True, allow_inf_nan=False)
+
+
+class DubbingRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    source_asset_id: str = Field(min_length=1, max_length=160)
+    voice_reference: str | None = Field(default=None, min_length=1, max_length=1000)
+    cues: list[DubbingCue] = Field(min_length=1, max_length=24)
+    original_audio: Literal['keep', 'mute'] = 'keep'
+    original_gain: float = Field(default=1, ge=0, le=3, strict=True, allow_inf_nan=False)
+    emotion: EmotionSpec | None = None
+    engine: Literal['indextts-2.5', 'voxcpm-2'] = 'voxcpm-2'
+    voice_description: str | None = Field(default=None, min_length=1, max_length=2000)
+    seed: int = Field(default=20261025, ge=0, le=4294967295, strict=True)
+    inference_timesteps: int = Field(default=10, ge=1, le=60, strict=True)
+    cfg_value: float = Field(default=2.0, ge=0, le=20, strict=True, allow_inf_nan=False)
+    idempotency_key: str = Field(min_length=1, max_length=160)
+
+    @model_validator(mode='after')
+    def validate_timbre_source(self):
+        if self.engine == 'indextts-2.5':
+            if not self.voice_reference or self.voice_description is not None:
+                raise ValueError('IndexTTS 锚点配音必须提供音色参考，且不提供音色设计描述')
+        elif bool(self.voice_reference) == bool(self.voice_description):
+            raise ValueError('VoxCPM2 锚点配音要么提供参考音色，要么给出音色文字描述')
+        return self
+
+
+class ScriptDraftRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    title: str = Field(min_length=1, max_length=80)
+    content: str = Field(default='', max_length=200000)
+
+
+class EnhanceArchiveRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    # 覆盖是把原素材登记改指向清晰化文件并删除原文件；不勾则原件不动。
+    overwrite: StrictBool = False
+
+
+class AudioSwapRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    source_asset_id: str = Field(min_length=1, max_length=160)
+    overlay_asset_id: str | None = Field(default=None, min_length=1, max_length=160)
+    original_audio: Literal['keep', 'mute'] = 'keep'
+    original_gain: float = Field(default=1, ge=0, le=3, strict=True, allow_inf_nan=False)
+    overlay_gain: float = Field(default=1, ge=0, le=3, strict=True, allow_inf_nan=False)
+    start_seconds: float = Field(default=0, ge=0, le=86400, strict=True, allow_inf_nan=False)
+    overlay_loop: StrictBool = True
+    fade_in_seconds: float = Field(default=0, ge=0, le=10, strict=True, allow_inf_nan=False)
+    fade_out_seconds: float = Field(default=0, ge=0, le=10, strict=True, allow_inf_nan=False)
+    idempotency_key: str = Field(min_length=1, max_length=160)
+
+
+class VlmObservationRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    source: str = Field(min_length=1, max_length=1000)
+    provider: Literal['local-ollama', 'deepseek-vision'] = 'local-ollama'
+    frame_seconds: float | None = Field(default=None, ge=0, le=86400, strict=True, allow_inf_nan=False)
+    prompt: str = Field(min_length=1, max_length=2000)
+    temperature: float = Field(default=0.8, ge=0, le=2, strict=True, allow_inf_nan=False)
+    num_predict: int = Field(default=512, ge=16, le=2048, strict=True)
+    idempotency_key: str = Field(min_length=1, max_length=160)
+
+    @model_validator(mode='after')
+    def validate_prompt(self):
+        if not self.prompt.strip():
+            raise ValueError('观察问题不能只有空白字符')
+        return self
+
+
+class MusicRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    tags: str = Field(min_length=1, max_length=2000)
+    lyrics: str = Field(default='', max_length=4000)
+    duration_seconds: float = Field(default=30, ge=1, le=300, strict=True, allow_inf_nan=False)
+    bpm: int = Field(default=120, ge=10, le=300, strict=True)
+    keyscale: str = Field(min_length=1, max_length=16)
+    timesignature: Literal['2', '3', '4', '6'] = '4'
+    language: str = Field(default='en', min_length=2, max_length=8)
+    seed: int = Field(ge=0, le=4294967295, strict=True)
+    steps: int = Field(default=8, ge=1, le=60, strict=True)
+    cfg: float = Field(default=1.0, ge=0, le=10, strict=True, allow_inf_nan=False)
+    shift: float = Field(default=3.0, ge=0, le=20, strict=True, allow_inf_nan=False)
+    output_format: Literal['mp3', 'flac'] = 'mp3'
+    quality: Literal['V0', '128k', '320k'] = 'V0'
+    generate_audio_codes: StrictBool = True
+    encode_cfg_scale: float = Field(default=2.0, ge=0, le=100, strict=True, allow_inf_nan=False)
+    temperature: float = Field(default=0.85, ge=0, le=2, strict=True, allow_inf_nan=False)
+    top_p: float = Field(default=0.9, ge=0, le=2000, strict=True, allow_inf_nan=False)
+    top_k: int = Field(default=0, ge=0, le=100, strict=True)
+    min_p: float = Field(default=0.0, ge=0, le=1, strict=True, allow_inf_nan=False)
+    idempotency_key: str = Field(min_length=1, max_length=160)
+
+    @model_validator(mode='after')
+    def validate_tags(self):
+        if not self.tags.strip():
+            raise ValueError('风格标签不能只有空白字符')
+        return self
+
+
+class CreativeSettingRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    params: dict[str, Any]
 
 
 class MediaOperationRequest(BaseModel):
@@ -532,3 +665,44 @@ class MediaRefsRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     media_refs: list[str] = Field(min_length=1, max_length=100)
     ttl_seconds: int = Field(default=900, ge=60, le=3600, strict=True)
+
+
+class ProjectDeletionPlanRequest(BaseModel):
+    """Preview which works would be deleted; nothing is removed by this request."""
+    project_ids: list[str] = Field(min_length=1, max_length=50)
+
+
+class ProjectDeletionRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    plan_id: str
+    project_ids: list[str] = Field(min_length=1, max_length=50)
+    archive_asset_ids: list[str] = Field(default_factory=list, max_length=200)
+    confirm: bool = False
+
+
+class TaskDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    confirm: bool = False
+
+
+class TaskEditRequest(BaseModel):
+    """Parameters a human may still change on a queued, not-yet-dispatched task."""
+    model_config = ConfigDict(extra='forbid')
+    prompt: str | None = Field(default=None, min_length=1, max_length=6000)
+    seed: int | None = Field(default=None, ge=0, le=2**64 - 1)
+    width: int | None = Field(default=None, ge=512, le=1536)
+    height: int | None = Field(default=None, ge=512, le=1536)
+
+
+class TaskBatchPlanRequest(BaseModel):
+    """Preview a cross-work task cleanup; nothing is removed by this request."""
+    model_config = ConfigDict(extra='forbid')
+    task_ids: list[str] = Field(min_length=1, max_length=50)
+
+
+class TaskBatchDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    plan_id: str
+    task_ids: list[str] = Field(min_length=1, max_length=50)
+    archive_asset_ids: list[str] = Field(default_factory=list, max_length=200)
+    confirm: bool = False

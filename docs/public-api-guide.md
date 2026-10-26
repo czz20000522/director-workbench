@@ -106,6 +106,10 @@ MCP 工具把失败统一为 `isError=true` 且同一次调用带结构化 `{ok:
 | 图片/声音/媒体工具缺项 | `/api/keyframe-capability`、`/api/speech-capability`、`/api/media-capability` |
 | 图片、声音、音频编辑、全片母版后期、媒体处理任务 | `/api/projects/{project_id}/keyframe-tasks`、`speech-tasks`、`audio-edit-tasks`、`audio-master-tasks`、`media-tasks` |
 | 批次任务 | `/api/projects/{project_id}/batches` |
+| 作品删除（两段式，仅本机单用户） | `/api/projects/deletion-plan` 预览并冻结范围与文件快照；`/api/projects/deletion` 必须带 `confirm`，范围或快照与预览不一致时返回 `409`，ComfyUI 输出与模型始终不在删除范围内 |
+| 任务队列读取与人工整理 | `GET /api/queue/tasks` 跨作品列出任务行、排队位置与可用动作；`PATCH /api/projects/{project_id}/tasks/{task_id}` 只在任务尚未派发时改参数并重新冻结，`POST .../revise` 以改参数派生一条带 `retry_of` 的新任务并保留原记录，`DELETE .../{task_id}` 需 `confirm` 且拒绝仍在执行或待核对的任务 |
+| 单步任务（不属于任何作品） | `GET /api/quick-workspace` 取隐藏容器 id（首次使用才创建，永不出现在作品列表）；`GET /api/quick-tasks` 以提示词摘要为标题列出单步任务 |
+| 任务批量整理（跨作品） | `POST /api/tasks/deletion-plan` 预览并冻结范围；`POST /api/tasks/deletion` 必须带 `confirm`，任务状态或范围与预览不一致时返回 `409`，ComfyUI 产物始终不动 |
 | 审核与显式采用 | `/api/projects/{project_id}/reviews`、`adoptions` |
 | 参考素材登记、显式范围/帧/音频观察、ASR、模型分析与校订 | `/api/projects/{project_id}/reverse-analyses`；从已上传素材登记用 `/reverse-analyses/from-material` |
 | 受控媒体列表、短期 URL 与文件读取 | `/api/projects/{project_id}/media`、`/media-refs`、`/media/{token}` |

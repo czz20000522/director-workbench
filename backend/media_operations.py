@@ -14,8 +14,33 @@ ROOT = paths.PROJECT_ROOT
 DESKTOP_PYTHON = paths.COMFY_PYTHON
 ASR_ROOT = paths.SHARED_ROOT / 'tools/index-tts'
 ASR_PYTHON = ASR_ROOT / '.venv/Scripts/python.exe'
-FFMPEG = ASR_ROOT / 'ffmpeg.exe'
+SHARED_FFMPEG = ASR_ROOT / 'ffmpeg.exe'
 WHISPER_MODEL = ASR_ROOT / 'models/whisper/base.pt'
+
+
+def _bundled_ffmpeg() -> Path | None:
+    try:
+        import imageio_ffmpeg
+        return Path(imageio_ffmpeg.get_ffmpeg_exe())
+    except (ImportError, RuntimeError, OSError):
+        return None
+
+
+def _resolve_ffmpeg() -> Path:
+    """Prefer the shared tools copy, then PATH, then the packaged essentials build."""
+    override = os.environ.get('DIRECTOR_FFMPEG')
+    candidates = [Path(override)] if override else []
+    candidates.append(SHARED_FFMPEG)
+    found = shutil.which('ffmpeg')
+    if found:
+        candidates.append(Path(found))
+    bundled = _bundled_ffmpeg()
+    if bundled:
+        candidates.append(bundled)
+    return next((path for path in candidates if path.is_file()), SHARED_FFMPEG)
+
+
+FFMPEG = _resolve_ffmpeg()
 MAX_BYTES = 2 * 1024 ** 3
 
 

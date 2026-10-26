@@ -63,6 +63,13 @@
 }
 .sf-post-field { display: grid; gap: 4px; min-width: 0; color: var(--post-muted); font-size: 12px; }
 .sf-post-field--wide { grid-column: 1 / -1; }
+.clarity-levels { display: flex; flex-wrap: wrap; gap: 6px; }
+.clarity-levels > button { flex: 1 1 64px; display: grid; gap: 1px; padding: 7px 10px; border: 1px solid var(--post-line, #d9dce2); border-radius: 8px; background: #fff; color: var(--post-ink, #202124); font: inherit; text-align: center; cursor: pointer; }
+.clarity-levels > button strong { color: inherit; font-size: 13px; font-weight: 650; }
+.clarity-levels > button small { color: var(--post-muted, #60646c); font-size: 11px; }
+.clarity-levels > button[aria-pressed="true"] { border-color: var(--post-accent, #365fd6); background: rgb(54 95 214 / 8%); color: var(--post-accent, #365fd6); box-shadow: inset 0 0 0 1px var(--post-accent, #365fd6); }
+.clarity-levels > button[aria-pressed="true"] small { color: var(--post-accent, #365fd6); }
+.clarity-levels > button:disabled { opacity: .55; cursor: default; }
 .sf-post-field > input,
 .sf-post-field > select,
 .sf-post-field > textarea,
@@ -84,6 +91,11 @@
 .sf-post-field input:focus,
 .sf-post-field select:focus,
 .sf-post-field textarea:focus { outline: 2px solid rgb(54 95 214 / 25%); outline-offset: 1px; border-color: var(--post-accent); }
+.sf-post-field-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.sf-post-field-head label { margin: 0; }
+.sf-inline-link { display: inline-flex; align-items: center; gap: 4px; border: 0; background: none; padding: 0; color: var(--post-accent); font-size: 11px; cursor: pointer; }
+.sf-inline-link:hover:not(:disabled) { color: var(--post-accent-dark); }
+.sf-inline-link:disabled { opacity: .5; cursor: default; }
 .sf-post-check { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--post-muted); font-size: 12px; }
 .sf-post-check input { width: auto; min-height: 0; margin: 0; }
 .sf-post-file { width: 100%; padding: 4px; font-size: 12px; }
@@ -138,6 +150,7 @@
 .sf-post-source img,
 .sf-post-source video { display: block; width: 100%; max-height: 180px; object-fit: contain; border-radius: 6px; background: var(--post-page); }
 .sf-post-outputs { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.sf-post-observation { margin: 0; padding: 10px 12px; border-left: 3px solid var(--post-accent, #4a6fa5); background: var(--post-page); color: var(--post-ink); font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; border-radius: 0 6px 6px 0; }
 
 .sf-post-list { display: grid; gap: 3px; margin: 0; padding-left: 18px; color: var(--post-ink); font-size: 12px; }
 .sf-post-json {

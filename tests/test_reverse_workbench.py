@@ -462,9 +462,15 @@ def test_resume_persists_new_attempt_until_resources_confirmed(reverse_client, m
     attempt = response.json()
     assert attempt['id'] != 'stopped-attempt'
     assert attempt['status'] == 'scheduler_waiting'
-    assert backend.TASK_SCHEDULER.tick(threaded=False) == []
-    assert executions == []
-    assert backend.TASK_SCHEDULER.queue_info(attempt['id'])['reason']['code'] == ('resource_status_unknown' if queue is None else 'external_queue_busy')
+    if queue is None:
+        # The engine is started on demand, so an offline ComfyUI must not park
+        # the queue: the executor starts it before submitting.
+        assert backend.TASK_SCHEDULER.tick(threaded=False) == [attempt['id']]
+        assert executions == [attempt['id']]
+    else:
+        assert backend.TASK_SCHEDULER.tick(threaded=False) == []
+        assert executions == []
+        assert backend.TASK_SCHEDULER.queue_info(attempt['id'])['reason']['code'] == 'external_queue_busy'
     with backend.db() as connection:
         assert connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == 2
     assert backend.get_task('stopped-attempt')['status'] == 'stopped'

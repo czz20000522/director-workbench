@@ -27,7 +27,8 @@ INSTALL_DEV_HINT = ('Install development test tooling into the project interpret
 DEFAULT_IMPACT_CONFIG = Path('tools/test_impact.toml')
 BROWSER_TESTS = (
     'assembly_edit', 'guide_queue', 'guide_review', 'media_tools_panel',
-    'queued_panels', 'reference_queue', 'speech_panel',
+    'queued_panels', 'reference_queue', 'speech_panel', 'dubbing_panel', 'music_panel',
+    'observation_panel', 'timbre_panel', 'preset_library_panel', 'audio_swap_panel', 'keyframe_batch',
     'media_qc', 'guide_joins', 'creative_review',
 )
 # These drivers additionally need the project interpreter and a fresh absolute runtime

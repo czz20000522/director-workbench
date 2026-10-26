@@ -536,6 +536,22 @@
   .sf-tool-panel .script-layout { grid-template-columns: 1fr; }
 }
 
+/* Task queue: per-row actions, prompt preview, blockers surfaced as tooltips */
+.sf-task-row { gap: 10px; }
+.sf-task-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+.sf-task-actions .sf-secondary { padding: 5px 9px; font-size: 11px; }
+.sf-task-prompt { display: block; color: #5a6069; font-size: 11px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 560px; }
+.sf-task-rev { font-style: normal; margin-left: 7px; padding: 1px 6px; border-radius: 5px; background: #eef2fb; color: #405a80; font-size: 10px; font-weight: 500; }
+.sf-task-delete, .sf-task-blocked { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; color: #8b929c; }
+.sf-task-delete:hover { background: #fdeeee; color: #b42332; }
+.sf-task-blocked { color: #c7ccd3; cursor: not-allowed; }
+.sf-modal .sf-choice-row { margin-top: 14px; }
+@media (max-width: 760px) {
+  .sf-task-row { flex-wrap: wrap; }
+  .sf-task-actions { width: 100%; justify-content: flex-end; }
+  .sf-task-prompt { max-width: none; }
+}
+
 /* Mobile shell: keep project context in the top bar */
 @media (max-width: 760px) {
   .sf-topbar { gap: 10px; }
@@ -683,7 +699,7 @@
 }
 .sf-intent-field { min-height: 128px; resize: vertical; line-height: 1.7; }
 .sf-field .sf-fine { display: block; margin-top: 2px; }
-.qt-tools { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 4px 0 28px; }
+.qt-tools { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 4px 0 28px; }
 .qt-tools button { text-align: left; padding: 16px; border: 1px solid var(--sf-line); border-radius: 10px; background: #fff; display: grid; gap: 5px; }
 .qt-tools button:hover { border-color: #b9c8e8; background: #fbfcff; }
 .qt-tools button svg { color: var(--sf-amber); margin-bottom: 4px; }
@@ -696,6 +712,9 @@
 .qt-head p:not(.sf-step-label) { color: var(--sf-muted); font-size: 12px; }
 .qt-form { display: grid; gap: 14px; margin-top: 20px; }
 .qt-note, .qt-status { color: var(--sf-muted); font-size: 11px; display: flex; align-items: center; gap: 6px; }
+.qt-field-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.qt-inline-button { display: inline-flex; align-items: center; gap: 4px; border: 0; background: none; padding: 0; color: var(--sf-accent, #c7633e); font-size: 11px; cursor: pointer; }
+.qt-inline-button:disabled { opacity: .5; cursor: default; }
 .qt-result { display: grid; gap: 10px; margin-top: 14px; }
 .qt-result video { width: 100%; max-height: 480px; background: #111; border-radius: 8px; }
 .qt-result a { justify-self: start; }
@@ -722,3 +741,79 @@
 .sf-series-works { display: grid; gap: 8px; }
 .sf-muted { color: var(--sf-muted); font-size: 13px; }
 @media (max-width: 720px) { .sf-series-page { padding: 20px 16px 48px; } .sf-series-head { flex-direction: column; } .sf-series-assets { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* Project deletion: row-level trash, batch selection, two-step confirm dialog */
+.sf-home-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+.sf-home-actions .sf-secondary { display: inline-flex; align-items: center; gap: 6px; }
+.sf-work-row { cursor: default; }
+.sf-work-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 13px; padding: 0; background: transparent; text-align: left; color: inherit; }
+.sf-work-check, .sf-work-delete { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; color: #8b929c; }
+.sf-work-check:hover, .sf-work-delete:hover { background: #f0f2f5; color: var(--sf-ink); }
+.sf-work-check { color: var(--sf-accent); }
+.sf-work-delete:hover { background: #fdeeee; color: #b42332; }
+.sf-modal-mask { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 24px; background: rgba(23,27,25,.5); backdrop-filter: blur(4px); }
+.sf-modal-mask .sf-modal { max-height: calc(100vh - 48px); overflow: auto; }
+.sf-del-list { display: grid; gap: 10px; margin: 14px 0 4px; }
+.sf-del-list li { display: grid; gap: 2px; padding: 10px 12px; border: 1px solid var(--sf-line); border-radius: 8px; background: #fafbfc; }
+.sf-del-list strong { font-size: 13px; }
+.sf-del-list small { color: var(--sf-muted); font-size: 11px; }
+.sf-del-list > li > span { color: #5a6069; font-size: 11px; }
+.sf-del-sample { color: #8b929c !important; font-size: 10px !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sf-del-confirm { display: flex; align-items: flex-start; gap: 8px; margin-top: 16px; font-size: 12px; color: var(--sf-ink); cursor: pointer; }
+.sf-del-confirm input { margin-top: 2px; }
+
+/* Single-step tasks and the collapsed advanced settings on quick tools */
+.sf-section-head { display: flex; align-items: baseline; gap: 10px; }
+.sf-section-action { margin-left: auto; }
+.sf-section-action + .sf-section-action { margin-left: 0; display: inline-flex; align-items: center; gap: 6px; }
+.sf-work-row .sf-work-open a.sf-secondary { padding: 5px 9px; font-size: 11px; flex: none; }
+.qt-advanced { border: 1px solid var(--sf-line); border-radius: 8px; padding: 0 12px; background: #fafbfc; }
+.qt-advanced > summary { cursor: pointer; padding: 10px 0; font-size: 12px; color: var(--sf-muted); list-style: none; }
+.qt-advanced > summary::-webkit-details-marker { display: none; }
+.qt-advanced > summary::before { content: '＋ '; }
+.qt-advanced[open] > summary::before { content: '－ '; }
+.qt-advanced > * + * { margin-top: 12px; }
+.qt-advanced[open] { padding-bottom: 14px; }
+
+/* Step-level progress relayed from ComfyUI's progress_state events */
+.sf-task-progress { display: grid; gap: 3px; margin-top: 6px; max-width: 560px; }
+.sf-task-progress-bar { display: block; height: 4px; border-radius: 3px; background: #e6e9ee; overflow: hidden; }
+.sf-task-progress-bar > span { display: block; height: 100%; border-radius: 3px; background: var(--sf-amber); transition: width .6s linear; }
+.sf-task-progress small { color: var(--sf-muted); font-size: 10px; }
+.sf-task-progress-bar > span.sf-tadw-progress-indeterminate { width: 34%; animation: sf-progress-sweep 1.2s ease-in-out infinite alternate; }
+@keyframes sf-progress-sweep { from { margin-left: 0; } to { margin-left: 66%; } }
+@media (max-width: 760px) { .sf-task-progress { max-width: none; } }
+@media (max-width: 760px) {
+  .sf-home-actions { flex-wrap: wrap; justify-content: flex-end; }
+  .sf-work-delete { width: 32px; height: 32px; }
+}
+
+/* 文件按钮：label 包住隐藏的 input，样式和普通按钮一致。 */
+.sf-file-button { cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.sf-file-button:focus-within { outline: 2px solid #b9c8e8; outline-offset: 2px; }
+
+/* 单步任务按工具分块：每块自己的小标题与条数。 */
+.sf-quick-group { margin-bottom: 18px; }
+.sf-quick-group-head { display: flex; align-items: baseline; gap: 8px; margin: 4px 0 8px; }
+.sf-quick-group-head h3 { font-size: 14px; letter-spacing: -.01em; }
+.sf-quick-group-head span { color: var(--sf-muted); font-size: 11px; }
+
+/* 删除预览里的可选归档清单 */
+.sf-del-archive { margin: 4px 0 12px; padding: 10px 12px; border: 1px dashed var(--sf-line); border-radius: 10px; background: #fbfcfe; }
+.sf-del-archive-head { margin-bottom: 6px; color: var(--sf-muted); font-size: 11px; }
+.sf-del-archive .sf-del-confirm { margin-top: 4px; }
+
+/* 项目档案：工作区摘要 + 最近文件 */
+.pd-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 12px 0 20px; }
+.pd-card { display: flex; gap: 10px; padding: 14px; border: 1px solid var(--sf-line); border-radius: 12px; background: #fff; }
+.pd-card strong { display: block; font-size: 13px; }
+.pd-card span { display: block; margin-top: 3px; color: var(--sf-muted); font-size: 10.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.pd-panel .sf-post-history span { overflow-wrap: anywhere; }
+
+/* 项目「库」工具：卡片列表 */
+.lib-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; margin-top: 10px; }
+.lib-card { display: grid; gap: 4px; padding: 12px; border: 1px solid var(--sf-line); border-radius: 12px; background: #fff; }
+.lib-card strong { font-size: 12.5px; font-weight: 650; }
+.lib-card span { color: var(--sf-muted); font-size: 11px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.lib-card small { color: #9aa1ab; font-size: 10px; }
+.lib-card button { margin-top: 4px; justify-self: start; }

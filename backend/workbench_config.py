@@ -34,6 +34,8 @@ TEMPLATE = paths.SKILLS_ROOT / "skills" / "aigc-video-production" / "assets" / "
 STORAGE_ROOTS = storage_roots(ROOT, shared_root=SHARED_ROOT)
 INPUT_ROOT = STORAGE_ROOTS['input']
 OUTPUT_ROOT = STORAGE_ROOTS['output']
+ASSETS_ROOT = STORAGE_ROOTS['assets']
+WORKS_ARCHIVE_ROOT = STORAGE_ROOTS['works_archive']
 FINISH_BUILDER = PROJECT / "tools" / "build_video_finish_workflow.py"
 DIST = PROJECT / "dist"
 REFERENCE_DECOMPOSER = PROJECT / "tools" / "reference_decompose.py"

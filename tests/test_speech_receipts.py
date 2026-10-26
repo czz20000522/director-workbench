@@ -10,7 +10,7 @@ from backend.speech import prepare, read_receipt
 def fixture(tmp_path):
     reference = tmp_path / 'voice.wav'
     reference.write_bytes(b'original reference')
-    payload = prepare('speech-1', '你好', reference, tmp_path / 'snapshots')
+    payload = prepare('speech-1', '你好', reference, tmp_path / 'snapshots', engine='indextts-2.5')
     reference.write_bytes(b'changed reference')
     assert Path(payload['request']['voice_reference']).read_bytes() == b'original reference'
     output_dir = Path(payload['output_dir'])
@@ -42,3 +42,19 @@ def test_missing_receipt_does_not_imply_failure_or_retry(tmp_path):
     payload, _, _ = fixture(tmp_path)
     with pytest.raises(FileNotFoundError):
         read_receipt(payload)
+
+
+@pytest.mark.parametrize('mode', ['reference', 'design'])
+def test_voxcpm_freezes_the_timbre_source_the_adapter_reads(tmp_path, mode):
+    reference = tmp_path / 'voice.wav'
+    reference.write_bytes(b'reference audio')
+    payload = prepare('vox-1', '先把这一段看完再决定。', reference if mode == 'reference' else None,
+                      tmp_path / 'snapshots', engine='voxcpm-2', mode=mode,
+                      voice_description=None if mode == 'reference' else '年长男性，声音低沉沙哑')
+    request = payload['request']
+    # tools/generate_speech_voxcpm.load_request rejects any other field set, so the
+    # frozen shape has to name the mode even when the reference came from a clip.
+    assert request['mode'] == mode
+    assert set(request) == {'task_id', 'text', 'mode', 'engine', 'parameters', 'emotion',
+                            'voice_reference' if mode == 'reference' else 'voice_description'}
+    assert json.loads(Path(payload['request_path']).read_text(encoding='utf-8')) == request

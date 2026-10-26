@@ -16,8 +16,8 @@ import av
 from fastapi import APIRouter, HTTPException, Query
 import importlib.util
 from urllib.error import HTTPError, URLError
-from .. import enhancement
-from ..schemas import FinishRequest, StartRequest
+from .. import enhance_library, enhancement
+from ..schemas import FinishRequest, StartRequest, EnhanceArchiveRequest
 from .. import app as backend
 
 
@@ -208,13 +208,36 @@ def project_enhancements(project_id: str, offset: int = Query(0, ge=0)) -> dict[
     return {'sources': sources, 'tasks': tasks, 'next_offset': offset + 20 if len(rows) > 20 else None}
 
 
+@ROUTER.get('/api/enhance-library')
+def enhance_library_files() -> dict[str, Any]:
+    """清晰化库：素材库/清晰化 里的成品，按时间倒序。"""
+    return {'items': enhance_library.list_files()}
+
+
+@ROUTER.post('/api/projects/{project_id}/enhancements/{task_id}/archive')
+def archive_enhancement(project_id: str, task_id: str, request: EnhanceArchiveRequest) -> dict[str, Any]:
+    """把已完成的清晰化结果归档进清晰化库；勾选覆盖时改指向并删除原文件。"""
+    task = backend.get_task(task_id)
+    if not task or task.get('project_id') != project_id:
+        raise HTTPException(404, '清晰化任务不存在')
+    try:
+        return enhance_library.archive(project_id, task, overwrite=request.overwrite)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 @ROUTER.get('/api/projects/{project_id}/enhancement-capability')
 def enhancement_capability(project_id: str) -> dict[str, Any]:
     backend.require_project_manifest(project_id)
     try:
         return enhancement.capability(backend.request_json('/object_info'))
-    except (OSError, ValueError, HTTPError, URLError) as exc:
-        raise HTTPException(503, '无法检查 ComfyUI 清晰化能力，请确认引擎在线') from exc
+    except (OSError, HTTPError, URLError):
+        # Same as keyframes: an idle engine is started by the executor on submit.
+        return {'model': enhancement.MODEL, 'scale': 2, 'engine_offline': True,
+                'kinds': {'image': {'available': False, 'missing': []}, 'video': {'available': False, 'missing': []}},
+                'limits': '引擎待启动；提交后会自动拉起，再核对模型是否齐全。'}
+    except ValueError as exc:
+        raise HTTPException(503, f'无法检查 ComfyUI 清晰化能力: {exc}') from exc
 
 
 @ROUTER.post('/api/projects/{project_id}/enhancement-tasks', status_code=202)
@@ -239,7 +262,7 @@ def start_enhancement_task(project_id: str, request: enhancement.EnhancementRequ
     except (ValueError, OSError, av.error.FFmpegError) as exc:
         raise HTTPException(422, f'无法处理素材: {exc}') from exc
     capability = backend.enhancement_capability(project_id)
-    if not capability['kinds'][facts['kind']]['available']:
+    if not capability['kinds'][facts['kind']]['available'] and not capability.get('engine_offline'):
         raise HTTPException(422, '清晰化环境缺少节点或 RealESRGAN_x2plus.pth 模型')
     task_id = str(uuid.uuid4())
     asset_id = f'HD-{task_id[:8]}'

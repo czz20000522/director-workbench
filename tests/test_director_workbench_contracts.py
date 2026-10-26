@@ -45,7 +45,18 @@ def _openapi_contract_snapshot() -> dict[str, object]:
 def test_openapi_route_and_schema_snapshot() -> None:
     snapshot = _openapi_contract_snapshot()
     encoded = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
-    assert hashlib.sha256(encoded).hexdigest() == "b9e26f8dc0d1695207405e7cc4e1254d534d93dfde8015cbccee7083524f4fff"
+    # 2026-10-23：加入作品两段式删除、任务队列的 PATCH/DELETE/revise，以及单步任务与批量删除后重新固定；
+    # 同日晚加入本地提示词库/素材参考库的只读检索、拆解与显式素材登记接口。
+    # 2026-10-24：加入锚点配音能力查询与视频后置配音任务接口（DubbingCue/DubbingRequest）。
+    # 2026-10-25：加入本机 Ollama 画面观察（VlmObservationRequest）与 ACE-Step 配乐（MusicRequest）接口。
+    # 同日加入配乐／配音命名设定库的列出、保存与删除接口（CreativeSettingRequest）。
+    # 同日加入 IndexTTS 情绪控制请求模型（EmotionSpec）。
+    # 同日加入音色库/配乐库的列出、保存与删除接口（/api/preset-library，复用 CreativeSettingRequest）。
+    # 同日加入换音轨能力查询与任务接口（AudioSwapRequest）：成片后只换音轨、画面流不重渲染。
+    # 同日加入清晰化库：列出清晰化成品与「归档/覆盖原件」接口（EnhanceArchiveRequest）。
+    # 同日加入剧本库草稿/归档接口（ScriptDraftRequest）。
+    # 同日加入项目档案只读接口（GET /api/projects/{id}/dossier）。
+    assert hashlib.sha256(encoded).hexdigest() == "687dfd2ab18e1c433334934262a7014d4d91c18e02731943fd2c8cdb4b67db3c"
     assert {"StartRequest", "AssemblyRequest", "ProjectCreateRequest"} <= set(snapshot["schemas"])
 
 
@@ -93,7 +104,7 @@ def test_core_response_contracts_keep_stable_field_sets(client: TestClient) -> N
 
     status = client.get("/api/status")
     assert status.status_code == 200
-    assert set(status.json()) == {"comfy"}
+    assert set(status.json()) == {"comfy", "progress"}
 
     task_id = _insert_task("project-a", "S01")
     tasks = client.get("/api/tasks")

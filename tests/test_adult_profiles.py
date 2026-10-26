@@ -33,7 +33,7 @@ def test_adult_image_graph_records_qwen_lora(tmp_path):
 
 def test_adult_image_capability_includes_lora_requirement():
     object_info = {
-        'UNETLoader': {'input': {'required': {'unet_name': [['qwen_image_2.1_int8_convrot.safetensors']]}}},
+        'UnetLoaderGGUF': {'input': {'required': {'unet_name': [['Qwen-Image-2.1-Turbo-AD-Q4_K.gguf']]}}},
         'CLIPLoader': {'input': {'required': {'clip_name': [['qwen3vl_8b_int8_convrot.safetensors']]}}},
         'VAELoader': {'input': {'required': {'vae_name': [['qwen_image_2.1_vae_bf16.safetensors']]}}},
         'TextEncodeQwenImage21': {'input': {'required': {}}},
@@ -49,10 +49,24 @@ def test_adult_image_capability_includes_lora_requirement():
     assert result['creative_profile'] == 'adult-realism'
 
 
-@pytest.mark.parametrize('prompt', ['未成年人肖像', 'celebrity face swap', 'explicit sex scene', '成熟女性裸体肖像', 'genital close-up', '脱去衣物'])
-def test_adult_prompt_boundary_rejects_prohibited_requests(prompt):
-    with pytest.raises(backend.HTTPException, match='仅支持虚构成年人和非露骨内容'):
-        backend.validate_creative_prompt(prompt, 'adult-realism')
+def test_text_image_graph_uses_8gb_gguf_turbo_profile():
+    """The 8GB deck must never freeze the int8 checkpoint or the 25-step sampler."""
+    recipe = graph('测试', 'project/image', 42)
+    assert recipe['1']['class_type'] == 'UnetLoaderGGUF'
+    assert recipe['1']['inputs']['unet_name'].endswith('.gguf')
+    assert 'weight_dtype' not in recipe['1']['inputs']
+    assert recipe['7']['inputs']['steps'] == 8
+
+
+@pytest.mark.parametrize('prompt', ['未成年人肖像', 'celebrity face swap', '萝莉塔', '给这位真人换脸', 'teen model', '名人裸照'])
+def test_prompts_targeting_minors_or_real_people_are_rejected(prompt):
+    with pytest.raises(backend.HTTPException, match='本机自用也不放行'):
+        backend.validate_creative_prompt(prompt)
+
+
+@pytest.mark.parametrize('prompt', ['成熟女性裸体肖像', 'explicit sex scene', '脱去衣物', '口交'])
+def test_fictional_adult_explicit_prompts_pass_the_guard(prompt):
+    backend.validate_creative_prompt(prompt)
 
 
 def test_adult_preset_requires_explicit_adult_profile():

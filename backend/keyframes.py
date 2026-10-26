@@ -93,7 +93,7 @@ def prepare(task_id: str, prompt: str, reference: Path, snapshot_root: Path,
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 6000:
         raise ValueError('画面描述长度须为 1 至 6000 字符')
     if type(seed) is not int or not 0 <= seed <= 2**64 - 1:
-        raise ValueError('种子必须是有效的非负整数')
+        raise ValueError('随机编号必须是有效的非负整数')
     prefix = PurePosixPath(output_prefix)
     if (not output_prefix or prefix.is_absolute() or '\\' in output_prefix
             or ':' in output_prefix or any(part in {'', '.', '..'} for part in output_prefix.split('/'))):

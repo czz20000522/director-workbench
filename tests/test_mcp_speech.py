@@ -17,16 +17,19 @@ def test_mcp_speech_returns_same_task_and_can_lookup_receipt(preset_client, monk
     monkeypatch.setattr(threading, 'Thread', REAL_THREAD)
     monkeypatch.setattr(backend, 'run_speech_task', lambda *args: None)
     monkeypatch.setattr(backend, 'comfy_status', lambda: {'online': False})
-    monkeypatch.setattr(backend.speech, 'capability', lambda: {'available': True, 'missing': []})
+    monkeypatch.setattr(backend.speech, 'capability', lambda *args, **kwargs: {'available': True, 'missing': []})
     reference = project / 'voice.wav'
     reference.write_bytes(b'input fixture')
     async def verify():
         async with Client(create_server('http://localhost:4100', httpx.ASGITransport(app=backend.app))) as client:
-            args = {'project_id': 'preset-test', 'text': '你好', 'voice_reference': str(reference), 'idempotency_key': 'mcp-speech-1', 'gen_seconds': 6, 'seed': 42}
+            args = {'project_id': 'preset-test', 'text': '你好', 'voice_reference': str(reference), 'idempotency_key': 'mcp-speech-1',
+            'engine': 'auk-flash', 'gen_seconds': 6, 'seed': 42}
             async def call(name, values):
                 return (await client.call_tool(name, values)).structured_content
             capability = await call('get_speech_capability', {})
-            assert capability == {'ok': True, 'data': {'available': True, 'missing': []}}
+            assert capability['ok'], capability
+            assert capability['data']['available'] is True and capability['data']['missing'] == []
+            assert {'auk-flash', 'indextts-2.5'} <= set(capability['data']['engines'])
             assert (await call('list_tasks', {'project_id': 'preset-test'}))['data']['tasks'] == []
             first = await call('submit_speech', args)
             assert first['ok'], first
@@ -46,8 +49,8 @@ def test_mcp_speech_returns_same_task_and_can_lookup_receipt(preset_client, monk
 def test_mcp_design_without_reference_and_rejects_mixed_mode(preset_client, monkeypatch):
     monkeypatch.setattr(threading, 'Thread', REAL_THREAD)
     monkeypatch.setattr(backend, 'run_speech_task', lambda *args: None)
-    monkeypatch.setattr(backend, 'comfy_status', lambda: {'online': False})
-    monkeypatch.setattr(backend.speech, 'capability', lambda: {'available': True, 'missing': []})
+    monkeypatch.setattr(backend, 'comfy_status', lambda *args, **kwargs: {'online': False})
+    monkeypatch.setattr(backend.speech, 'capability', lambda *args, **kwargs: {'available': True, 'missing': []})
 
     async def verify():
         async with Client(create_server('http://localhost:4100', httpx.ASGITransport(app=backend.app))) as client:

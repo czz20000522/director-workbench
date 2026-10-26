@@ -12,6 +12,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend import app as backend
+from backend import comfy_engine
+
+
+@pytest.fixture(autouse=True)
+def _no_real_engine_launch(request, monkeypatch):
+    """Generation runners start ComfyUI on demand; tests must never launch it."""
+    if request.path.name == 'test_comfy_engine.py':
+        return
+    monkeypatch.setattr(comfy_engine, 'ensure_online', lambda: {'online': True, 'started': False})
 
 
 @pytest.fixture

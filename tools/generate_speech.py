@@ -18,8 +18,8 @@ def load_request(path: Path) -> dict:
     request = json.loads(path.read_text(encoding='utf-8'))
     if not isinstance(request, dict):
         raise ValueError('声音任务必须是 JSON 对象')
-    if set(request) != {'task_id', 'text', 'voice_reference'}:
-        raise ValueError('声音任务只接受 task_id、text、voice_reference')
+    if not {'task_id', 'text', 'voice_reference'} <= set(request) or set(request) - {'task_id', 'text', 'voice_reference', 'emotion'}:
+        raise ValueError('声音任务只接受 task_id、text、voice_reference 与可选的 emotion')
     for key in ('task_id', 'text', 'voice_reference'):
         if not isinstance(request[key], str) or not request[key].strip():
             raise ValueError(f'{key} 不能为空')
@@ -28,6 +28,12 @@ def load_request(path: Path) -> dict:
     reference = Path(request['voice_reference'])
     if not reference.is_absolute() or not reference.is_file():
         raise ValueError('音色参考必须是已存在的绝对文件路径')
+    request.setdefault('emotion', {'mode': 'none'})
+    if request['emotion'].get('mode') == 'reference':
+        emotion_path = Path(str(request['emotion'].get('reference') or ''))
+        if not emotion_path.is_absolute() or not emotion_path.is_file():
+            raise ValueError('情绪参考必须是已存在的绝对文件路径')
+        request['emotion'] = {**request['emotion'], 'reference': str(emotion_path)}
     return request
 
 
@@ -38,16 +44,18 @@ def generate(request_path: Path, output_dir: Path) -> dict:
     os.environ['HF_HUB_OFFLINE'] = '1'
     os.environ['TRANSFORMERS_OFFLINE'] = '1'
     sys.path.insert(0, str(TTS_ROOT))
+    from backend.emotion import infer_arguments
     from indextts.infer_v2_5 import IndexTTS2
     import soundfile as sf
 
     print('loading_model', flush=True)
     model = IndexTTS2(cfg_path=str(MODEL_ROOT / 'config.yaml'), model_dir=str(MODEL_ROOT),
-                      use_bf16=True, use_cuda_kernel=False, use_torch_compile=False, use_qwen_emo=False)
+                      use_bf16=True, use_cuda_kernel=False, use_torch_compile=False,
+                      use_qwen_emo=bool(request['emotion'].get('use_qwen_emo')))
     print('generating', flush=True)
     output = output_dir / 'speech.wav'
     model.infer(spk_audio_prompt=request['voice_reference'], text=request['text'], lang='ZH',
-                output_path=str(output), verbose=False)
+                output_path=str(output), verbose=False, **infer_arguments(request['emotion']))
     info = sf.info(output)
     if info.frames <= 0 or info.samplerate <= 0:
         raise ValueError('声音执行器未生成有效音频')

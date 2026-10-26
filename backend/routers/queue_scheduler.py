@@ -44,7 +44,11 @@ def scheduler_resource_reason():
         jobs = background_jobs.records(backend.analysis_job_root())
     if any(job['status'] in background_jobs.ACTIVE and not job.get('task_id') for job in jobs):
         return {'code': 'analysis_needs_reconcile', 'message': '等待旧参考分析结束或核对回执'}
-    queue = backend.request_json('/queue')
+    try:
+        queue = backend.request_json('/queue')
+    except (OSError, ValueError):
+        # ComfyUI 按需启动：离线时仍要放行派发，由执行器先拉起引擎再提交。
+        return None
     if not isinstance(queue, dict) or not all(isinstance(queue.get(key), list) for key in ('queue_running', 'queue_pending')):
         raise ValueError('ComfyUI queue unavailable')
     if queue['queue_running'] or queue['queue_pending']:
@@ -73,6 +77,14 @@ def revalidate_queued_task(task):
         key = 'analysis_path' if payload['kind'] == 'reference_semantic' else 'source'
         if not backend.resolve_registered_path(payload[key]).is_file():
             raise ValueError('参考分析输入无法读取')
+    if payload.get('kind') == 'vlm_observation':
+        request = payload.get('request') or {}
+        try:
+            inputs = [backend.resolve_registered_path(str(request[key])) for key in ('source', 'observation_frame')]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError('画面观察输入无法读取，请重新提交') from exc
+        if not all(path.is_file() for path in inputs):
+            raise ValueError('画面观察输入无法读取，请重新提交')
     if payload.get('segment_dependencies'):
         document = json.loads(backend.resolve_registered_path(manifest['plan_path']).read_text(encoding='utf-8-sig'))
         blockers = backend.segment_dependency_blockers(document, {'dependencies': payload['segment_dependencies']})
@@ -86,10 +98,16 @@ def execute_scheduled_task(task):
     kind = payload.get('kind')
     if kind == 'speech':
         return backend.run_speech_task(task['id'], payload)
+    if kind == 'anchor_dubbing':
+        return backend.run_anchor_dubbing_task(task['id'], payload)
+    if kind == 'vlm_observation':
+        return backend.run_vlm_observation_task(task['id'], payload)
     if kind == 'audio_edit':
         return backend.run_audio_edit_task(task['id'], payload)
     if kind == 'audio_master':
         return backend.run_audio_master_task(task['id'], payload)
+    if kind == 'audio_swap':
+        return backend.run_audio_swap_task(task['id'], payload)
     if kind == 'media_operation':
         return backend.run_media_operation_task(task['id'], payload)
     if kind == 'reference_semantic':

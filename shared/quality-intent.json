@@ -1,0 +1,14 @@
+{
+  "tiers": [
+    { "resolution": "8k", "label": "8K", "phrases": ["8k", "4320p"] },
+    { "resolution": "4k", "label": "4K", "phrases": ["4k", "2160p", "ultra hd", "ultra-hd", "uhd", "超高清", "超高清晰"] },
+    { "resolution": "2k", "label": "2K", "phrases": ["2k", "1440p", "qhd", "high definition", "高画质", "高清晰", "高分辨率", "高清"] },
+    { "resolution": "native", "label": "1K", "phrases": ["1k", "原生分辨率", "原始分辨率", "native"] }
+  ],
+  "negations": {
+    "prefixes": ["不要", "不用", "无需", "不需要", "不是", "没有", "禁用"],
+    "chars": ["不", "别", "勿"],
+    "words": ["no", "not", "without", "non"]
+  },
+  "video": { "max_resolution": "4k" }
+}

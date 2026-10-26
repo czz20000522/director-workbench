@@ -16,7 +16,12 @@ try {
   let receipt = { id: 'candidate-1', status: 'scheduler_waiting', queue: { state: 'waiting_resource', reason: { code: 'gpu_busy', message: '等待共享执行资源' }, position: 2 } };
   await page.route('http://localhost:4199/**', async route => {
     const request = route.request();
-    if (request.url().endsWith('/speech-capability')) return route.fulfill({ json: { available: true } });
+    if (request.url().endsWith('/speech-capability')) {
+      const vox = { available: true, missing: [], engine: 'VoxCPM2', id: 'voxcpm-2', modes: ['reference', 'design'], timbre: 'design-or-reference', seed: true, sample_rate: 48000, emotion_modes: { none: true, reference: false, text: true, vector: false }, emotion_unsupported: ['reference', 'vector'] };
+      const auk = { available: true, missing: [], engine: 'AuK-Flash', id: 'auk-flash', modes: ['reference', 'design'] };
+      const index = { available: false, missing: ['IndexTTS 主模型'], engine: 'IndexTTS 2.5', id: 'indextts-2.5', modes: ['reference'], timbre: 'reference-only', seed: false, emotion_modes: { none: true, reference: true, text: true, vector: true } };
+      return route.fulfill({ json: { ...vox, engines: { 'voxcpm-2': vox, 'auk-flash': auk, 'indextts-2.5': index } } });
+    }
     if (request.url().endsWith('/speech-tasks')) {
       submissions.push(request.postDataJSON());
       return route.fulfill({ json: receipt });
@@ -28,6 +33,12 @@ try {
   await page.goto('http://localhost:4199/');
   
   await page.getByLabel('台词', { exact: true }).fill('天快黑了。');
+  // VoxCPM2 is the default engine and is the one that designs a timbre from words.
+  assert.equal(await page.getByLabel('声音引擎').inputValue(), 'voxcpm-2');
+  assert.equal(await page.getByRole('option', { name: 'IndexTTS 2.5（未就绪）' }).count(), 1);
+  // Modes VoxCPM2 structurally cannot take are labelled as such, not as missing installs.
+  assert.equal(await page.getByRole('option', { name: '情绪参考音频（这个引擎不吃这种情绪）' }).count(), 1);
+  assert.equal(await page.getByRole('option', { name: '八维情绪强度（这个引擎不吃这种情绪）' }).count(), 1);
   assert.equal(await page.getByRole('button', { name: '生成声音候选' }).isEnabled(), false);
   await page.getByLabel('声音来源').selectOption('design');
   assert.equal(await page.getByRole('button', { name: '生成声音候选' }).isEnabled(), false);
@@ -36,9 +47,12 @@ try {
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('director-workbench:new-work:speech:v1')).pending);
   await page.waitForTimeout(100);
   assert.equal(submissions.length, 1);
+  assert.equal(submissions[0].engine, 'voxcpm-2');
   assert.equal(submissions[0].mode, 'design');
   assert.equal(submissions[0].voice_description, '年长男性，低沉沙哑');
   assert.equal('voice_reference' in submissions[0], false);
+  assert.equal('gen_seconds' in submissions[0], false);
+  assert.equal(submissions[0].emotion, null);
   await page.reload();
   
   assert.equal(await page.getByLabel('声音来源').inputValue(), 'design');

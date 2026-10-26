@@ -6,11 +6,11 @@ from backend import app as backend
 def test_flash_parameters_and_legacy_submission_identity(preset_client, monkeypatch):
     client, project = preset_client
     monkeypatch.setattr(backend, 'comfy_status', lambda: {'online': False})
-    monkeypatch.setattr(backend.speech, 'capability', lambda: {'available': True})
+    monkeypatch.setattr(backend.speech, 'capability', lambda *args, **kwargs: {'available': True})
     reference = project / 'voice.wav'
     reference.write_bytes(b'fixture')
     endpoint = '/api/projects/preset-test/speech-tasks'
-    args = {'text': '你好', 'voice_reference': str(reference), 'idempotency_key': 'engine-switch'}
+    args = {'engine': 'auk-flash', 'text': '你好', 'voice_reference': str(reference), 'idempotency_key': 'engine-switch'}
     for extra in ({'gen_seconds': 0}, {'gen_seconds': 31}, {'seed': True}, {'seed': -1}):
         assert client.post(endpoint, json={**args, **extra}).status_code == 422
     first = client.post(endpoint, json=args).json()
@@ -38,15 +38,16 @@ def test_flash_parameters_and_legacy_submission_identity(preset_client, monkeypa
 def test_speech_submission_receipt_stop_and_recovery(preset_client, monkeypatch, tmp_path):
     client, project = preset_client
     monkeypatch.setattr(backend, 'comfy_status', lambda: {'online': False})
-    monkeypatch.setattr(backend.speech, 'capability', lambda: {'available': True, 'missing': []})
+    monkeypatch.setattr(backend.speech, 'capability', lambda *args, **kwargs: {'available': True, 'missing': []})
     reference = project / 'voice.wav'
     reference.write_bytes(b'test reference')
     endpoint = '/api/projects/preset-test/speech-tasks'
-    args = {'text': '你好', 'voice_reference': str(reference), 'idempotency_key': 'speech-proof'}
+    args = {'engine': 'auk-flash', 'text': '你好', 'voice_reference': str(reference), 'idempotency_key': 'speech-proof'}
     result = client.post(endpoint, json=args)
     assert result.status_code == 202, result.text
     task = result.json()
     assert task['payload']['kind'] == 'speech'
+    assert task['payload']['engine'] == 'auk-flash'
     assert client.post(endpoint, json=args).json()['id'] == task['id']
     assert client.post(endpoint, json={**args, 'text': '其他台词'}).status_code == 409
     another = client.post(endpoint, json={**args, 'idempotency_key': 'another'})
@@ -87,9 +88,9 @@ def test_speech_submission_receipt_stop_and_recovery(preset_client, monkeypatch,
 
 def test_missing_speech_environment_rejects_before_creating_task(preset_client, monkeypatch):
     client, _ = preset_client
-    monkeypatch.setattr(backend.speech, 'capability', lambda: {'available': False, 'missing': ['gpt.pth']})
+    monkeypatch.setattr(backend.speech, 'capability', lambda *args, **kwargs: {'available': False, 'missing': ['gpt.pth']})
     assert client.get('/api/speech-capability').json()['missing'] == ['gpt.pth']
-    response = client.post('/api/projects/preset-test/speech-tasks', json={'text': '你好', 'voice_reference': 'missing.wav', 'idempotency_key': 'missing-runtime'})
+    response = client.post('/api/projects/preset-test/speech-tasks', json={'engine': 'auk-flash', 'text': '你好', 'voice_reference': 'missing.wav', 'idempotency_key': 'missing-runtime'})
     assert response.status_code == 503
     assert response.json()['detail']['missing'] == ['gpt.pth']
     assert client.get('/api/projects/preset-test/tasks').json()['tasks'] == []
@@ -97,11 +98,11 @@ def test_missing_speech_environment_rejects_before_creating_task(preset_client, 
 
 def test_definite_failure_releases_capacity_without_automatic_retry(preset_client, monkeypatch):
     client, project = preset_client
-    monkeypatch.setattr(backend.speech, 'capability', lambda: {'available': True, 'missing': []})
+    monkeypatch.setattr(backend.speech, 'capability', lambda *args, **kwargs: {'available': True, 'missing': []})
     monkeypatch.setattr(backend, 'comfy_status', lambda: {'online': False})
     reference = project / 'voice.wav'
     reference.write_bytes(b'fixture')
-    args = {'text': '你好', 'voice_reference': str(reference), 'idempotency_key': 'failed-proof'}
+    args = {'engine': 'auk-flash', 'text': '你好', 'voice_reference': str(reference), 'idempotency_key': 'failed-proof'}
     endpoint = '/api/projects/preset-test/speech-tasks'
     task = client.post(endpoint, json=args).json()
     def fail(*args):
@@ -120,7 +121,7 @@ def test_design_freezes_description_and_rejects_ambiguous_inputs(preset_client, 
     monkeypatch.setattr(backend, 'comfy_status', lambda: {'online': False})
     monkeypatch.setattr(backend.speech, 'capability', lambda: {'available': True})
     endpoint = '/api/projects/preset-test/speech-tasks'
-    args = {'text': '福贵啊，你坐下。', 'mode': 'design', 'voice_description': '低沉苍老的男声', 'idempotency_key': 'design-voice'}
+    args = {'engine': 'auk-flash', 'text': '福贵啊，你坐下。', 'mode': 'design', 'voice_description': '低沉苍老的男声', 'idempotency_key': 'design-voice'}
     for extra in ({'voice_reference': 'other.wav'}, {'reference_image': 'other.png'}, {'voice_description': ' '}, {'mode': 'reference'}, {'mode': 'invalid'}):
         assert client.post(endpoint, json={**args, **extra}).status_code == 422
     result = client.post(endpoint, json=args)
@@ -134,6 +135,37 @@ def test_design_freezes_description_and_rejects_ambiguous_inputs(preset_client, 
     assert client.post(endpoint, json=args).json()['id'] == task['id']
     assert client.post(endpoint, json={**args, 'voice_description': '青年男声'}).status_code == 409
     assert client.post(endpoint, json={**args, 'seed': 3}).status_code == 409
+
+
+def test_design_candidate_is_filed_as_a_timbre_sample(preset_client, monkeypatch):
+    from pathlib import Path
+    client, project = preset_client
+    monkeypatch.setattr(backend, 'comfy_status', lambda: {'online': False})
+    monkeypatch.setattr(backend.speech, 'capability', lambda *args, **kwargs: {'available': True, 'missing': []})
+    endpoint = '/api/projects/preset-test/speech-tasks'
+    reference = project / 'voice.wav'
+    reference.write_bytes(b'fixture')
+    designed = client.post(endpoint, json={'engine': 'voxcpm-2', 'mode': 'design', 'text': '这段声音只用来试音色。',
+                                           'voice_description': '五十岁男性，声音低沉沙哑',
+                                           'idempotency_key': 'timbre-label'}).json()
+    spoken = client.post(endpoint, json={'engine': 'voxcpm-2', 'text': '别回头。', 'voice_reference': str(reference),
+                                         'idempotency_key': 'dialogue-label'}).json()
+
+    def execute(payload, cancelled):
+        output = Path(project) / f"{payload['request']['task_id']}.wav"
+        output.write_bytes(b'audio fixture')
+        return {'status': 'succeeded', 'output': str(output), 'duration_seconds': 2.5,
+                'sample_rate': 48000, 'channels': 1}
+    monkeypatch.setattr(backend.speech, 'execute', execute)
+    backend.run_speech_task(designed['id'], designed['payload'])
+    backend.run_speech_task(spoken['id'], spoken['payload'])
+    assets = {asset['id']: asset for asset in client.get('/api/projects/preset-test').json()['assets']}
+    # The 音色设计 panel lists its samples by this exact label, so it is a contract, not copy.
+    assert assets[f"speech-{designed['id']}"]['title'] == '音色 · 五十岁男性，声音低沉沙哑'
+    assert assets[f"speech-{designed['id']}"]['subtitle'] == '音色样本 · 待试听'
+    assert assets[f"speech-{designed['id']}"]['origin'] == 'VoxCPM2'
+    assert assets[f"speech-{spoken['id']}"]['title'] == '台词 · 别回头。'
+    assert assets[f"speech-{spoken['id']}"]['subtitle'] == '声音候选 · 待试听'
 
 
 def test_design_receipt_rejects_changed_description(tmp_path):

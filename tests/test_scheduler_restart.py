@@ -135,6 +135,7 @@ class ControlledEngine:
         self.running = set()
         self.history = {}
         self.unexpected = []
+        self.progress_sockets = 0
         self.release_response = threading.Event()
         engine = self
 
@@ -185,6 +186,12 @@ class ControlledEngine:
                         result = {prompt_id: engine.history[prompt_id]} if prompt_id in engine.history else {}
                     elif self.path == '/history?max_items=1':
                         result = dict(list(engine.history.items())[-1:])
+                    elif self.path.startswith('/ws'):
+                        # 进度监听会连 /ws 取 progress_state。它不是提交请求，允许存在；
+                        # 这里不做 WebSocket 握手，客户端按常规退避重连即可。
+                        engine.progress_sockets += 1
+                        self.send_error(501, 'websocket not simulated')
+                        return
                     else:
                         engine.unexpected.append(self.path)
                         self.send_error(400)

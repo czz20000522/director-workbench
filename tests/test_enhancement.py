@@ -173,3 +173,17 @@ def test_worker_and_reconcile_publish_separate_candidate_without_plan_writes(pre
     assert reconciled.status_code == 200, reconciled.text
     assert reconciled.json()['status'] == 'succeeded'
     assert client.get('/api/projects/preset-test/plan').json() == plan
+
+
+def test_capability_reports_idle_engine_without_missing_resources(preset_client, monkeypatch):
+    from urllib.error import URLError
+    client, _ = preset_client
+
+    def offline(*args, **kwargs):
+        raise URLError(OSError(10061, 'refused'))
+
+    monkeypatch.setattr(backend, 'request_json', offline)
+    data = client.get('/api/projects/preset-test/enhancement-capability').json()
+    assert data['engine_offline'] is True
+    assert data['kinds']['image'] == {'available': False, 'missing': []}
+    assert data['kinds']['video'] == {'available': False, 'missing': []}

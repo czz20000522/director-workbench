@@ -13,7 +13,7 @@ type Data = { revision: number; inspection: Inspection; comparison_sources: Sour
   items: { task_id: string; parameter_differences: { field: string; current?: unknown; previous?: unknown }[] }[];
   review_records: { revision: number; data: { note?: string; status?: string; candidate_ref?: string } }[] };
 const value = (v: unknown) => v === null || v === undefined ? '未知' : typeof v === 'object' ? JSON.stringify(v) : String(v);
-const names: Record<string, string> = { width: '宽度', height: '高度', duration_seconds: '播放时长', fps: '帧率', audio_strategy: '声音策略', prompt: '提示词', first_frame: '首帧', last_frame: '尾帧', audio_guide: '声音参考', workflow: '制作方案', seed: '随机种子' };
+const names: Record<string, string> = { width: '宽度', height: '高度', duration_seconds: '播放时长', fps: '帧率', audio_strategy: '声音策略', prompt: '提示词', first_frame: '首帧', last_frame: '尾帧', audio_guide: '声音参考', workflow: '制作方案', seed: '随机编号' };
 
 export function ReferenceDifferenceSummary({ inspection }: { inspection: Inspection }) {
   const labels: Record<string, string> = { has_audio: '有音轨', silent: '无音轨', segment_native: '保留各段原音', complete_master: '完整母版替换', mute: '全片静音', legacy_master: '原完整母版' };

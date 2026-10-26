@@ -9,7 +9,7 @@ const master={source_asset_id:'voice',target_lufs:-16,true_peak_dbtp:-1,fade_in_
 localStorage.setItem('director-workbench:panel-test:keyframe:v1',JSON.stringify({mode:'text',prompt:'人物参考',seed:42,pending:{mode:'text',prompt:'人物参考',seed:42,idempotency_key:'keyframe-key'}}));
 localStorage.setItem('director-workbench:panel-test:audio-edit:v1',JSON.stringify({draft:audio,pending:{...audio,idempotency_key:'audio-key'}}));
 localStorage.setItem('director-workbench:panel-test:audio-master:v1',JSON.stringify({draft:master,pending:{...master,idempotency_key:'master-key'}}));
-createRoot(document.getElementById('root')).render(<><KeyframePanel projectId="panel-test" options={[]} onBrowse={()=>{}} onComplete={()=>{}}/><AudioEditPanel projectId="panel-test" audioAssets={[{id:'voice',title:'声音素材'}]} onBrowse={()=>{}} onComplete={()=>{}}/></>);`, loader: 'tsx', resolveDir: process.cwd() }, bundle: true, write: false, format: 'iife', jsx: 'automatic' });
+createRoot(document.getElementById('root')).render(<><KeyframePanel projectId="panel-test" options={[]} onBrowse={()=>{}} onComplete={()=>{}}/><AudioEditPanel projectId="panel-test" audioAssets={[{id:'voice',title:'声音素材'}]} onBrowse={()=>{}} onComplete={()=>{}}/></>);`, loader: 'tsx', resolveDir: process.cwd() }, bundle: true, write: false, format: 'iife', jsx: 'automatic', plugins: [{ name: 'ignore-css', setup(build) { build.onLoad({ filter: /.css$/ }, () => ({ contents: '', loader: 'js' })); } }] });
 const browser = await chromium.launch({ channel: 'msedge', headless: true });
 try {
   const page = await browser.newPage(); const controls = []; const errors = [];

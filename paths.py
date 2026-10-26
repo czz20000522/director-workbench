@@ -48,6 +48,8 @@ SHARED_ROOT = COMFY_ROOT / 'ComfyUI-Shared'
 INSTALL_ROOT = COMFY_ROOT / 'ComfyUI-Installs/第一个comfyui配置/ComfyUI'
 COMFY_PYTHON = INSTALL_ROOT / '.venv/Scripts/python.exe'
 LLAMA_ROOT = _override('DIRECTOR_LLAMA_ROOT', Path('D:/software/llama.cpp'))
+# VoxCPM2 (配音/音色设计引擎) sits next to the ComfyUI machine root, not inside it.
+VOXCPM_ROOT = _override('DIRECTOR_VOXCPM_ROOT', COMFY_ROOT.parent / 'VoxCPM')
 
 # --- Workbench machine root: our data, independent of ComfyUI -----------------
 DATA_ROOT = _override(

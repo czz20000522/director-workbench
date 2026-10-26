@@ -139,7 +139,7 @@ def create_plan_segment(project_id: str, request: PlanSegmentCreateRequest) -> d
         )
     except shot_creation.UnsupportedCombination as exc:
         raise backend.plan_selection_error(project_id, manifest, exc) from exc
-    backend.validate_creative_prompt(request.prompt, generation['creative_profile'])
+    backend.validate_creative_prompt(request.prompt)
     segments = document.get("segments") if isinstance(document.get("segments"), list) else []
     next_start = sum(float(item.get("duration_seconds", 0) or 0) for item in segments if isinstance(item, dict))
     base_id = request.segment_id or f"S{len(segments) + 1:02d}"
@@ -448,6 +448,9 @@ def update_plan_segment(project_id: str, segment_id: str, request: PlanSegmentUp
         segment[key] = value.strip() if isinstance(value, str) else value
     manifest = backend.require_project_manifest(project_id)
     needs_plan = bool(requested_preset or 'workflow' in updates or 'generation' in updates or segment.get('workflow'))
+    # Reference-derived drafts may not have a production plan yet. Editing their
+    # prompt or scene does not require selecting one; adding plan, workflow or
+    # generation fields does.
     if needs_plan:
         try:
             workflow, preset_id = shot_creation.resolve_plan(manifest, segment.get('workflow'), requested_preset)
@@ -467,12 +470,7 @@ def update_plan_segment(project_id: str, segment_id: str, request: PlanSegmentUp
             raise backend.plan_selection_error(project_id, manifest, exc) from exc
         if 'generation' in updates or preset_id is not None:
             segment['generation'] = generation
-    else:
-        # Reference-derived drafts may not have a production plan yet. Editing
-        # their prompt or scene does not require selecting one; adding plan,
-        # workflow or generation fields does.
-        generation = segment.get('generation') if isinstance(segment.get('generation'), dict) else {}
-    backend.validate_creative_prompt(str(segment.get('prompt') or ''), str(generation.get('creative_profile', 'general')))
+    backend.validate_creative_prompt(str(segment.get('prompt') or ''))
     if needs_plan and (request.duration_seconds is not None or request.workflow is not None or requested_preset is not None):
         backend.validate_h3_plan_duration(manifest, segment)
     backend.persist_plan_edit(project_id, document, plan_path)
