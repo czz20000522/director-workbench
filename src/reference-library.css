@@ -114,6 +114,13 @@
 .rl-action.primary { background: var(--sf-amber); border-color: var(--sf-amber); color: #fff; }
 .rl-action.primary:hover { background: var(--sf-amber-2); }
 .rl-action:disabled { opacity: .45; cursor: not-allowed; }
+/* 「从库中移除」：只移索引不动源文件，所以用描边红而不是实心红，别吓人 */
+.rl-action.danger { border-color: #e7c3c3; color: #a53030; }
+.rl-action.danger:hover { border-color: #d9a3a3; background: #fdf6f6; }
+/* 已移除条目的提示行 + 恢复入口 */
+.rl-excluded { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.rl-inline-link { border: 0; background: none; padding: 0; color: var(--sf-amber-2); font-size: 11px; text-decoration: underline; cursor: pointer; }
+.rl-inline-link:hover { color: var(--sf-ink); }
 .rl-anatomy { margin-top: 14px; border-top: 1px solid var(--sf-line); padding-top: 12px; }
 .rl-anatomy-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
 .rl-anatomy-head strong { font-size: 12px; }
@@ -227,6 +234,10 @@
 .sf-root .pl-card-actions button { flex: none; padding: 3px 8px; border: 1px solid var(--sf-line); border-radius: 7px; background: #fff; color: var(--sf-muted); font-size: 10.5px; display: inline-flex; align-items: center; gap: 3px; }
 .sf-root .pl-card-actions button:hover { border-color: #b9c8e8; color: var(--sf-ink); }
 .sf-root .pl-card-actions button:disabled { opacity: .5; cursor: wait; }
+/* 预设卡片重命名：行内换成输入框，回车保存、Esc 取消，不弹窗 */
+.sf-root .pl-rename { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.sf-root .pl-rename input { width: 120px; padding: 3px 7px; border: 1px solid #b9c8e8; border-radius: 7px; background: #fff; color: var(--sf-ink); font-size: 10.5px; }
+.sf-root .pl-rename input:focus { outline: 2px solid #c9d6f2; outline-offset: 1px; }
 .sf-root .pl-error { margin: 0 12px 10px; color: #b3261e; font-size: 10.5px; line-height: 1.5; }
 
 /* 剧本库：左栏入口卡 + 双栏编辑弹窗 */

@@ -70,15 +70,22 @@ function valid(draft: Draft): boolean {
 }
 class RequestError extends Error { constructor(message: string, readonly status: number) { super(message); } }
 
-export default function TimbrePanel({ projectId, onComplete, initialDescription }: {
-  projectId: string; onComplete: () => void; initialDescription?: string;
+export default function TimbrePanel({ projectId, onComplete, initialDescription, initialDraft }: {
+  projectId: string; onComplete: () => void; initialDescription?: string; initialDraft?: Partial<Draft> | null;
 }) {
   const storageKey = `director-workbench:${projectId}:timbre:v1`;
   const prefix = useId();
   // 音色库带入的描述只是一次起点，不覆盖你已经写下的内容。
+  // 「编辑重生成」带回来的是上次那条任务自己的输入：整份盖掉草稿，并丢掉可能把表单
+  // 锁住的旧提交凭据，否则你点进来只能看着上一次的记录，改不了。
   function seeded(state: Saved): Saved {
-    return initialDescription && !state.draft.voice_description
-      ? { ...state, draft: { ...state.draft, voice_description: initialDescription } } : state;
+    if (!initialDraft) {
+      return initialDescription && !state.draft.voice_description
+        ? { ...state, draft: { ...state.draft, voice_description: initialDescription } } : state;
+    }
+    const draft = { ...state.draft, ...initialDraft };
+    draft.seed = Number.isInteger(draft.seed) && draft.seed >= 0 && draft.seed <= 4294967295 ? draft.seed : initial.seed;
+    return { draft };
   }
   const [saved, setSaved] = useState<Saved>(() => seeded(load(storageKey)));
   const current = useRef(saved);

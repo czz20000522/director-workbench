@@ -1,10 +1,11 @@
 import { lazy, useEffect, useState } from 'react';
 import { AudioLines, BookOpen, ChevronLeft, Image, LoaderCircle, Music, Play, Upload, Wand2 } from 'lucide-react';
 import { mediaUrl, request } from './api/client';
-import type { OutputResolution } from './ResolutionPicker';
+import type { AspectRatio, OutputResolution } from './ResolutionPicker';
 import { capVideoQuality, detectQualityIntent, qualityLabel } from './qualityIntent';
 import { PromptLibraryDialog } from './ReferenceLibrary';
 import ProgressBar, { type TaskProgress } from './TaskProgress';
+import CompanionStudio from './CompanionStudio';
 
 const KeyframePanel = lazy(() => import('./KeyframePanel'));
 const EnhancementPanel = lazy(() => import('./EnhancementPanel'));
@@ -12,7 +13,13 @@ const MusicPanel = lazy(() => import('./MusicPanel'));
 const TimbrePanel = lazy(() => import('./TimbrePanel'));
 
 export type QuickTool = 'image' | 'text-video' | 'image-video' | 'enhance' | 'music' | 'timbre';
-export type QuickSeed = { prompt?: string; frame?: string; timbre?: string; music?: Record<string, unknown> };
+/** 首页「编辑重生成」把上次那条任务的可编辑输入原样带回来；fromTask 说明来源。 */
+export type QuickSeed = {
+  prompt?: string; frame?: string; timbre?: string; music?: Record<string, unknown>;
+  seed?: number; aspect?: AspectRatio; quality?: string; duration?: number; source?: string; text?: string;
+  steps?: number;
+  fromTask?: string;
+};
 // 点一下才写进提示词；措辞点明"画外、人物不开口"，这是 H3 把旁白当对白的常见原因。
 const NARRATION_HINT = '声音：全程画外旁白，镜头里的人物不开口、没有对白口型；人声清楚靠前，环境声压低。';
 type Tool = QuickTool;
@@ -52,18 +59,23 @@ function quickWorkspace(): Promise<string> {
   return quickWorkspacePromise;
 }
 
-function QuickVideo({ mode, initialFrame, initialPrompt }: { mode: 'text-video' | 'image-video'; initialFrame?: string; initialPrompt?: string }) {
+function QuickVideo({ mode, initialFrame, initialPrompt, initialDuration, initialQuality }: {
+  mode: 'text-video' | 'image-video'; initialFrame?: string; initialPrompt?: string;
+  initialDuration?: number; initialQuality?: OutputResolution;
+}) {
   const [presets, setPresets] = useState<Preset[]>([]);
   const [presetId, setPresetId] = useState('');
   const [prompt, setPrompt] = useState(initialPrompt || '');
   const [libraryOpen, setLibraryOpen] = useState(false);
-  const [duration, setDuration] = useState(4);
-  const [quality, setQuality] = useState<OutputResolution>('native');
+  const [duration, setDuration] = useState(Number.isFinite(initialDuration) && (initialDuration as number) > 0 ? (initialDuration as number) : 4);
+  const [quality, setQuality] = useState<OutputResolution>(initialQuality ?? 'native');
   const [firstFrame, setFirstFrame] = useState(initialFrame || '');
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
   const [progress, setProgress] = useState<TaskProgress | null>(null);
   const [video, setVideo] = useState('');
+  // 记住产出这条视频的任务号，后续配乐/音色靠它建立归属。
+  const [videoTaskId, setVideoTaskId] = useState('');
   const [error, setError] = useState('');
   const [projectId, setProjectId] = useState('');
 
@@ -107,9 +119,12 @@ function QuickVideo({ mode, initialFrame, initialPrompt }: { mode: 'text-video' 
       if (!stage) throw new Error('方案未返回可执行阶段');
       const workflow = stage.execution?.references?.[0] || '';
       setStatus('登记镜头…');
+      // revision 每次落盘都会涨；写死 0 会让第二次生成直接报「分镜计划已被修改」。
+      const plan = await request<{ revision?: number }>(`/api/projects/${id}/plan`)
+        .catch(() => ({ revision: 0 }));
       await request(`/api/projects/${id}/plan/segments`, {
         init: { method: 'POST' }, json: {
-          segment_id: 'S01', expected_revision: 0, duration_seconds: duration, prompt: prompt.trim(),
+          segment_id: 'S01', expected_revision: plan.revision ?? 0, duration_seconds: duration, prompt: prompt.trim(),
           workflow, first_frame: mode === 'image-video' ? firstFrame : undefined,
           generation: { aspect_ratio: aspect, seed: 42, sound_mode: 'performance_reference', speed_profile: 'standard', output_resolution: appliedQuality },
         },
@@ -139,7 +154,7 @@ function QuickVideo({ mode, initialFrame, initialPrompt }: { mode: 'text-video' 
       const versions = await request<{ items: Version[] }>(`/api/projects/${id}/segments/S01/versions`);
       const output = versions.items?.[0]?.video_path;
       if (!output) throw new Error('任务成功但未找到候选视频');
-      setVideo(output); setStatus('已完成');
+      setVideo(output); setVideoTaskId(task.id); setStatus('已完成');
     } catch (reason) { setError(reason instanceof Error ? reason.message : '生成失败'); setStatus(''); }
     finally { setBusy(false); }
   };
@@ -167,6 +182,12 @@ function QuickVideo({ mode, initialFrame, initialPrompt }: { mode: 'text-video' 
     {status && <p className="qt-status">{busy && <LoaderCircle size={14} className="sf-spin" />}{status}</p>}
     <ProgressBar progress={progress} />
     {video && <div className="qt-result"><video src={mediaUrl(video)} controls preload="metadata" /><a className="sf-secondary" href={mediaUrl(video)} download>下载结果</a></div>}
+    {video && videoTaskId && projectId && <section className="qt-companions" aria-label="这条视频的配套素材">
+      <h3 className="qt-companions-title">配套素材</h3>
+      <p className="qt-companions-note">在这条视频下面直接做，产物会记下「属于 {videoTaskId.slice(0, 8)}」；参数按默认值走，要细调再去独立工具。</p>
+      <CompanionStudio projectId={projectId} parentTaskId={videoTaskId} duration={duration} kind="music" />
+      <CompanionStudio projectId={projectId} parentTaskId={videoTaskId} duration={duration} kind="timbre" />
+    </section>}
     <div className="sf-step-actions"><button className="sf-primary" disabled={busy} onClick={() => void submit()}>{busy ? '生成中…' : '生成'}</button></div>
     {libraryOpen && <PromptLibraryDialog target={mode} onUse={text => setPrompt(text)} onClose={() => setLibraryOpen(false)} />}
   </div>;
@@ -176,6 +197,13 @@ export default function QuickToolPage({ tool, onBack, seed }: { tool: Tool; onBa
   const [projectId, setProjectId] = useState('');
   const [error, setError] = useState('');
   const info = meta[tool];
+  // 带回来的画质只认这个工具真有的档位；8K 只属于图片，视频最高 4K。
+  const imageQuality: OutputResolution = seed?.quality === '2k' || seed?.quality === '4k' || seed?.quality === '8k' ? seed.quality : 'native';
+  const videoQuality: OutputResolution = seed?.quality === '2k' || seed?.quality === '4k' ? seed.quality : 'native';
+  const timbreDraft = seed?.fromTask && seed.timbre
+    ? { engine: 'voxcpm-2' as const, voice_description: seed.timbre,
+        ...(seed.text ? { text: seed.text } : {}), ...(Number.isInteger(seed.seed) ? { seed: seed.seed as number } : {}) }
+    : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -187,11 +215,12 @@ export default function QuickToolPage({ tool, onBack, seed }: { tool: Tool; onBa
   return <main className="sf-page qt-page">
     <button className="sf-back" onClick={onBack}><ChevronLeft size={15} /> 返回工具台</button>
     <header className="qt-head"><span className="qt-icon"><info.icon size={22} /></span><div><p className="sf-step-label">单步工具</p><h1>{info.title}</h1><p>{info.note}</p></div></header>
+    {seed?.fromTask && <p className="qt-status">已带回「{seed.fromTask}」的输入；改完再点生成，工作台不会自动重跑上一条。</p>}
     {error && <p className="sf-error" role="alert">{error}</p>}
-    {tool === 'image' && (projectId ? <KeyframePanel projectId={projectId} simple fresh initialMode="text" initialPrompt={seed?.prompt} options={[]} onBrowse={() => {}} onComplete={() => {}} /> : !error && <p className="qt-status"><LoaderCircle size={14} className="sf-spin" />正在准备单步项目…</p>)}
-    {tool === 'enhance' && (projectId ? <EnhancementPanel projectId={projectId} onBack={onBack} /> : !error && <p className="qt-status"><LoaderCircle size={14} className="sf-spin" />正在准备单步项目…</p>)}
-    {tool === 'music' && (projectId ? <MusicPanel projectId={projectId} initialCard={seed?.music || null} onComplete={() => {}} /> : !error && <p className="qt-status"><LoaderCircle size={14} className="sf-spin" />正在准备单步项目…</p>)}
-    {tool === 'timbre' && (projectId ? <TimbrePanel projectId={projectId} initialDescription={seed?.timbre} onComplete={() => {}} /> : !error && <p className="qt-status"><LoaderCircle size={14} className="sf-spin" />正在准备单步项目…</p>)}
-    {(tool === 'text-video' || tool === 'image-video') && <QuickVideo mode={tool} initialFrame={seed?.frame} initialPrompt={seed?.prompt} />}
+    {tool === 'image' && (projectId ? <KeyframePanel projectId={projectId} simple fresh initialMode="text" initialPrompt={seed?.prompt} initialSeed={seed?.seed} initialAspect={seed?.aspect} initialResolution={imageQuality} initialSteps={seed?.steps} options={[]} onBrowse={() => {}} onComplete={() => {}} /> : !error && <p className="qt-status"><LoaderCircle size={14} className="sf-spin" />正在准备单步项目…</p>)}
+    {tool === 'enhance' && (projectId ? <EnhancementPanel projectId={projectId} initialSource={seed?.source || ''} onBack={onBack} /> : !error && <p className="qt-status"><LoaderCircle size={14} className="sf-spin" />正在准备单步项目…</p>)}
+    {tool === 'music' && (projectId ? <MusicPanel projectId={projectId} initialCard={seed?.music || null} initialSeed={seed?.seed} onComplete={() => {}} /> : !error && <p className="qt-status"><LoaderCircle size={14} className="sf-spin" />正在准备单步项目…</p>)}
+    {tool === 'timbre' && (projectId ? <TimbrePanel projectId={projectId} initialDescription={seed?.timbre} initialDraft={timbreDraft} onComplete={() => {}} /> : !error && <p className="qt-status"><LoaderCircle size={14} className="sf-spin" />正在准备单步项目…</p>)}
+    {(tool === 'text-video' || tool === 'image-video') && <QuickVideo mode={tool} initialFrame={seed?.frame} initialPrompt={seed?.prompt} initialDuration={seed?.duration} initialQuality={videoQuality} />}
   </main>;
 }

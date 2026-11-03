@@ -142,3 +142,70 @@ def test_batch_plan_rejects_unknown_tasks_and_bad_ids(quick_client):
     assert client.post('/api/tasks/deletion', json={
         'plan_id': '../escape', 'task_ids': ['nope'], 'confirm': True,
     }).status_code == 422
+
+
+def test_image_card_carries_its_own_inputs_back_for_editing(quick_client):
+    client, _ = quick_client
+    _submit(client, '雨夜街角，霓虹在积水里拉长', seed=77)
+    card = client.get('/api/quick-tasks').json()['tasks'][0]
+    assert card['reuse'] == {'tool': 'image', 'values': {
+        'prompt': '雨夜街角，霓虹在积水里拉长', 'quality': 'native', 'seed': 77, 'aspect': '9:16'}}
+
+
+def test_enhancement_rows_are_grouped_as_enhancement_not_video(quick_client):
+    client, _ = quick_client
+    submitted = _submit(client, '要被清晰化的原图', seed=88)
+    source = str(Path(backend.OUTPUT_ROOT) / f'{submitted["id"]}_00001_.png').replace('\\', '/')
+    # 清晰化 also runs a ComfyUI graph, so its payload kind is 'workflow'; the row must
+    # still land in the 清晰化 block, link its result and offer the source for another pass.
+    backend.set_task(submitted['id'], status='succeeded', payload=json.dumps({
+        'kind': 'workflow', 'pipeline_stage_id': 'media-enhancement', 'project_id': backend.QUICK_PROJECT_ID,
+        'asset_id': f'HD-{submitted["id"]}', 'workflow': submitted['payload']['workflow'],
+        'execution_snapshot': {'api_graph': submitted['payload']['workflow']},
+        'enhancement': {'source': source, 'source_facts': {'kind': 'image'}, 'model': 'RealESRGAN_x2plus.pth', 'scale': 2},
+    }, ensure_ascii=False), result=json.dumps({
+        'status': 'success', 'outputs': ['导演工作台工作目录/quick-tasks/enhancement/out_00001_.png'],
+    }, ensure_ascii=False))
+
+    card = client.get('/api/quick-tasks').json()['tasks'][0]
+    assert card['tool'] == '清晰化'
+    assert card['video_mode'] is None
+    assert card['output'] == 'output/导演工作台工作目录/quick-tasks/enhancement/out_00001_.png'
+    # 清晰化 has no prompt; the row is named by the file it was made from.
+    assert card['title'] == f'{submitted["id"]}_00001_'
+    assert card['reuse']['tool'] == 'enhance'
+    assert card['reuse']['values']['source'].endswith('_00001_.png')
+
+
+def test_timbre_and_music_cards_reuse_their_frozen_parameters(quick_client, monkeypatch):
+    client, _ = quick_client
+    monkeypatch.setattr(backend.speech, 'capability', lambda *args, **kwargs: {'available': True, 'missing': []})
+    workspace = client.get('/api/quick-workspace').json()['project_id']
+    response = client.post(f'/api/projects/{workspace}/speech-tasks', json={
+        'engine': 'voxcpm-2', 'mode': 'design', 'text': '这段声音只用来试音色。',
+        'voice_description': '六十岁老先生，声音沙哑缓慢', 'seed': 4242, 'idempotency_key': 'reuse-timbre',
+    })
+    assert response.status_code == 202, response.text
+    task = backend.get_task(response.json()['id'])
+    assert backend.quick_task_reuse(task['payload']) == {'tool': 'timbre', 'values': {
+        'timbre': '六十岁老先生，声音沙哑缓慢', 'text': '这段声音只用来试音色。', 'seed': 4242}}
+
+    frozen = {'tags': 'lofi, rain', 'lyrics': '', 'duration_seconds': 12.0, 'bpm': 84, 'keyscale': 'C major',
+              'timesignature': '4', 'language': 'unknown', 'seed': 99, 'steps': 8, 'cfg': 1.0, 'shift': 3.0,
+              'generate_audio_codes': True, 'encode_cfg_scale': 2.0, 'temperature': 0.85, 'top_p': 0.9,
+              'top_k': 0, 'min_p': 0.0, 'format': 'mp3', 'quality': 'V0'}
+    reuse = backend.quick_task_reuse({'kind': 'music', 'music': frozen})
+    assert reuse['tool'] == 'music' and reuse['values']['seed'] == 99
+    # 表单里叫 output_format；带回来的名字要跟表单一致，否则参数看着像带回了其实没带上。
+    assert reuse['values']['music']['output_format'] == 'mp3'
+    assert 'format' not in reuse['values']['music']
+    assert reuse['values']['music']['tags'] == 'lofi, rain'
+
+
+def test_reuse_stays_absent_when_the_inputs_cannot_be_reproduced(quick_client):
+    # 克隆音色与参考图生成的起点是一段音频或一张图，不能只凭提示词还原，就不给这个入口。
+    assert backend.quick_task_reuse({'kind': 'speech', 'request': {'mode': 'reference', 'voice_reference': 'a.wav'}}) is None
+    assert backend.quick_task_reuse({'kind': 'keyframe', 'request': {'mode': 'reference', 'prompt': '猫'}}) is None
+    assert backend.quick_task_reuse({'kind': 'workflow'}) is None
+    assert backend.quick_task_reuse({'kind': 'audio_swap'}) is None
+

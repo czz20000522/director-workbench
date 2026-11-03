@@ -40,7 +40,7 @@ export default function CreativeSettingsBar({ kind, values, onApply }: {
       } else if (action === 'save') {
         const label = name.trim();
         if (!label) throw new Error('请先填写设定名称');
-        await request(`/api/creative-settings/${kind}/${encodeURIComponent(label)}`, { json: { params: values } });
+        await request(`/api/creative-settings/${kind}/${encodeURIComponent(label)}`, { init: { method: 'PUT' }, json: { params: values } });
         const list = await refresh();
         setSelected(label);
         setName('');

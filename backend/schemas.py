@@ -376,6 +376,8 @@ class KeyframeRequest(BaseModel):
     reference_image: str | None = Field(default=None, min_length=1, max_length=1000)
     width: int = Field(default=768, ge=512, le=1536)
     height: int = Field(default=1344, ge=512, le=1536)
+    # 采样步数：8 是 Turbo 蒸馏的标称值。只有显式传别的值才会偏离，缺省仍是 8。
+    steps: int = Field(default=8, ge=4, le=50)
     output_resolution: Literal['native', '2k', '4k', '8k'] = 'native'
     seed: int = Field(default=340921, ge=0, le=2**64 - 1)
     idempotency_key: str = Field(min_length=1, max_length=160)
@@ -392,6 +394,8 @@ class EmotionSpec(BaseModel):
 
 class SpeechRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
+    # 归属：这段音色/配音属于哪条视频任务；不填就是独立素材。
+    parent_task_id: str | None = Field(default=None, max_length=64)
     text: str = Field(min_length=1, max_length=2000)
     engine: Literal['auk-flash', 'indextts-2.5', 'voxcpm-2'] = 'voxcpm-2'
     mode: Literal['reference', 'design'] = 'reference'
@@ -469,6 +473,23 @@ class EnhanceArchiveRequest(BaseModel):
     overwrite: StrictBool = False
 
 
+class EnhanceLibraryDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    # 只接受库里成品的文件名：带路径成分的输入一律拒绝，避免删到库外。
+    name: str = Field(min_length=1, max_length=260)
+
+
+class ScriptArchiveDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    # 已归档剧本同样只接受纯文件名。
+    name: str = Field(min_length=1, max_length=260)
+
+
+class PresetRenameRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    name: str = Field(min_length=1, max_length=80)
+
+
 class AudioSwapRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     source_asset_id: str = Field(min_length=1, max_length=160)
@@ -502,6 +523,8 @@ class VlmObservationRequest(BaseModel):
 
 class MusicRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
+    # 归属：这条配乐属于哪条视频任务；不填就是独立素材。
+    parent_task_id: str | None = Field(default=None, max_length=64)
     tags: str = Field(min_length=1, max_length=2000)
     lyrics: str = Field(default='', max_length=4000)
     duration_seconds: float = Field(default=30, ge=1, le=300, strict=True, allow_inf_nan=False)

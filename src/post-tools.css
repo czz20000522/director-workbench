@@ -50,6 +50,21 @@
 .sf-post-title { margin: 0; color: var(--post-ink); font-size: 14px; font-weight: 650; letter-spacing: -.01em; }
 .sf-post-subtitle { margin: 0; color: var(--post-ink); font-size: 12px; font-weight: 600; }
 .sf-post-meta { margin: 0; color: var(--post-muted); font-size: 12px; }
+/* 处理结果标题行上的「清除」：把本机记下的上次选中项去掉，下次进来不再自动展开 */
+.sf-post-clear {
+  align-self: center;
+  padding: 3px 9px;
+  border: 1px solid var(--post-line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--post-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.sf-post-clear:hover { border-color: #b9c8e8; color: var(--post-ink); }
+.sf-post-clear.danger { border-color: #e7c3c3; color: #a53030; }
+.sf-post-clear.danger:hover { border-color: #d9a3a3; background: #fdf6f6; }
+.sf-post-section-head > .sf-lib-actions { align-self: center; }
 .sf-post-hint { margin: 0; color: var(--post-muted); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
 .sf-post-alert { margin: 0; color: #b42332; font-size: 12px; line-height: 1.5; }
 .sf-post-message { margin: 0; color: var(--post-muted); font-size: 12px; }
@@ -184,6 +199,34 @@
 }
 .sf-post-history button[aria-pressed="true"] { border-color: #9db1ea; background: #eaf0ff; color: var(--post-accent-dark); }
 .sf-post-history time { color: var(--post-muted); font-size: 11px; white-space: nowrap; }
+
+/* 清晰化库：每行带「再次清晰化」「删除」。再次清晰化只把这份文件带回原素材，
+   另起一条新任务；删除是直接删文件，所以在行内先确认一次。 */
+.sf-post-history--library li > a {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--post-accent-dark);
+  font-size: 12px;
+}
+.sf-post-history--library .sf-lib-meta { display: grid; gap: 1px; justify-items: end; flex: 0 0 auto; }
+.sf-post-history--library .sf-lib-meta b { font-size: 11px; font-weight: 500; color: var(--post-muted); white-space: nowrap; }
+.sf-post-history--library .sf-lib-meta b.warn { color: #a53030; }
+.sf-post-history--library .sf-lib-meta small { font-size: 10.5px; color: #9aa1ab; white-space: nowrap; }
+.sf-post-history--library .sf-lib-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+.sf-post-history--library .sf-lib-actions button {
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  font-size: 11px;
+  line-height: 1.5;
+  border-radius: 6px;
+  white-space: nowrap;
+  text-align: center;
+}
+.sf-post-history--library .sf-lib-actions button.danger { border-color: #e3b4b4; color: #a53030; }
+.sf-post-history--library .sf-lib-actions button:disabled { opacity: .45; cursor: not-allowed; }
 
 .sf-post-tools .director-readiness { margin: 0; border-radius: 6px; }
 .sf-post-tools .quick-candidate-meta { margin: 0; }

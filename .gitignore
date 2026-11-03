@@ -61,6 +61,8 @@
 /public/*
 !/src/
 /src/*
+# 图生视频页内的配套制作面板（配乐/音色精简版），与 QuickTools 一同发布。
+!/src/CompanionStudio.tsx
 # Shared HTTP/media client; each new src file is reviewed and listed explicitly below.
 !/src/api/
 /src/api/*

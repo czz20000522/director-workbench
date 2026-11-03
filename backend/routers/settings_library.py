@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from .. import creative_settings, preset_library
-from ..schemas import CreativeSettingRequest
+from ..schemas import CreativeSettingRequest, PresetRenameRequest
 from .. import app as backend
 
 
@@ -57,6 +57,15 @@ def list_preset_library() -> dict[str, Any]:
 def save_preset_card(kind: str, name: str, request: CreativeSettingRequest) -> dict[str, Any]:
     try:
         return {'entry': preset_library.save(kind, name, request.params, now=time.time())}
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@ROUTER.post('/api/preset-library/{kind}/{name}/rename')
+def rename_preset_card(kind: str, name: str, request: PresetRenameRequest) -> dict[str, Any]:
+    """改自己保存的卡片的名字；内置卡片没有可改的条目，会明确报错。"""
+    try:
+        return preset_library.rename(kind, name, request.name)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 

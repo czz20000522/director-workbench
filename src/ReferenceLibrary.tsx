@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   ArrowRight, BookOpen, Check, ChevronLeft, Copy, Film, Image as ImageIcon, Images, LoaderCircle, RefreshCw,
-  ScanText, Search, X,
+  ScanText, Search, Trash2, X,
 } from 'lucide-react';
 import { request } from './api/client';
 import './reference-library.css';
@@ -29,6 +29,8 @@ type Overview = {
   featured: Summary[]; materials: Material[]; counts: { documents: number; sections: number; materials: number };
   kinds: Record<string, string | number>; notes: string[]; config_error?: string | null;
   config_path: string; inbox_path: string;
+  // 从库里移除的条目：源文件仍在，只记了排除名单，可恢复。
+  excluded?: { entries: number; materials: number };
 };
 type SearchResult = { query: string; items: Summary[]; terms: string[]; note: string };
 type AnatomyNode = { id: number; label: string; text: string };
@@ -86,12 +88,13 @@ function Modal({ title, onClose, wide = false, children }: { title: string; onCl
   </div>;
 }
 
-function EntryDialog({ entryId, onClose, onUsePrompt, onAnatomy, target }: {
+function EntryDialog({ entryId, onClose, onUsePrompt, onAnatomy, target, onHide }: {
   entryId: string; onClose: () => void; onUsePrompt?: (text: string, target: PromptTarget) => void; onAnatomy?: (text: string) => void;
-  target?: PromptTarget;
+  target?: PromptTarget; onHide?: (entryId: string) => Promise<void>;
 }) {
   const [entry, setEntry] = useState<Entry | null>(null);
   const [error, setError] = useState('');
+  const [hiding, setHiding] = useState(false);
   useEffect(() => {
     let cancelled = false;
     setEntry(null); setError('');
@@ -112,6 +115,12 @@ function EntryDialog({ entryId, onClose, onUsePrompt, onAnatomy, target }: {
         {onUsePrompt && (target
           ? <button className="rl-action primary" onClick={() => onUsePrompt(entry.plain, target)}>带进{promptTargetLabels[target]} <ArrowRight size={13} /></button>
           : promptTargets.map(item => <button key={item} className="rl-action primary" onClick={() => onUsePrompt(entry.plain, item)}>带进{promptTargetLabels[item]} <ArrowRight size={13} /></button>))}
+        {onHide && <button className="rl-action danger" disabled={hiding} onClick={() => void (async () => {
+          setHiding(true);
+          try { await onHide(entryId); onClose(); }
+          catch (reason) { setError(errorText(reason, '移除未完成')); }
+          finally { setHiding(false); }
+        })()}><Trash2 size={13} /> {hiding ? '移除中…' : '从库中移除'}</button>}
       </div>
     </>}
   </Modal>;
@@ -175,6 +184,15 @@ export function PromptLibraryPanel({ onUsePrompt, target }: { onUsePrompt: (text
   const [anatomyText, setAnatomyText] = useState<string | null>(null);
   const debounced = useDebounced(query, 280);
   const initialised = useRef(false);
+  // 从库里移除只记一份排除名单，源文档一个字节不动，所以随时可以恢复。
+  async function hideEntry(entryId: string) {
+    await request('/api/reference-library/hide', { json: { kind: 'entries', id: entryId } });
+    setTick(value => value + 1);
+  }
+  async function restoreEntries() {
+    await request('/api/reference-library/restore', { json: { kind: 'entries' } });
+    setTick(value => value + 1);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -230,6 +248,7 @@ export function PromptLibraryPanel({ onUsePrompt, target }: { onUsePrompt: (text
         {refreshing ? <LoaderCircle size={14} className="sf-spin" /> : <RefreshCw size={14} />}
       </button>
     </header>
+    {(overview?.excluded?.entries ?? 0) > 0 && <p className="rl-warn rl-excluded">已从库中移除 {overview?.excluded?.entries} 段原文（源文件未改动）<button className="rl-inline-link" type="button" onClick={() => void restoreEntries()}>全部恢复</button></p>}
     {work && <div className="rl-scope">
       <button onClick={backToWorks}><ChevronLeft size={13} /> 全部作品</button>
       <span>{work}</span>
@@ -274,7 +293,7 @@ export function PromptLibraryPanel({ onUsePrompt, target }: { onUsePrompt: (text
       <button className="rl-foot-button" onClick={() => setAnatomyText('')}><ScanText size={13} /> 拆解一段提示词</button>
       <span className="rl-foot-hint" title={overview?.inbox_path}>{overview ? `资料箱：${overview.inbox_path.split(/[\\/]/).pop()}` : ''}</span>
     </footer>
-    {entryId && <EntryDialog entryId={entryId} target={target} onClose={() => setEntryId('')} onUsePrompt={(text, item) => { setEntryId(''); onUsePrompt(text, item); }} onAnatomy={text => { setEntryId(''); setAnatomyText(text); }} />}
+    {entryId && <EntryDialog entryId={entryId} target={target} onClose={() => setEntryId('')} onHide={hideEntry} onUsePrompt={(text, item) => { setEntryId(''); onUsePrompt(text, item); }} onAnatomy={text => { setEntryId(''); setAnatomyText(text); }} />}
     {anatomyText !== null && <AnatomyDialog initialText={anatomyText} onClose={() => setAnatomyText(null)} onOpenEntry={id => { setAnatomyText(null); setEntryId(id); }} />}
   </aside>;
 }
@@ -288,7 +307,7 @@ export function PromptLibraryDialog({ target, onUse, onClose }: { target: Prompt
   </Modal>;
 }
 
-function MaterialDialog({ material, onClose, onUseFrame }: { material: Material; onClose: () => void; onUseFrame: (path: string, title: string) => void }) {
+function MaterialDialog({ material, onClose, onUseFrame, onHide }: { material: Material; onClose: () => void; onUseFrame: (path: string, title: string) => void; onHide?: (id: string) => Promise<void> }) {
   const [related, setRelated] = useState<Entry | null>(null);
   const [entryOpen, setEntryOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -324,6 +343,12 @@ function MaterialDialog({ material, onClose, onUseFrame }: { material: Material;
           <div className="rl-actions">
             <button className="rl-action primary" disabled={busy} onClick={() => void useFrame()}>{busy ? <LoaderCircle size={13} className="sf-spin" /> : <Film size={13} />}{busy ? '准备中…' : '用作图生视频开始画面'}</button>
             <a className="rl-action" href={material.file_url} target="_blank" rel="noreferrer"><ImageIcon size={13} /> 查看原图</a>
+            {onHide && <button className="rl-action danger" disabled={busy} onClick={() => void (async () => {
+              setBusy(true);
+              try { await onHide(material.id); onClose(); }
+              catch (reason) { setError(errorText(reason, '移除未完成')); }
+              finally { setBusy(false); }
+            })()}><Trash2 size={13} /> 从库中移除</button>}
           </div>
           {error && <p className="sf-error" role="alert">{error}</p>}
         </div>
@@ -341,6 +366,15 @@ export function MaterialLibraryPanel({ onUseFrame }: { onUseFrame: (path: string
   const [selected, setSelected] = useState<Material | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [tick, setTick] = useState(0);
+  // 素材同理：只从索引里移除并记进排除名单，图片文件留在原目录。
+  async function hideMaterial(id: string) {
+    await request('/api/reference-library/hide', { json: { kind: 'materials', id } });
+    setTick(value => value + 1);
+  }
+  async function restoreMaterials() {
+    await request('/api/reference-library/restore', { json: { kind: 'materials' } });
+    setTick(value => value + 1);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -381,6 +415,7 @@ export function MaterialLibraryPanel({ onUseFrame }: { onUseFrame: (path: string
         {refreshing ? <LoaderCircle size={14} className="sf-spin" /> : <RefreshCw size={14} />}
       </button>
     </header>
+    {(overview?.excluded?.materials ?? 0) > 0 && <p className="rl-warn rl-excluded">已从库中移除 {overview?.excluded?.materials} 张参考图（图片文件未删除）<button className="rl-inline-link" type="button" onClick={() => void restoreMaterials()}>全部恢复</button></p>}
     {work && <div className="rl-scope">
       <button onClick={backToWorks}><ChevronLeft size={13} /> 全部作品</button>
       <span>{work}</span>
@@ -413,7 +448,7 @@ export function MaterialLibraryPanel({ onUseFrame }: { onUseFrame: (path: string
     <footer className="rl-panel-foot">
       <span className="rl-foot-hint" title={overview?.config_path}>{overview ? `来源：${overview.documents.length} 份文档 · ${materials.length} 张图` : ''}</span>
     </footer>
-    {selected && <MaterialDialog material={selected} onClose={() => setSelected(null)} onUseFrame={onUseFrame} />}
+    {selected && <MaterialDialog material={selected} onClose={() => setSelected(null)} onUseFrame={onUseFrame} onHide={hideMaterial} />}
   </aside>;
 }
 

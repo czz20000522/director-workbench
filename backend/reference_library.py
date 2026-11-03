@@ -152,6 +152,64 @@ def invalidate(data_root: str | Path | None = None) -> None:
             _cache.pop(str(Path(data_root).resolve()), None)
 
 
+_EXCLUDE_LOCK = threading.Lock()
+
+
+def exclusions_path(data_root: str | Path) -> Path:
+    return Path(data_root) / 'config' / 'reference-library-exclusions.json'
+
+
+def load_exclusions(data_root: str | Path) -> dict[str, list[str]]:
+    """库里的排除名单。文件损坏时按「什么都没隐藏」处理，不阻断整个库可读。"""
+    document: dict[str, list[str]] = {'entries': [], 'materials': []}
+    try:
+        stored = json.loads(exclusions_path(data_root).read_text(encoding='utf-8'))
+    except (FileNotFoundError, OSError, ValueError):
+        return document
+    if isinstance(stored, dict):
+        for key in ('entries', 'materials'):
+            values = stored.get(key)
+            if isinstance(values, list):
+                document[key] = [str(item) for item in values if isinstance(item, str)]
+    return document
+
+
+def _save_exclusions(data_root: str | Path, document: dict[str, list[str]]) -> None:
+    from . import app as backend
+    target = exclusions_path(data_root)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    backend.write_json_atomic(target, {'schema_version': 1, **document})
+    invalidate(data_root)
+
+
+def hide(data_root: str | Path, kind: str, item_id: str) -> dict[str, Any]:
+    """把一个条目从库里移除。源文件一个字节不动，名单单独存在 config 下，可恢复。"""
+    if kind not in ('entries', 'materials'):
+        raise ValueError('未知的库分区')
+    label = str(item_id or '').strip()
+    if not label or len(label) > 120:
+        raise ValueError('缺少要移除的条目编号')
+    with _EXCLUDE_LOCK:
+        document = load_exclusions(data_root)
+        if label not in document[kind]:
+            document[kind].append(label)
+            _save_exclusions(data_root, document)
+        count = len(document[kind])
+    return {'hidden': label, 'kind': kind, 'count': count}
+
+
+def restore(data_root: str | Path, kind: str, item_id: str | None = None) -> dict[str, Any]:
+    """恢复一条（或整类）被移除的条目。"""
+    if kind not in ('entries', 'materials'):
+        raise ValueError('未知的库分区')
+    with _EXCLUDE_LOCK:
+        document = load_exclusions(data_root)
+        document[kind] = [item for item in document[kind] if item != item_id] if item_id else []
+        _save_exclusions(data_root, document)
+        count = len(document[kind])
+    return {'kind': kind, 'count': count}
+
+
 def _resolved(value: str | Path) -> Path:
     return Path(value).expanduser().resolve()
 
@@ -591,6 +649,14 @@ def build_index(data_root: str | Path) -> dict[str, Any]:
         entries.extend(parsed)
     entries.sort(key=lambda entry: (entry['document_title'], entry['line']))
     materials = _scan_materials(root, config, entries) if entries or images else []
+    # 排除名单在扫描之后生效：先按完整索引算出素材，再统一摘掉被移除的条目。
+    hidden = load_exclusions(root)
+    if hidden['entries']:
+        entries = [entry for entry in entries if entry['id'] not in hidden['entries']]
+    if hidden['materials']:
+        materials = [item for item in materials if item['id'] not in hidden['materials']]
+    for record in document_records:
+        record['sections'] = sum(1 for entry in entries if entry['document_id'] == record['id'])
     for material in materials:
         try:
             thumbnail = ensure_thumbnail(root, material['id'], Path(material['path']))
@@ -655,6 +721,7 @@ def build_index(data_root: str | Path) -> dict[str, Any]:
 
 def overview(data_root: str | Path) -> dict[str, Any]:
     library = build_index(data_root)
+    excluded = load_exclusions(data_root)
     return {
         'documents': library['documents'],
         'works': library['works'],
@@ -666,6 +733,8 @@ def overview(data_root: str | Path) -> dict[str, Any]:
         'config_error': library['config_error'],
         'config_path': library['config_path'],
         'inbox_path': library['inbox_path'],
+        # 被移除的条目仍留在源文件里，这里只报数量，界面据此提供「恢复」。
+        'excluded': {'entries': len(excluded['entries']), 'materials': len(excluded['materials'])},
     }
 
 

@@ -718,6 +718,17 @@
 .qt-result { display: grid; gap: 10px; margin-top: 14px; }
 .qt-result video { width: 100%; max-height: 480px; background: #111; border-radius: 8px; }
 .qt-result a { justify-self: start; }
+/* 图生视频结果下的配套制作：两张小卡片，视觉上从属于上面那条视频 */
+.qt-companions { display: grid; gap: 10px; margin-top: 16px; padding-top: 12px; border-top: 1px dashed #e3e7ee; }
+.qt-companions-title { margin: 0; font-size: 13px; font-weight: 650; color: #1f2430; }
+.qt-companions-note { margin: 0; font-size: 11px; color: #6b7280; line-height: 1.55; }
+.qt-companion { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid #e3e7ee; border-radius: 8px; background: #fff; }
+.qt-companion-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.qt-companion-head strong { font-size: 12px; font-weight: 600; color: #1f2430; }
+.qt-companion-head small { font-size: 10.5px; color: #9aa1ab; }
+.qt-companion-actions { display: flex; align-items: center; gap: 8px; }
+.qt-companion-result { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.qt-companion-result audio { flex: 1; min-width: 180px; height: 32px; }
 @media (max-width: 760px) { .qt-tools { grid-template-columns: 1fr 1fr; } .qt-page { width: calc(100% - 32px); } .qt-head h1 { font-size: 26px; } }
 
 
@@ -766,7 +777,7 @@
 .sf-section-head { display: flex; align-items: baseline; gap: 10px; }
 .sf-section-action { margin-left: auto; }
 .sf-section-action + .sf-section-action { margin-left: 0; display: inline-flex; align-items: center; gap: 6px; }
-.sf-work-row .sf-work-open a.sf-secondary { padding: 5px 9px; font-size: 11px; flex: none; }
+.sf-work-row .sf-work-open a.sf-secondary, .sf-work-row .sf-work-open button.sf-secondary { padding: 5px 9px; font-size: 11px; flex: none; }
 .qt-advanced { border: 1px solid var(--sf-line); border-radius: 8px; padding: 0 12px; background: #fafbfc; }
 .qt-advanced > summary { cursor: pointer; padding: 10px 0; font-size: 12px; color: var(--sf-muted); list-style: none; }
 .qt-advanced > summary::-webkit-details-marker { display: none; }

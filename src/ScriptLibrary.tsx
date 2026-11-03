@@ -33,6 +33,8 @@ export default function ScriptLibraryDialog({ onClose, onChanged }: { onClose: (
   const [content, setContent] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [confirming, setConfirming] = useState('');
+  const [removing, setRemoving] = useState('');
 
   async function refresh(keep?: string): Promise<Listing | null> {
     try {
@@ -93,6 +95,18 @@ export default function ScriptLibraryDialog({ onClose, onChanged }: { onClose: (
     } catch (reason) { setMessage(reason instanceof ApiError ? reason.message : '删除未完成'); }
     finally { setBusy(false); }
   }
+  // 已归档剧本在 素材库\剧本 里只有一份，删掉无法恢复，所以在行内先确认一次。
+  async function removeArchived(name: string) {
+    if (removing) return;
+    setRemoving(name); setMessage('');
+    try {
+      await request('/api/script-library/archived/delete', { json: { name } });
+      setMessage(`已删除归档剧本：${name}`);
+      setConfirming('');
+    } catch (reason) {
+      setMessage(reason instanceof ApiError ? reason.message : '删除未完成');
+    } finally { setRemoving(''); await refresh(); }
+  }
   function exportDraft() {
     if (!title.trim()) { setMessage('先写标题再导出。'); return; }
     const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
@@ -137,9 +151,14 @@ export default function ScriptLibraryDialog({ onClose, onChanged }: { onClose: (
           {message && <p className="sf-post-message" role="status" aria-live="polite">{message}</p>}
         </div>
       </div> : <div className="sl-grid single">
-        {!listing ? <p className="sf-post-hint">正在读取…</p> : listing.archived.length === 0 ? <p className="sf-post-hint">还没有归档的剧本。归档后会写进 素材库\剧本，文件名带日期。</p> : <ul className="sf-post-history">{listing.archived.map(item => <li key={item.path}>
+        {!listing ? <p className="sf-post-hint">正在读取…</p> : listing.archived.length === 0 ? <p className="sf-post-hint">还没有归档的剧本。归档后会写进 素材库\剧本，文件名带日期。</p> : <ul className="sf-post-history sf-post-history--library">{listing.archived.map(item => <li key={item.path}>
           <a href={mediaUrl(item.path)} download>{item.name}</a>
           <time>{(item.size / 1024).toFixed(1)} KB · {new Date(item.modified * 1000).toLocaleString('zh-CN')}</time>
+          <span className="sf-lib-actions">
+            {confirming === item.name
+              ? <><button type="button" className="danger" disabled={!!removing} onClick={() => void removeArchived(item.name)}>{removing === item.name ? '删除中…' : '确认删除'}</button><button type="button" disabled={!!removing} onClick={() => setConfirming('')}>取消</button></>
+              : <button type="button" disabled={!!removing} onClick={() => setConfirming(item.name)}>删除</button>}
+          </span>
         </li>)}</ul>}
       </div>}
       <div className="sf-step-actions"><button className="sf-secondary" type="button" onClick={onClose}>关闭</button></div>

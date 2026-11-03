@@ -12,6 +12,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+import av
+
 MEDIA_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.mp4', '.mov', '.webm', '.mkv'}
 _SAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 TAG = ' · 清晰化'
@@ -31,6 +33,18 @@ def _safe(value: str) -> str:
     return label[:64].rstrip(' .') or '清晰化'
 
 
+def _dimensions(path: Path) -> tuple[int | None, int | None]:
+    """Read the frame size without decoding; None when the container is unreadable."""
+    try:
+        with av.open(str(path)) as container:
+            stream = next(iter(container.streams.video), None)
+            if stream is None:
+                return None, None
+            return stream.width, stream.height
+    except (av.error.FFmpegError, OSError, ValueError):
+        return None, None
+
+
 def list_files(limit: int = 60) -> list[dict[str, Any]]:
     folder = directory()
     if not folder.is_dir():
@@ -38,8 +52,58 @@ def list_files(limit: int = 60) -> list[dict[str, Any]]:
     files = [item for item in folder.iterdir()
              if item.is_file() and item.suffix.lower() in MEDIA_EXTENSIONS]
     files.sort(key=lambda item: item.stat().st_mtime, reverse=True)
-    return [{'name': item.name, 'path': _relative(item), 'size': item.stat().st_size,
-             'modified': item.stat().st_mtime} for item in files[:limit]]
+    items: list[dict[str, Any]] = []
+    for item in files[:limit]:
+        width, height = _dimensions(item)
+        # 宽高交给界面判断还能不能再做一次清晰化，不在后端替用户预判。
+        items.append({'name': item.name, 'path': _relative(item), 'size': item.stat().st_size,
+                      'modified': item.stat().st_mtime, 'width': width, 'height': height})
+    return items
+
+
+def _references(name: str) -> list[dict[str, Any]]:
+    """Every asset registration that still points at this archived file."""
+    from . import app as backend
+    holders: list[dict[str, Any]] = []
+    for entry in backend.project_entries():
+        project_id = str(entry.get('id') or '')
+        if not project_id:
+            continue
+        try:
+            manifest = backend.load_project_manifest(project_id)
+        except (OSError, ValueError, KeyError):
+            continue
+        for asset in manifest.get('assets') or []:
+            if not isinstance(asset, dict):
+                continue
+            values = list((asset.get('sources') or {}).values()) + [asset.get('image_path')]
+            if any(isinstance(value, str) and Path(value).name == name for value in values):
+                holders.append({'project_id': project_id, 'asset_id': asset.get('id'),
+                                'title': str(asset.get('title') or '')})
+    return holders
+
+
+def delete_file(name: str) -> dict[str, Any]:
+    """Delete one archived file outright, refusing while a project still points at it.
+
+    库是这份成品唯一的位置：删掉没有第二份可恢复。所以先确认没有素材登记在用它，
+    被引用的成品不会静默断链——先解除引用再删。
+    """
+    folder = directory().resolve()
+    candidate = Path(str(name))
+    # 只接受纯文件名：带目录成分或扩展名不在白名单的一律拒绝。
+    if candidate.name != str(name) or candidate.suffix.lower() not in MEDIA_EXTENSIONS:
+        raise ValueError('只接受清晰化库里的成品文件名')
+    path = (folder / candidate.name).resolve()
+    if path.parent != folder or not path.is_file():
+        raise ValueError('清晰化库里没有这个成品')
+    holders = _references(path.name)
+    if holders:
+        titles = '；'.join(f"{item['project_id']} · {item['title'] or item['asset_id']}" for item in holders[:3])
+        raise ValueError(f'这个成品仍被素材登记引用（{titles}），先解除引用再删')
+    size = path.stat().st_size
+    path.unlink()
+    return {'deleted': _relative(path), 'name': path.name, 'size': size}
 
 
 def task_output(task: dict[str, Any]) -> Path:

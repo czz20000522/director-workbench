@@ -194,6 +194,31 @@ def save(kind: str, name: str, params: dict[str, Any], *, now: float | None = No
     return entry
 
 
+def rename(kind: str, name: str, new_name: str, path: Path | None = None) -> dict[str, Any]:
+    """Rename one of your own cards. Built-in cards have nothing to rename.
+
+    改过的内置卡在库里另存了一份同名条目，所以它可以改名——改完之后原来那张
+    内置卡回到内置参数，你改的那份挂在新名字下。
+    """
+    if kind not in KINDS:
+        raise ValueError('未知预设分区')
+    label, target = clean_name(name), clean_name(new_name)
+    if label == target:
+        return {'name': target, 'previous': label, 'renamed': False}
+    with _LOCK:
+        document = load(path)
+        entry = next((item for item in document[kind] if str(item.get('name')) == label), None)
+        if entry is None:
+            raise ValueError('没有找到这张卡片；内置卡片不能重命名，想改就同名另存一张你自己的')
+        if any(str(item.get('name')) == target for item in document[kind]):
+            raise ValueError(f'已经有叫「{target}」的卡片，换个名字或先删掉那张')
+        moved = dict(entry)
+        moved['name'] = target
+        document[kind] = [item for item in document[kind] if str(item.get('name')) != label] + [moved]
+        _write(document, path)
+    return {'name': target, 'previous': label, 'renamed': True}
+
+
 def remove(kind: str, name: str, path: Path | None = None) -> bool:
     """Delete a saved card. Removing a same-name override puts the built-in card back."""
     if kind not in KINDS:

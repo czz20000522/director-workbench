@@ -72,6 +72,7 @@ def start_music_task(project_id: str, request: MusicRequest) -> dict[str, Any]:
         workflow.write_text(json.dumps(graph, ensure_ascii=False), encoding='utf-8')
         payload = backend.freeze_task_payload({'kind': 'music', 'project_id': project_id, 'asset_id': asset_id,
                                                'pipeline_stage_id': 'music-generation', 'music': frozen,
+                                               'parent_task_id': request.parent_task_id,
                                                'workflow': str(workflow),
                                                'submission_receipt': {'key': request.idempotency_key, 'request': submission}},
                                               project_id=project_id)

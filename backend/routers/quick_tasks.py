@@ -60,33 +60,138 @@ def ensure_quick_project() -> str:
 
 def task_tool(payload: dict[str, Any]) -> str:
     """配音 that starts from a written timbre description is the 音色设计 tool, not a dialogue take."""
+    if is_enhancement(payload):
+        return '清晰化'
     if payload.get('kind') == 'speech' and (payload.get('request') or {}).get('mode') == 'design':
         return '音色设计'
     return TOOL_LABELS.get(str(payload.get('kind')), '任务')
 
 
+def is_enhancement(payload: dict[str, Any]) -> bool:
+    """清晰化 also runs a ComfyUI graph, so its payload kind says 'workflow'."""
+    return bool(payload.get('enhancement')) or payload.get('pipeline_stage_id') == 'media-enhancement'
+
+
+def _portable(value: Any) -> str | None:
+    """One path form for every reuse value, matching what the panels already accept."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return backend.root_relative_path(backend.resolve_registered_path(value))
+    except (ValueError, OSError, HTTPException):
+        return None
+
+
+def _aspect(width: Any, height: Any) -> str | None:
+    if type(width) is not int or type(height) is not int or width <= 0 or height <= 0:
+        return None
+    return '1:1' if width == height else ('16:9' if width > height else '9:16')
+
+
+MUSIC_FORM_FIELDS = ('tags', 'lyrics', 'duration_seconds', 'bpm', 'keyscale', 'timesignature', 'language',
+                     'steps', 'cfg', 'shift', 'quality', 'generate_audio_codes', 'encode_cfg_scale',
+                     'temperature', 'top_p', 'top_k', 'min_p')
+
+
+def quick_task_reuse(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """The editable inputs of a finished single-step task, in the tool form's own field names.
+
+    首页「编辑重生成」把这些值带回对应工具，由你改完再显式提交——工作台不会自动重跑。
+    带不全的工具就不给这个入口：表单看着像上次、其实不是，比没有入口更糟。
+    """
+    if is_enhancement(payload):
+        source = _portable((payload.get('enhancement') or {}).get('source'))
+        return {'tool': 'enhance', 'values': {'source': source}} if source else None
+    kind = str(payload.get('kind') or '')
+    if kind == 'keyframe':
+        request = payload.get('request') or {}
+        prompt = str(request.get('prompt') or '').strip()
+        if not prompt or request.get('mode') != 'text':
+            return None  # 参考图模式的起点是一张图，不在这里替你猜
+        size = payload.get('output_size') or {}
+        values: dict[str, Any] = {'prompt': prompt,
+                                  'quality': str(request.get('output_resolution') or size.get('resolution') or 'native')}
+        if type(request.get('seed')) is int:
+            values['seed'] = request['seed']
+        if type(request.get('steps')) is int:
+            values['steps'] = request['steps']
+        aspect = _aspect(request.get('width'), request.get('height'))
+        if aspect:
+            values['aspect'] = aspect
+        return {'tool': 'image', 'values': values}
+    if kind == 'workflow':
+        snapshot = payload.get('segment_snapshot') or {}
+        generation = snapshot.get('generation') or {}
+        prompt = str(payload.get('prompt_override') or payload.get('prompt') or snapshot.get('prompt') or '').strip()
+        if not prompt:
+            return None
+        values = {'prompt': prompt}
+        frame = _portable(payload.get('first_frame') or (snapshot.get('keyframes') or {}).get('first'))
+        if frame:
+            values['frame'] = frame
+        duration = snapshot.get('duration_seconds')
+        if type(duration) in (int, float) and duration > 0:
+            values['duration'] = int(duration) if float(duration).is_integer() else float(duration)
+        if generation.get('aspect_ratio') in ('1:1', '16:9', '9:16'):
+            values['aspect'] = generation['aspect_ratio']
+        if generation.get('output_resolution'):
+            values['quality'] = str(generation['output_resolution'])
+        return {'tool': 'image-video' if frame else 'text-video', 'values': values}
+    if kind == 'speech':
+        request = payload.get('request') or {}
+        if request.get('mode') != 'design':
+            return None  # 克隆模式的起点是一段参考音频，得你自己重新选
+        description = str(request.get('voice_description') or '').strip()
+        if not description:
+            return None
+        values = {'timbre': description, 'text': str(request.get('text') or '')}
+        seed = (request.get('parameters') or {}).get('seed')
+        if type(seed) is int:
+            values['seed'] = seed
+        return {'tool': 'timbre', 'values': values}
+    if kind == 'music':
+        frozen = payload.get('music') or {}
+        if not str(frozen.get('tags') or '').strip():
+            return None
+        values = {'music': {key: frozen[key] for key in MUSIC_FORM_FIELDS if key in frozen}}
+        if frozen.get('format'):
+            values['music']['output_format'] = frozen['format']  # 表单里叫 output_format
+        if type(frozen.get('seed')) is int:
+            values['seed'] = frozen['seed']
+        return {'tool': 'music', 'values': values}
+    return None
+
+
 def quick_prompt_excerpt(task: dict[str, Any], length: int = 46) -> str:
+    payload = task.get('payload') or {}
     prompt = backend._prompt_of(task)
+    if not prompt and is_enhancement(payload):
+        prompt = Path(str((payload.get('enhancement') or {}).get('source') or '')).stem
     collapsed = ' '.join(prompt.split())
     if not collapsed:
-        return backend.task_tool(task.get('payload') or {})
+        return backend.task_tool(payload)
     return collapsed if len(collapsed) <= length else collapsed[:length].rstrip() + '…'
 
 
 def quick_task_card(task: dict[str, Any]) -> dict[str, Any]:
     payload = task.get('payload') or {}
     result = task.get('result') or {}
+    enhance = is_enhancement(payload)
+    outputs = (result or {}).get('published_outputs') or [f"output/{item}" for item in (result or {}).get('outputs') or []]
     return {
         'id': task['id'], 'kind': payload.get('kind'),
         'tool': backend.task_tool(payload),
         # 视频任务再分文生/图生：有首帧就是图生视频，没有就是文生视频。
-        'video_mode': ('image-video' if payload.get('first_frame') else 'text-video') if payload.get('kind') == 'workflow' else None,
+        'video_mode': (('image-video' if payload.get('first_frame') else 'text-video')
+                       if payload.get('kind') == 'workflow' and not enhance else None),
         'title': backend.quick_prompt_excerpt(task), 'status': task['status'],
         'created_at': task.get('created_at'), 'updated_at': task.get('updated_at'),
-        'output': (result or {}).get('output') or (result or {}).get('video_path'),
+        'output': ((result or {}).get('output') or (result or {}).get('video_path')
+                   or (outputs[0] if enhance and len(outputs) == 1 else None)),
         'error': task.get('error'), 'revision': payload.get('revision', 0),
         'retry_of': payload.get('retry_of'), 'queue': task.get('queue') or {},
         'progress': backend.comfy_progress.visible_progress(task),
+        'reuse': backend.quick_task_reuse(payload),
         'deletable': backend._delete_blocker(task) is None,
         'delete_blocker': backend._delete_blocker(task),
     }
@@ -218,6 +323,11 @@ def tasks_deletion_apply(request: TaskBatchDeleteRequest) -> dict[str, Any]:
             if path.is_file():
                 path.unlink(missing_ok=True)
                 removed.append(str(path))
+            # 任务自己的冻结目录（keyframe-tasks/<task_id>/）删空后一并移除，
+            # 否则会在工作区留下一个空目录。共享模板目录名不是任务 id，不受影响。
+            holder = path.parent
+            if holder.name == task_id and holder.is_dir() and not any(holder.iterdir()):
+                holder.rmdir()
         deleted.append(task_id)
         purged_assets.setdefault(project_id, set()).update({str(entry.get('asset_id') or '')})
     for project_id, ids in purged_assets.items():

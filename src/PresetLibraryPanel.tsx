@@ -32,6 +32,8 @@ export default function PresetLibraryPanel({ kind, onUse }: {
   const [cards, setCards] = useState<Card[] | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
+  const [renaming, setRenaming] = useState('');
+  const [draftName, setDraftName] = useState('');
   const [tick, setTick] = useState(0);
   const info = meta[kind];
   useEffect(() => {
@@ -41,6 +43,17 @@ export default function PresetLibraryPanel({ kind, onUse }: {
       .catch(reason => { if (active) setError(reason instanceof ApiError ? reason.message : `无法读取${info.title}`); });
     return () => { active = false; };
   }, [kind, tick]);
+  async function rename(card: Card) {
+    const next = draftName.trim();
+    if (!next) { setError('请先填写新名字'); return; }
+    if (next === card.name) { setRenaming(''); return; }
+    setBusy(card.name); setError('');
+    try {
+      await request(`/api/preset-library/${kind}/${encodeURIComponent(card.name)}/rename`, { json: { name: next } });
+      setRenaming(''); setTick(value => value + 1);
+    } catch (reason) { setError(reason instanceof ApiError ? reason.message : '重命名未完成'); }
+    finally { setBusy(''); }
+  }
   async function remove(card: Card) {
     setBusy(card.name); setError('');
     try {
@@ -60,6 +73,17 @@ export default function PresetLibraryPanel({ kind, onUse }: {
             <div className="pl-card-actions">
               <small>{card.builtin ? '内置起点' : '我的卡片'}{generatedBy(kind, card.params) ? ` · ${generatedBy(kind, card.params)}` : ''}</small>
               <button className="sf-ghost" type="button" onClick={() => onUse(card.params, card.name)}>带入</button>
+              {!card.builtin && (renaming === card.name
+                ? <span className="pl-rename">
+                  <input value={draftName} maxLength={40} autoFocus disabled={busy === card.name}
+                    aria-label={`把 ${card.name} 改名为`}
+                    onChange={event => setDraftName(event.target.value)}
+                    onKeyDown={event => { if (event.key === 'Enter') void rename(card); if (event.key === 'Escape') setRenaming(''); }} />
+                  <button className="sf-ghost" type="button" disabled={busy === card.name} onClick={() => void rename(card)}>保存</button>
+                  <button className="sf-ghost" type="button" onClick={() => setRenaming('')}>取消</button>
+                </span>
+                : <button className="sf-ghost" type="button" disabled={busy === card.name} aria-label={`重命名 ${card.name}`}
+                  onClick={() => { setRenaming(card.name); setDraftName(card.name); }}>重命名</button>)}
               {!card.builtin && <button className="sf-ghost" type="button" disabled={busy === card.name} aria-label={`删除 ${card.name}`} onClick={() => void remove(card)}>
                 <Trash2 size={13} /> 删除</button>}
             </div>

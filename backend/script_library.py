@@ -116,6 +116,23 @@ def remove_draft(draft_id: str, *, path: Path | None = None) -> bool:
     return True
 
 
+def remove_archived(name: str) -> dict[str, Any]:
+    """删掉一份已归档剧本；归档区是它唯一的位置，删了没有第二份。
+
+    只接受纯文件名，带目录成分或非 .md/.txt 一律拒绝，避免删到剧本目录之外。
+    """
+    folder = archive_dir().resolve()
+    candidate = Path(str(name))
+    if candidate.name != str(name) or candidate.suffix.lower() not in {'.md', '.txt'}:
+        raise ValueError('只接受剧本库里的文件名')
+    path = (folder / candidate.name).resolve()
+    if path.parent != folder or not path.is_file():
+        raise ValueError('剧本库里没有这个文件')
+    size = path.stat().st_size
+    path.unlink()
+    return {'deleted': '素材库/剧本/' + path.name, 'name': path.name, 'size': size}
+
+
 def archive_draft(draft_id: str, *, path: Path | None = None) -> dict[str, Any]:
     with _LOCK:
         drafts = load_drafts(path)

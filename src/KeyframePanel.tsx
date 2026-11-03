@@ -1,18 +1,26 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import TaskQueueStatus, { type QueueReceipt } from './TaskQueueStatus';
 import ProgressBar, { type TaskProgress } from './TaskProgress';
-import ResolutionPicker, { type OutputResolution } from './ResolutionPicker';
+import ResolutionPicker, { type AspectRatio, type OutputResolution } from './ResolutionPicker';
 import { detectQualityIntent } from './qualityIntent';
 import { BookOpen } from 'lucide-react';
+import { mediaUrl } from './api/client';
 import { PromptLibraryDialog } from './ReferenceLibrary';
 import MaterialSelect, { type MaterialOption } from './MaterialSelect';
 import { ApiError, request as apiRequest } from './api/client';
 
 type Mode = 'text' | 'reference';
 type CreativeProfile = 'general' | 'adult-realism' | 'adult-anime';
-type Submission = { mode?: Mode; creative_profile?: CreativeProfile; width?: number; height?: number; output_resolution?: OutputResolution; prompt: string; reference_image?: string; seed: number; idempotency_key: string };
+type Submission = { mode?: Mode; creative_profile?: CreativeProfile; width?: number; height?: number; output_resolution?: OutputResolution; steps?: number; prompt: string; reference_image?: string; seed: number; idempotency_key: string };
 type Task = { id: string; status: string; queue?: QueueReceipt['queue']; progress?: TaskProgress; error?: string; result?: { output?: string; native_output?: string; published_native_output?: string; width?: number; height?: number; output_size?: { resolution?: OutputResolution; width?: number; height?: number; method?: string; note?: string } }; payload?: { request?: Submission; output_size?: { resolution?: OutputResolution; width?: number; height?: number; method?: string } } };
-type Saved = { mode: Mode; creative_profile: CreativeProfile; prompt: string; reference_image: string; seed: number; width?: number; height?: number; output_resolution?: OutputResolution; pending?: Submission };
+type Saved = { mode: Mode; creative_profile: CreativeProfile; prompt: string; reference_image: string; seed: number; width?: number; height?: number; output_resolution?: OutputResolution; steps?: number; pending?: Submission };
+const DEFAULT_STEPS = 8;
+// 步数由你显式选择；不动它就是 8——Turbo 蒸馏的标称值。
+const stepOptions: { value: number; label: string; note: string }[] = [
+  { value: 8, label: '8 步', note: '默认' },
+  { value: 16, label: '16 步', note: '更重' },
+  { value: 25, label: '25 步', note: '最重' },
+];
 class RequestError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
 }
@@ -30,9 +38,10 @@ const clarityOptions: { value: OutputResolution; label: string; note: string }[]
   { value: '8k', label: '8K', note: '放大' },
 ];
 
-export default function KeyframePanel({ projectId, options, onBrowse, onComplete, simple = false, initialMode = 'reference', candidateTaskId, creativeProfile, defaultOpen = false, fresh = false, initialPrompt }: {
+export default function KeyframePanel({ projectId, options, onBrowse, onComplete, simple = false, initialMode = 'reference', candidateTaskId, creativeProfile, defaultOpen = false, fresh = false, initialPrompt, initialSeed, initialAspect, initialResolution, initialSteps }: {
   projectId: string; options: MaterialOption[]; onBrowse: () => void; onComplete: (taskId: string) => void;
   simple?: boolean; initialMode?: Mode; candidateTaskId?: string; creativeProfile?: CreativeProfile; defaultOpen?: boolean; fresh?: boolean; initialPrompt?: string;
+  initialSeed?: number; initialAspect?: AspectRatio; initialResolution?: OutputResolution; initialSteps?: number;
 }) {
   // The shell now renders every post tool expanded; keep accepting the legacy
   // prop without letting it collapse the form again.
@@ -43,11 +52,17 @@ export default function KeyframePanel({ projectId, options, onBrowse, onComplete
   const [saved, setSaved] = useState<Saved>(() => {
     // 单步工具每次进入都是一次新的实验：不继承上一次的草稿，也不继承可能已随
     // 任务一起被删除的提交凭据，否则旧凭据会把新表单永久锁住。
-    if (fresh) return { mode: initialMode, creative_profile: creativeProfile ?? 'general', prompt: initialPrompt ?? '', reference_image: '', width: 768, height: 1344, output_resolution: 'native', seed: randomSeed() };
+    if (fresh) {
+      const [width, height] = initialAspect === '1:1' ? [1152, 1152] : initialAspect === '16:9' ? [1536, 864] : [864, 1536];
+      return { mode: initialMode, creative_profile: creativeProfile ?? 'general', prompt: initialPrompt ?? '', reference_image: '', width, height,
+        output_resolution: initialResolution ?? 'native', steps: initialSteps ?? DEFAULT_STEPS,
+        seed: Number.isInteger(initialSeed) && (initialSeed as number) >= 0 ? (initialSeed as number) : randomSeed() };
+    }
     try {
       const value = JSON.parse(localStorage.getItem(storageKey) || '{}');
       return { mode: value.pending ? (value.pending.mode === 'text' ? 'text' : 'reference') : value.mode === 'text' || value.mode === 'reference' ? value.mode : initialMode, creative_profile: value.creative_profile === 'adult-realism' || value.creative_profile === 'adult-anime' ? value.creative_profile : (creativeProfile ?? 'general'), prompt: typeof value.prompt === 'string' ? value.prompt : '', reference_image: typeof value.reference_image === 'string' ? value.reference_image : '',
         width: value.width ?? 768, height: value.height ?? 1344, output_resolution: value.output_resolution ?? 'native',
+        steps: typeof value.steps === 'number' && value.steps >= 4 && value.steps <= 50 ? value.steps : DEFAULT_STEPS,
         seed: Number.isInteger(value.seed) && value.seed >= 0 && value.seed <= 4294967295 ? value.seed : randomSeed(),
         pending: value.pending && typeof value.pending.idempotency_key === 'string' && typeof value.pending.prompt === 'string' && (value.pending.mode === 'text' || typeof value.pending.reference_image === 'string') && Number.isInteger(value.pending.seed) ? value.pending : undefined };
     } catch { return { mode: initialMode, creative_profile: creativeProfile ?? 'general', prompt: '', reference_image: '', seed: randomSeed() }; }
@@ -55,6 +70,8 @@ export default function KeyframePanel({ projectId, options, onBrowse, onComplete
   const [task, setTask] = useState<Task | null>(null);
   const pendingKey = useRef(saved.pending?.idempotency_key);
   const [message, setMessage] = useState('');
+  // 人物三要素只是拼草稿的辅助输入，不进提交请求，也不改生成链路。
+  const [cast, setCast] = useState({ portrait: '', pose: '', costume: '' });
   const [busy, setBusy] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [capability, setCapability] = useState<{ mode: Mode; available: boolean; engine_offline?: boolean; missing_nodes?: string[]; missing_models?: string[]; reason?: string; requires_reference_image?: boolean } | null>(null);
@@ -70,6 +87,21 @@ export default function KeyframePanel({ projectId, options, onBrowse, onComplete
   function persist(next: Saved) {
     try { localStorage.setItem(storageKey, JSON.stringify(next)); pendingKey.current = next.pending?.idempotency_key; setSaved(next); return true; }
     catch { setMessage('本机无法保存提交凭据，请恢复浏览器存储后重试。'); return false; }
+  }
+  // 把肖像/姿势/服装拼成一段画面描述写进提示词框：只生成草稿，落笔前你还能改，
+  // 也不会自动提交。已经拼过的那段不重复追加。
+  function composeCast() {
+    const parts = [
+      cast.portrait.trim() && `人物：${cast.portrait.trim()}`,
+      cast.pose.trim() && `姿势：${cast.pose.trim()}`,
+      cast.costume.trim() && `服装：${cast.costume.trim()}`,
+    ].filter(Boolean) as string[];
+    if (!parts.length) { setMessage('三行都还空着，先写点内容再写入。'); return; }
+    const draft = `${parts.join('；')}。`;
+    const current = saved.prompt.trim();
+    if (current.includes(draft)) { setMessage('这段已经写进提示词了。'); return; }
+    persist({ ...saved, prompt: current ? `${current}\n${draft}` : draft });
+    setMessage('已按肖像 → 姿势 → 服装拼成草稿写进提示词，改完再提交。');
   }
   function accept(next: Task, expectedKey: string | undefined) {
     if (!mounted.current || !expectedKey || pendingKey.current !== expectedKey) return;
@@ -142,7 +174,7 @@ export default function KeyframePanel({ projectId, options, onBrowse, onComplete
         // Reuse the receipt only while that submission is still unresolved; after a
         // terminal result the textarea is editable again, so a new run needs a new key.
         const retry = saved.pending && (!task || !terminal.includes(task.status)) ? saved.pending : undefined;
-        const pending: Submission = retry || { mode: saved.mode, creative_profile: saved.creative_profile, prompt: saved.prompt.trim(), ...(saved.mode === 'text' ? { width: saved.width ?? 768, height: saved.height ?? 1344, output_resolution: appliedResolution } : { reference_image: saved.reference_image }), seed: saved.seed, idempotency_key: `keyframe-${crypto.randomUUID()}` };
+        const pending: Submission = retry || { mode: saved.mode, creative_profile: saved.creative_profile, prompt: saved.prompt.trim(), ...(saved.mode === 'text' ? { width: saved.width ?? 768, height: saved.height ?? 1344, output_resolution: appliedResolution, steps: saved.steps ?? DEFAULT_STEPS } : { reference_image: saved.reference_image }), seed: saved.seed, idempotency_key: `keyframe-${crypto.randomUUID()}` };
         if (!retry && task) setTask(null);
         if (!persist({ ...saved, pending })) return;
         operationKey = pending.idempotency_key;
@@ -179,7 +211,7 @@ export default function KeyframePanel({ projectId, options, onBrowse, onComplete
           await request(`${base}/keyframe-tasks`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ mode: 'text', creative_profile: saved.creative_profile, prompt,
-              width: saved.width ?? 768, height: saved.height ?? 1344,
+              width: saved.width ?? 768, height: saved.height ?? 1344, steps: saved.steps ?? DEFAULT_STEPS,
               output_resolution: saved.output_resolution ?? 'native', seed: saved.seed,
               idempotency_key: `keyframe-${crypto.randomUUID()}` }),
           });
@@ -219,6 +251,10 @@ export default function KeyframePanel({ projectId, options, onBrowse, onComplete
   // 提示词里写明的画质优先于选择器；后端用同一份规则再校验一次。
   const promptIntent = detectQualityIntent(saved.prompt);
   const appliedResolution = saved.mode === 'text' && promptIntent ? promptIntent.resolution : saved.output_resolution ?? 'native';
+  // 结果既能下载处理后的版本，也能下载未经放大的原生文件。
+  const outputPath = task?.result?.output || '';
+  const nativePath = task?.result?.native_output || task?.result?.published_native_output || '';
+  const fileSuffix = (value: string) => (value.split('.').pop() || 'png').toLowerCase();
   return <section className={simple ? 'sf-post-tools quick-image-form' : 'sf-post-tools'} aria-label="生成关键帧">
     <section className="sf-post-section" aria-label={simple ? '生成图片设置' : '生成关键帧设置'}>
       <div className="sf-post-section-head"><h2 className="sf-post-title">{simple ? '生成图片' : '生成关键帧'}</h2><p className="sf-post-status">{task ? (labels[task.status] || task.status) : '显式提交'}</p></div>
@@ -227,19 +263,39 @@ export default function KeyframePanel({ projectId, options, onBrowse, onComplete
           <div className="sf-post-field-head"><label htmlFor={promptId}>{simple ? '图片提示词' : '画面描述'}</label><button type="button" className="sf-inline-link" disabled={locked} onClick={() => setLibraryOpen(true)}><BookOpen size={12} /> 从提示词库带入</button></div>
           <textarea id={promptId} rows={4} maxLength={6000} value={saved.prompt} disabled={locked} placeholder="描述角色、场景、姿态和构图" onChange={event => persist({ ...saved, prompt: event.target.value })} />
         </div>
+        <details className="qt-advanced sf-post-field--wide">
+          <summary>人物三要素 · 拼成提示词草稿</summary>
+          <div className="sf-post-fields">
+            <div className="sf-post-field"><label>肖像<input value={cast.portrait} maxLength={200} disabled={locked} placeholder="二十七八岁，短发，鹅蛋脸" onChange={event => setCast({ ...cast, portrait: event.target.value })} /></label></div>
+            <div className="sf-post-field"><label>姿势<input value={cast.pose} maxLength={200} disabled={locked} placeholder="侧身站在窗前，一只手扶着窗框" onChange={event => setCast({ ...cast, pose: event.target.value })} /></label></div>
+            <div className="sf-post-field"><label>服装<input value={cast.costume} maxLength={200} disabled={locked} placeholder="米白色棉质衬衫，袖口挽起" onChange={event => setCast({ ...cast, costume: event.target.value })} /></label></div>
+          </div>
+          <div className="sf-post-actions">
+            <button type="button" className="button secondary compact" disabled={locked} onClick={composeCast}>写入提示词</button>
+            <button type="button" className="button secondary compact" disabled={locked} onClick={() => setCast({ portrait: '', pose: '', costume: '' })}>清空三行</button>
+          </div>
+          <p className="sf-post-hint">只把这三行拼成一段草稿追加到上面的提示词框，写完还能改；不改生成参数，也不会自动提交。参考图在 H3 里是整体语义参考，没法按这三项分别硬控。</p>
+        </details>
         {saved.mode === 'reference' && <fieldset className="sf-post-field sf-post-field--wide" disabled={locked}><MaterialSelect label="参考图片" kind="image" value={saved.reference_image} options={options} onChange={value => persist({ ...saved, reference_image: value })} onBrowse={onBrowse} /></fieldset>}
         {simple && saved.mode === 'text' && <div className="sf-post-field sf-post-field--wide">
           <label>清晰度</label>
           <div className="clarity-levels" role="group" aria-label="图片清晰度">
             {clarityOptions.map(option => <button key={option.value} type="button" aria-pressed={(saved.output_resolution ?? 'native') === option.value} disabled={locked} onClick={() => persist({ ...saved, output_resolution: option.value })}><strong>{option.label}</strong><small>{option.note}</small></button>)}
           </div>
-          <p className="sf-post-hint">当前 {saved.width ?? 768} × {saved.height ?? 1344}；2K、4K、8K 在生成后用 Lanczos 放大，不增加原生细节。</p>
+          <p className="sf-post-hint">原生 {saved.width ?? 768} × {saved.height ?? 1344} = {Math.round((saved.width ?? 768) * (saved.height ?? 1344) / 10000)} 万像素，这才是模型真正画出来的尺寸；2K、4K、8K 只是在这张图上插值放大，文件更大但不会更清晰。</p>
+        </div>}
+        {saved.mode === 'text' && <div className="sf-post-field sf-post-field--wide">
+          <label>采样步数</label>
+          <div className="clarity-levels" role="group" aria-label="采样步数">
+            {stepOptions.map(option => <button key={option.value} type="button" aria-pressed={(saved.steps ?? DEFAULT_STEPS) === option.value} disabled={locked} onClick={() => persist({ ...saved, steps: option.value })}><strong>{option.label}</strong><small>{option.note}</small></button>)}
+          </div>
+          <p className="sf-post-hint">8 步是 Qwen Image Turbo 蒸馏的标称值，也是默认值；不动它就是 8。16、25 步会加重皮肤与布料纹理，同时也会改动构图——它不是同一张图的精修，耗时按步数线性增加。</p>
         </div>}
         {(() => {
           // 单步入口只强制提示词一项；其余都有默认值，收进折叠区，幅面与输出规格各自单选。
           const advanced = <>
             {!simple && <div className="sf-post-field"><label htmlFor={modeId}>生成方式</label><select id={modeId} value={saved.mode} disabled={locked} onChange={event => persist({ ...saved, mode: event.target.value as Mode })}><option value="text">文字生图</option><option value="reference">参考图改图</option></select></div>}
-            {saved.mode === 'text' && <div className="sf-post-field sf-post-field--wide"><ResolutionPicker label="图片" disabled={locked} aspect={saved.width === saved.height ? '1:1' : (saved.width ?? 768) > (saved.height ?? 1344) ? '16:9' : '9:16'} resolution={saved.output_resolution} nativeSize={`${saved.width ?? 768} × ${saved.height ?? 1344}`} onChange={(aspect, output_resolution) => { const [width, height] = aspect === '1:1' ? [1024, 1024] : aspect === '16:9' ? [1344, 768] : [768, 1344]; persist({ ...saved, width, height, output_resolution }); }} /></div>}
+            {saved.mode === 'text' && <div className="sf-post-field sf-post-field--wide"><ResolutionPicker label="图片" disabled={locked} aspect={saved.width === saved.height ? '1:1' : (saved.width ?? 768) > (saved.height ?? 1344) ? '16:9' : '9:16'} resolution={saved.output_resolution} nativeSize={`${saved.width ?? 768} × ${saved.height ?? 1344}`} onChange={(aspect, output_resolution) => { const [width, height] = aspect === '1:1' ? [1152, 1152] : aspect === '16:9' ? [1536, 864] : [864, 1536]; persist({ ...saved, width, height, output_resolution }); }} /></div>}
             <div className="sf-post-subblock sf-post-field--wide"><h3 className="sf-post-subtitle">随机编号</h3><div className="sf-post-field"><label>随机编号<input type="number" min={0} max={4294967295} step={1} value={saved.seed} disabled={locked} onChange={event => persist({ ...saved, seed: Number(event.target.value) })} /></label><button type="button" className="button secondary compact" disabled={locked} onClick={() => persist({ ...saved, seed: randomSeed() })}>换一个</button></div><p className="sf-post-hint">同一段提示词 + 同一个编号 = 同一张图；换编号就换一版。默认每次随机，平时不用管它；想复现某张图时，把那张图用过的编号填回来。</p></div>
           </>;
           return simple ? <details className="qt-advanced"><summary>更多设置 · 幅面、输出规格、随机编号</summary>{advanced}</details> : advanced;
@@ -254,6 +310,14 @@ export default function KeyframePanel({ projectId, options, onBrowse, onComplete
       {capability?.engine_offline && <p className="sf-post-hint">生成引擎当前未运行；点生成会自动拉起，首次约 10–30 秒。</p>}
       {message && <p className="sf-post-message" role="status" aria-live="polite">{message}</p>}
       {task?.error && <p className="sf-post-message" role="status" aria-live="polite">{task.error}</p>}
+      {task?.status === 'succeeded' && outputPath && <div className="sf-post-subblock" aria-label="生成结果">
+        <figure className="sf-post-figure"><img src={mediaUrl(outputPath)} alt="生成结果预览" /></figure>
+        <div className="sf-post-actions">
+          <a className="button primary compact" href={mediaUrl(outputPath)} download={`关键帧-${task.id.slice(0, 8)}.${fileSuffix(outputPath)}`}>下载图片</a>
+          {nativePath && nativePath !== outputPath && <a className="button secondary compact" href={mediaUrl(nativePath)} download={`关键帧原生-${task.id.slice(0, 8)}.${fileSuffix(nativePath)}`}>下载原生图</a>}
+        </div>
+        <p className="sf-post-hint">下载的是本机文件；处理后的候选和未放大的原生文件都会保留。</p>
+      </div>}
       {task?.status === 'succeeded' && <div className="quick-candidate-meta" aria-label="图片候选信息">
         <div className="quick-candidate-meta-heading"><strong>当前图片候选</strong><span>已生成 · 待审阅</span></div>
         <dl><div><dt>输出规格</dt><dd>{resolutionLabel(task.result?.output_size?.resolution ?? task.payload?.request?.output_resolution)}{(task.result?.output_size?.width ?? task.result?.width) && (task.result?.output_size?.height ?? task.result?.height) ? ` · ${task.result?.output_size?.width ?? task.result?.width} × ${task.result?.output_size?.height ?? task.result?.height}` : ''}</dd></div><div><dt>处理方式</dt><dd>{methodLabel(task.result?.output_size?.method ?? task.payload?.output_size?.method)}</dd></div><div><dt>画面编号</dt><dd>{task.payload?.request?.seed ?? '—'}</dd></div><div><dt>输入快照</dt><dd>完整提示词与参数已保留</dd></div></dl>

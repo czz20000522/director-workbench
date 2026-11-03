@@ -63,7 +63,20 @@ def _edit_blocker(task: dict[str, Any]) -> str | None:
 
 
 def _snapshot_files(task: dict[str, Any], project_id: str) -> list[Path]:
-    root = backend.task_snapshot_root(project_id).resolve()
+    """Files this task owns: its frozen workflow plus the request record beside it.
+
+    A task's own snapshot is written into the project workspace
+    (``<workspace>/keyframe-tasks/<task_id>/``), while the shared template copy
+    lives in ``task_snapshot_root``. Both are candidates here; a template that
+    another surviving task still points at is dropped by :func:`_unreferenced`.
+    """
+    roots = [backend.task_snapshot_root(project_id).resolve()]
+    try:
+        manifest = backend.load_project_manifest(project_id)
+        roots.append(backend.resolve_registered_path(str(manifest["workspace_root"])).resolve())
+    except (KeyError, TypeError, ValueError, OSError, HTTPException):
+        # 项目清单不可用时只按模板根判定，不因此阻断删除预览。
+        pass
     payload = task.get('payload') or {}
     snapshot = payload.get('execution_snapshot') or {}
     files: list[Path] = []
@@ -71,8 +84,13 @@ def _snapshot_files(task: dict[str, Any], project_id: str) -> list[Path]:
         if not value:
             continue
         path = Path(str(value)).resolve()
-        if path.is_relative_to(root) and path.is_file() and path not in files:
+        if any(path.is_relative_to(root) for root in roots) and path.is_file() and path not in files:
             files.append(path)
+            # 任务冻结目录里不止 workflow.json：request.json 等记录同属这一次任务，
+            # 只按 payload 登记的路径删会留下同目录的其它文件。
+            if path.parent.name == str(task.get('id') or ''):
+                files.extend(item for item in path.parent.iterdir()
+                             if item.is_file() and item not in files)
     return files
 
 
@@ -173,8 +191,11 @@ def _rebuild_keyframe(task: dict[str, Any], manifest: dict[str, Any], edits: dic
     if width % 8 or height % 8:
         raise HTTPException(422, '图像宽高须为 8 的倍数')
     seed = int(edits['seed']) if edits.get('seed') is not None else int(request.get('seed') or 0)
+    steps = int(edits.get('steps') or request.get('steps') or 8)
+    if not 4 <= steps <= 50:
+        raise HTTPException(422, '采样步数须为 4 至 50 的整数')
     workspace = backend.resolve_registered_path(str(manifest['workspace_root']))
-    rebuilt = keyframes.prepare_text(task_id, prompt, workspace / 'keyframe-tasks', prefix, seed, width, height, profile)
+    rebuilt = keyframes.prepare_text(task_id, prompt, workspace / 'keyframe-tasks', prefix, seed, width, height, profile, steps)
     for key in ('project_id', 'owner_user'):
         if payload.get(key):
             rebuilt[key] = payload[key]

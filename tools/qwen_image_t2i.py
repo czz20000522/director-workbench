@@ -16,11 +16,14 @@ from pathlib import PurePosixPath
 
 
 def graph(prompt: str, prefix: str, seed: int, width: int = 1024, height: int = 1024,
-          lora_name: str | None = None) -> dict:
+          lora_name: str | None = None, steps: int = 8) -> dict:
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 6000:
         raise ValueError('画面描述长度须为 1 至 6000 字符')
     if type(seed) is not int or not 0 <= seed <= 2**64 - 1:
         raise ValueError('随机编号必须是有效的非负整数')
+    # 8 是 Turbo 蒸馏的标称步数；更高的值由调用方显式给出，这里不替它挑选。
+    if type(steps) is not int or not 4 <= steps <= 50:
+        raise ValueError('采样步数须为 4 至 50 的整数')
     if any(type(value) is not int or value < 512 or value > 1536 or value % 8 for value in (width, height)):
         raise ValueError('图像宽高须为 512 至 1536 之间的 8 倍数')
     if width * height > 1536 * 1344:
@@ -35,7 +38,7 @@ def graph(prompt: str, prefix: str, seed: int, width: int = 1024, height: int = 
         '4': {'class_type': 'TextEncodeQwenImage21', 'inputs': {'clip': ['2', 0], 'prompt': prompt, 'negative_prompt': '', 'resolution': max(width, height), 'images': [], 'vae': ['3', 0]}},
         '5': {'class_type': 'QwenImage21Cache', 'inputs': {'model': ['1', 0], 'device': 'auto', 'dtype': 'default'}},
         '6': {'class_type': 'EmptyLatentImage', 'inputs': {'width': width, 'height': height, 'batch_size': 1}},
-        '7': {'class_type': 'KSampler', 'inputs': {'model': ['5', 0], 'positive': ['4', 0], 'negative': ['4', 1], 'latent_image': ['6', 0], 'seed': seed, 'steps': 8, 'cfg': 1.0, 'sampler_name': 'euler', 'scheduler': 'simple', 'denoise': 1.0}},
+        '7': {'class_type': 'KSampler', 'inputs': {'model': ['5', 0], 'positive': ['4', 0], 'negative': ['4', 1], 'latent_image': ['6', 0], 'seed': seed, 'steps': steps, 'cfg': 1.0, 'sampler_name': 'euler', 'scheduler': 'simple', 'denoise': 1.0}},
         '8': {'class_type': 'VAEDecode', 'inputs': {'samples': ['7', 0], 'vae': ['3', 0]}},
         '18': {'class_type': 'SaveImage', 'inputs': {'images': ['8', 0], 'filename_prefix': prefix}},
     }

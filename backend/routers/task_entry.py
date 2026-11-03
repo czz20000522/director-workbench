@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException, Query
 import importlib.util
 from urllib.error import HTTPError, URLError
 from .. import enhance_library, enhancement
-from ..schemas import FinishRequest, StartRequest, EnhanceArchiveRequest
+from ..schemas import FinishRequest, StartRequest, EnhanceArchiveRequest, EnhanceLibraryDeleteRequest
 from .. import app as backend
 
 
@@ -214,6 +214,15 @@ def enhance_library_files() -> dict[str, Any]:
     return {'items': enhance_library.list_files()}
 
 
+@ROUTER.post('/api/enhance-library/delete')
+def delete_enhance_library_file(request: EnhanceLibraryDeleteRequest) -> dict[str, Any]:
+    """直接删掉一个归档成品；仍被素材登记引用时明确拒绝，不静默断链。"""
+    try:
+        return enhance_library.delete_file(request.name)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 @ROUTER.post('/api/projects/{project_id}/enhancements/{task_id}/archive')
 def archive_enhancement(project_id: str, task_id: str, request: EnhanceArchiveRequest) -> dict[str, Any]:
     """把已完成的清晰化结果归档进清晰化库；勾选覆盖时改指向并删除原文件。"""
@@ -255,8 +264,13 @@ def start_enhancement_task(project_id: str, request: enhancement.EnhancementRequ
     try:
         source = backend.resolve_registered_path(request.source)
         admitted = {backend.resolve_registered_path(item['value']) for item in backend.enhancement_sources(project_id)}
-        if source not in admitted:
-            raise ValueError('请选择当前作品已登记的图片或视频')
+        # 清晰化库里的成品同样可以作为输入（"再次清晰化"就是这条路径）。它仍受
+        # 归档区与媒体扩展名两道限制，不会因为放宽而接受作品外的任意路径。
+        library_root = enhance_library.directory().resolve()
+        from_library = (source.is_relative_to(library_root)
+                        and source.suffix.lower() in enhance_library.MEDIA_EXTENSIONS)
+        if source not in admitted and not from_library:
+            raise ValueError('请选择当前作品已登记的图片或视频，或清晰化库里的成品')
         stamp = source.stat()
         facts = enhancement.inspect_source(source)
     except (ValueError, OSError, av.error.FFmpegError) as exc:

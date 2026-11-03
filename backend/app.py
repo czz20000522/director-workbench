@@ -2871,8 +2871,9 @@ from .routers.quick_tasks import ROUTER as _quick_tasks_router
 app.include_router(_quick_tasks_router)
 from .routers.quick_tasks import (
     QUICK_PROJECT_ID, QUICK_SERIES, QUICK_TITLE, QUICK_WORKSPACE_DIRECTORY, TASK_PLAN_TTL_SECONDS,
-    TOOL_LABELS, _batch_rows, _load_task_plan, ensure_quick_project, quick_prompt_excerpt, quick_task_card,
-    quick_task_list, quick_workspace, task_plan_directory, task_tool, tasks_deletion_apply, tasks_deletion_plan,
+    TOOL_LABELS, _batch_rows, _load_task_plan, ensure_quick_project, is_enhancement, quick_prompt_excerpt,
+    quick_task_card, quick_task_list, quick_task_reuse, quick_workspace, task_plan_directory, task_tool,
+    tasks_deletion_apply, tasks_deletion_plan,
 )
 # 这些名称原本定义在 app.py 模块层，拆出后按原样再导出：
 # app.py、private_mode.py 与既有测试都以 backend.<名称> 取用它们。

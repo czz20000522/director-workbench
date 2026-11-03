@@ -20,16 +20,16 @@ def _image_lora(profile: str | None) -> str | None:
 
 def prepare_text(task_id: str, prompt: str, snapshot_root: Path, output_prefix: str,
                  seed: int, width: int = 768, height: int = 1344,
-                 creative_profile: str = 'general') -> dict:
+                 creative_profile: str = 'general', steps: int = 8) -> dict:
     if not task_id or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for c in task_id):
         raise ValueError('关键帧任务 ID 无效')
-    recipe = text_graph(prompt, output_prefix, seed, width, height, _image_lora(creative_profile))
+    recipe = text_graph(prompt, output_prefix, seed, width, height, _image_lora(creative_profile), steps)
     directory = snapshot_root / task_id
     directory.mkdir(parents=True, exist_ok=False)
     workflow = directory / 'workflow.json'
     workflow.write_text(json.dumps(recipe, ensure_ascii=False, indent=2), encoding='utf-8')
     request = {'task_id': task_id, 'mode': 'text', 'engine': 'Qwen Image 2.1', 'creative_profile': creative_profile, 'prompt': prompt,
-               'seed': seed, 'output_prefix': output_prefix, 'width': width, 'height': height}
+               'seed': seed, 'output_prefix': output_prefix, 'width': width, 'height': height, 'steps': steps}
     (directory / 'request.json').write_text(json.dumps(request, ensure_ascii=False, indent=2), encoding='utf-8')
     return {'kind': 'keyframe', 'workflow': str(workflow.resolve()), 'request': request}
 

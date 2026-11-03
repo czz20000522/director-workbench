@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from .. import script_library
-from ..schemas import ScriptDraftRequest
+from ..schemas import ScriptDraftRequest, ScriptArchiveDeleteRequest
 
 
 ROUTER = APIRouter()
@@ -53,3 +53,12 @@ def archive_script_draft(draft_id: str) -> dict[str, Any]:
         return script_library.archive_draft(draft_id)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+@ROUTER.post('/api/script-library/archived/delete')
+def delete_archived_script(request: ScriptArchiveDeleteRequest) -> dict[str, Any]:
+    """删掉一份已归档剧本；归档区是唯一副本，所以删前由界面确认。"""
+    try:
+        return script_library.remove_archived(request.name)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc

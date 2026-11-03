@@ -68,14 +68,17 @@ function valid(draft: Draft): boolean {
 class RequestError extends Error { constructor(message: string, readonly status: number) { super(message); } }
 
 // 带入预设卡片只覆盖卡片里带的项；随机编号永远留在你自己手里。
-function fromCard(state: Saved, card?: Record<string, unknown> | null): Saved {
-  if (!card) return state;
+// 「编辑重生成」是例外：那是你上次自己摇出来的编号，带回来才可能复现同一段音乐。
+function fromCard(state: Saved, card?: Record<string, unknown> | null, reuseSeed?: number): Saved {
+  const seedBack = Number.isInteger(reuseSeed) && (reuseSeed as number) >= 0 && (reuseSeed as number) <= 4294967295;
+  if (!card && !seedBack) return state;
   const patch = { ...card } as Partial<Draft>;
   delete patch.seed;
+  if (seedBack) patch.seed = reuseSeed as number;
   return { ...state, draft: { ...state.draft, ...patch } };
 }
 
-export default function MusicPanel({ projectId, onComplete, initialCard }: { projectId: string; onComplete: () => void; initialCard?: Record<string, unknown> | null }) {
+export default function MusicPanel({ projectId, onComplete, initialCard, initialSeed }: { projectId: string; onComplete: () => void; initialCard?: Record<string, unknown> | null; initialSeed?: number }) {
   const storageKey = `director-workbench:${projectId}:music:v1`;
   const prefix = useId();
   const [capability, setCapability] = useState<Capability | null>(null);
@@ -136,11 +139,11 @@ export default function MusicPanel({ projectId, onComplete, initialCard }: { pro
       if (!alive.current) return;
       const ready = { ...fallback, ...data };
       setCapability(ready);
-      setSaved(state => { const next = fromCard(load(storageKey, ready), initialCard); current.current = next; return next; });
+      setSaved(state => { const next = fromCard(load(storageKey, ready), initialCard, initialSeed); current.current = next; return next; });
     }).catch(() => {
       if (!alive.current) return;
       setCapability({ ...fallback, reason: '无法检查配乐环境，请检查连接后刷新。' });
-      setSaved(state => { const next = fromCard(load(storageKey, fallback), initialCard); current.current = next; return next; });
+      setSaved(state => { const next = fromCard(load(storageKey, fallback), initialCard, initialSeed); current.current = next; return next; });
     });
     return () => { alive.current = false; };
   }, []);
@@ -269,8 +272,8 @@ export default function MusicPanel({ projectId, onComplete, initialCard }: { pro
         <p className="sf-post-hint">实测时长以文件为准；标签「{result.music?.tags?.slice(0, 40)}」· BPM {result.music?.bpm ?? '—'} · {result.music?.keyscale ?? '—'} · 随机编号 {result.music?.seed ?? '—'}。听完再决定是否放进音轨。</p>
       </div>}
       <div className="sf-post-actions">
-        {!locked && <button className="button primary compact" disabled={busy || !capability?.available || !valid(draft)} onClick={() => void act('submit')}>生成配乐候选</button>}
-        {locked && !task && <><button className="button secondary compact" disabled={busy} onClick={() => void act('check')}>核对配乐提交</button><button className="button secondary compact" disabled={busy || !capability?.available} onClick={() => void act('submit')}>使用原凭据重试</button></>}
+        {!locked && <button className="button primary compact" disabled={busy || (!capability?.available && !capability?.engine_offline) || !valid(draft)} onClick={() => void act('submit')}>生成配乐候选</button>}
+        {locked && !task && <><button className="button secondary compact" disabled={busy} onClick={() => void act('check')}>核对配乐提交</button><button className="button secondary compact" disabled={busy || (!capability?.available && !capability?.engine_offline)} onClick={() => void act('submit')}>使用原凭据重试</button></>}
         {task && !pollTerminal.includes(task.status) && <button className="button secondary compact" disabled={busy} onClick={() => void act('stop')}>停止配乐任务</button>}
         {task?.status === 'needs_reconcile' && <button className="button secondary compact" disabled={busy} onClick={() => void act('reconcile')}>核对配乐结果</button>}
         {task && terminal.includes(task.status) && <button className="button secondary compact" disabled={busy} onClick={() => { if (persist({ ...current.current, pending: undefined })) { setTask(null); setMessage(''); } }}>准备下一段配乐</button>}

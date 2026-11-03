@@ -29,9 +29,37 @@ class StageMaterialRequest(BaseModel):
     project_id: str
 
 
+class HideRequest(BaseModel):
+    kind: str = Field(max_length=20)
+    id: str = Field(min_length=1, max_length=120)
+
+
+class RestoreRequest(BaseModel):
+    kind: str = Field(max_length=20)
+    id: str | None = Field(default=None, max_length=120)
+
+
 @ROUTER.get('/api/reference-library')
 def reference_library_overview() -> dict[str, Any]:
     return reference_library.overview(backend.ROOT)
+
+
+@ROUTER.post('/api/reference-library/hide')
+def hide_reference_item(request: HideRequest) -> dict[str, Any]:
+    """从库里移除一个条目；源文件和原文段落都不动，只记一份排除名单。"""
+    try:
+        return reference_library.hide(backend.ROOT, request.kind, request.id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@ROUTER.post('/api/reference-library/restore')
+def restore_reference_items(request: RestoreRequest) -> dict[str, Any]:
+    """恢复一条（带 id）或整类（不带 id）被移除的条目。"""
+    try:
+        return reference_library.restore(backend.ROOT, request.kind, request.id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @ROUTER.post('/api/reference-library/refresh')

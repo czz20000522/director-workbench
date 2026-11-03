@@ -66,6 +66,7 @@ type QuickTask = {
   progress?: Progress;
   queue?: { position?: number | null };
   video_mode?: 'text-video' | 'image-video' | null;
+  reuse?: { tool: QuickTool; values: Record<string, unknown> } | null;
 };
 type TaskPlanEntry = { task_id: string; project_id?: string; status: string; title: string; snapshots: string[] };
 type TaskPlan = { plan_id: string; expires_at: number; entries: TaskPlanEntry[]; preserved: string; archivable?: Archivable[]; outputs?: string[] };
@@ -122,12 +123,13 @@ function TopBar({ username, projectTitle, onHome, onLogout }: { username: string
   );
 }
 
-function Home({ projects, seriesNames, continueProject, loading, error, onStart, onOpen, onSeries, onRetry, onQuick, onDeleted, onUsePrompt, onUseFrame, onUseTimbre, onUseMusic }: {
+function Home({ projects, seriesNames, continueProject, loading, error, onStart, onOpen, onSeries, onRetry, onQuick, onDeleted, onUsePrompt, onUseFrame, onUseTimbre, onUseMusic, onReuseTask }: {
   projects: ProjectView[]; seriesNames: string[]; continueProject: ProjectView | null; loading: boolean; error: string;
   onStart: () => void; onOpen: (id: string) => void; onSeries: (series: string) => void; onRetry: () => void;
   onQuick: (tool: QuickTool) => void; onDeleted: () => void;
   onUsePrompt: (text: string, target: PromptTarget) => void; onUseFrame: (path: string, title: string) => void;
   onUseTimbre: (description: string) => void; onUseMusic: (card: Record<string, unknown>) => void;
+  onReuseTask: (reuse: { tool: QuickTool; values: Record<string, unknown> }, title: string) => void;
 }) {
   const [batchMode, setBatchMode] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
@@ -304,6 +306,7 @@ function Home({ projects, seriesNames, continueProject, loading, error, onStart,
                       <span className="sf-work-mark">{group.title.slice(0, 1)}</span>
                       <span className="sf-work-main"><strong>{task.title}</strong><small>{task.tool} · {taskStates[task.status] || task.status}{task.created_at ? ` · ${new Date(task.created_at * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}` : ''}{task.revision ? ` · 改第 ${task.revision} 版` : ''}</small>{task.error && <small className="sf-task-error">{task.error}</small>}<TaskProgress progress={task.progress} label={task.tool} /></span>
                       {task.output && <a className="sf-secondary" href={mediaFile(task.output)} target="_blank" rel="noreferrer">查看结果</a>}
+                      {task.reuse && <button className="sf-secondary" type="button" aria-label={`编辑重生成 · ${task.title}`} onClick={() => onReuseTask(task.reuse as { tool: QuickTool; values: Record<string, unknown> }, task.title)}>编辑重生成</button>}
                     </span>
                     {task.deletable
                       ? <button className="sf-work-delete" aria-label="删除单步任务" onClick={() => void requestQuickDelete([task.id])}><Trash2 size={15} /></button>
@@ -899,7 +902,7 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
 
   return <div className="sf-root">
     <TopBar username={username} projectTitle={screen === 'wizard' ? projectTitle : undefined} onHome={home} onLogout={onLogout} />
-    {screen === 'home' && <Home projects={projects} seriesNames={seriesNames} continueProject={projects[0] || null} loading={loading} error={loadError} onStart={startFull} onOpen={id => void openProject(id)} onSeries={name => { setActiveSeries(name); setScreen('series'); }} onRetry={() => void loadProjects()} onQuick={tool => { setQuickSeed(null); setQuickTool(tool); setScreen('quick'); }} onDeleted={() => void loadProjects()} onUsePrompt={(text, target) => { setQuickSeed({ prompt: text }); setQuickTool(target); setScreen('quick'); }} onUseFrame={path => { setQuickSeed({ frame: path }); setQuickTool('image-video'); setScreen('quick'); }} onUseTimbre={description => { setQuickSeed({ timbre: description }); setQuickTool('timbre'); setScreen('quick'); }} onUseMusic={card => { setQuickSeed({ music: card }); setQuickTool('music'); setScreen('quick'); }} />}
+    {screen === 'home' && <Home projects={projects} seriesNames={seriesNames} continueProject={projects[0] || null} loading={loading} error={loadError} onStart={startFull} onOpen={id => void openProject(id)} onSeries={name => { setActiveSeries(name); setScreen('series'); }} onRetry={() => void loadProjects()} onQuick={tool => { setQuickSeed(null); setQuickTool(tool); setScreen('quick'); }} onDeleted={() => void loadProjects()} onUsePrompt={(text, target) => { setQuickSeed({ prompt: text }); setQuickTool(target); setScreen('quick'); }} onUseFrame={path => { setQuickSeed({ frame: path }); setQuickTool('image-video'); setScreen('quick'); }} onUseTimbre={description => { setQuickSeed({ timbre: description }); setQuickTool('timbre'); setScreen('quick'); }} onUseMusic={card => { setQuickSeed({ music: card }); setQuickTool('music'); setScreen('quick'); }} onReuseTask={(reuse, title) => { setQuickSeed({ ...reuse.values as QuickSeed, fromTask: title }); setQuickTool(reuse.tool); setScreen('quick'); }} />}
     {screen === 'quick' && <Suspense fallback={<div className="sf-center"><LoaderCircle className="sf-spin" size={20} /><p>正在载入工具…</p></div>}><QuickToolPage tool={quickTool} seed={quickSeed} onBack={() => setScreen('home')} /></Suspense>}
     {newProjectOpen && <div className="sf-modal-backdrop" role="dialog" aria-modal="true" aria-label="新建项目"><div className="sf-modal"><button className="sf-modal-close" onClick={() => setNewProjectOpen(false)} aria-label="关闭"><X size={18} /></button><p className="sf-step-label">新建</p><h2>新建项目</h2><p className="sf-modal-lede">项目只是一个结果容器；创建后再选择方案、镜头和生成工具。</p><label className="sf-field"><span>项目名</span><input value={title} onChange={event => setTitle(event.target.value)} placeholder="例如：咖啡测试" /></label><label className="sf-field"><span>系列</span><input value={series} onChange={event => setSeries(event.target.value)} placeholder="例如：单步工具" /></label><ReferenceHints query={title} />{error && <p className="sf-error">{error}</p>}<div className="sf-step-actions"><button className="sf-primary" disabled={busy || !title.trim()} onClick={() => { void createProject().then(created => { if (created) { setNewProjectOpen(false); setScreen('wizard'); } }); }}>{busy ? '创建中…' : '创建项目'}</button></div></div></div>}
     {screen === 'series' && <SeriesResources series={activeSeries} episodes={projects.filter(project => project.series === activeSeries)} onBack={() => setScreen('home')} onOpen={id => void openProject(id)} />}

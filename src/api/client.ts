@@ -41,6 +41,12 @@ export type RequestOptions = {
   timeoutMs?: number;
 };
 
+/** A JSON body needs a method: `fetch` rejects a body on the default GET before it
+ * ever reaches the network, which surfaces as an opaque TypeError in every panel. */
+function methodFor(init: RequestInit | undefined, json: unknown): string | undefined {
+  return init?.method ?? (json === undefined ? undefined : 'POST');
+}
+
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { init, json, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
   const controller = new AbortController();
@@ -58,7 +64,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
       headers.set('Content-Type', 'application/json');
       body = JSON.stringify(json);
     }
-    const response = await fetch(path, { ...init, headers, body, signal: controller.signal });
+    const response = await fetch(path, { ...init, method: methodFor(init, json), headers, body, signal: controller.signal });
     if (!response.ok) {
       let detail: unknown;
       try {

@@ -151,6 +151,55 @@ def archive(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return done
 
 
+def _resolve_output(value: str) -> Path | None:
+    """Resolve an absolute path, or an ``output/…`` / ``input/…`` reference.
+
+    清晰化任务把产物登记成 ``output/导演工作台工作目录/…`` 这种相对形式，
+    只认绝对路径会漏掉它们，删任务时把文件留在磁盘上。
+    """
+    from . import app as backend
+    text = str(value).replace('\\', '/')
+    candidate = Path(str(value))
+    if candidate.is_absolute():
+        return candidate.resolve()
+    for prefix, root in (('output/', backend.OUTPUT_ROOT), ('input/', backend.INPUT_ROOT)):
+        if text.startswith(prefix):
+            return (Path(root) / text[len(prefix):]).resolve()
+    return None
+
+
+def _loads(value: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return value
+    if not value:
+        return {}
+    try:
+        return json.loads(value)
+    except ValueError:
+        return {}
+
+
+def _output_candidates(payload: Any, result: Any) -> list[Path]:
+    """Every output path a task registered, in each form it may take.
+
+    ``result.outputs`` / ``native_outputs`` 存的是相对 output 根的子路径（不带
+    ``output/`` 前缀），``published_outputs`` 才带前缀；只认一种形式就会把
+    清晰化这类的产物留在磁盘上。
+    """
+    from . import app as backend
+    paths: list[Path] = []
+    for value in (*_strings(payload), *_strings(result)):
+        resolved = _resolve_output(value)
+        if resolved is not None:
+            paths.append(resolved)
+    body = result if isinstance(result, dict) else {}
+    for key in ('outputs', 'native_outputs'):
+        for item in body.get(key) or []:
+            if isinstance(item, str) and item.strip():
+                paths.append((Path(backend.OUTPUT_ROOT) / item.strip()).resolve())
+    return paths
+
+
 def owned_outputs(rows: list[dict[str, Any]]) -> list[str]:
     """Outputs of these tasks that live outside the workspace, frozen for the preview.
 
@@ -162,37 +211,27 @@ def owned_outputs(rows: list[dict[str, Any]]) -> list[str]:
     wanted = {str(row.get('id')) for row in rows if row.get('id')}
     if not wanted:
         return []
-    others = []
+    elsewhere: set[str] = set()
     with backend.DB_LOCK, backend.db() as connection:
-        for (payload,) in connection.execute('SELECT payload FROM tasks').fetchall():
-            try:
-                document = json.loads(payload)
-            except ValueError:
+        # 按数据库主键排除自己：payload 里不一定有 task_id，用 payload 判断会把
+        # 自己的路径也当成“别的任务在用”，结果一个文件都删不掉。
+        for row_id, payload, result in connection.execute('SELECT id, payload, result FROM tasks').fetchall():
+            if str(row_id) in wanted:
                 continue
-            if str(document.get('task_id') or '') in wanted:
-                continue
-            others.append(payload)
-    others_text = '\n'.join(others)
+            elsewhere.update(str(path) for path in _output_candidates(_loads(payload), _loads(result)))
+
     found: list[str] = []
     for row in rows:
-        payload = row.get('payload') or {}
-        if isinstance(payload, str):
-            try:
-                payload = json.loads(payload)
-            except ValueError:
-                continue
-        if not isinstance(payload, dict):
+        payload = _loads(row.get('payload'))
+        result = _loads(row.get('result'))
+        if not isinstance(payload, dict) or not isinstance(result, dict):
             continue
-        for value in _strings(payload):
-            candidate = Path(value)
-            if not candidate.is_absolute():
-                continue
-            resolved = candidate.resolve()
+        for resolved in _output_candidates(payload, result):
             if not any(resolved.is_relative_to(root) for root in roots):
                 continue
             if not any(task in resolved.name for task in wanted):
                 continue
-            if value in others_text:
+            if str(resolved) in elsewhere:
                 continue
             if resolved.is_file() and str(resolved) not in found:
                 found.append(str(resolved))

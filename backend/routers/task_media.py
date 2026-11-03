@@ -118,7 +118,7 @@ def start_keyframe_task(project_id: str, request: KeyframeRequest) -> dict[str, 
     if request.mode == 'text':
         if request.reference_image is not None:
             raise HTTPException(422, '文字生图不接收参考图片，请选择参考图模式')
-        submission.update(mode='text', width=request.width, height=request.height)
+        submission.update(mode='text', width=request.width, height=request.height, steps=request.steps)
     elif not request.reference_image:
         raise HTTPException(422, '参考图模式需要选择图片')
     elif (request.width, request.height) != (768, 1344):
@@ -141,7 +141,7 @@ def start_keyframe_task(project_id: str, request: KeyframeRequest) -> dict[str, 
         workspace = backend.resolve_registered_path(str(manifest['workspace_root']))
         prefix = f'导演工作台工作目录/{project_id}/关键帧/{task_id}'
         if request.mode == 'text':
-            payload = keyframes.prepare_text(task_id, request.prompt, workspace / 'keyframe-tasks', prefix, request.seed, request.width, request.height, request.creative_profile)
+            payload = keyframes.prepare_text(task_id, request.prompt, workspace / 'keyframe-tasks', prefix, request.seed, request.width, request.height, request.creative_profile, request.steps)
             if resolution != 'native':
                 payload['output_size'] = {'resolution': resolution,
                     'aspect_ratio': '1:1' if request.width == request.height else '16:9' if request.width > request.height else '9:16'}
@@ -633,7 +633,8 @@ def start_speech_task(project_id: str, request: SpeechRequest) -> dict[str, Any]
                                  cfg_value=request.cfg_value)
     except (OSError, ValueError) as exc:
         raise HTTPException(422, str(exc)) from exc
-    payload.update(project_id=project_id, submission_receipt={'key': request.idempotency_key, 'request': submission})
+    payload.update(project_id=project_id, parent_task_id=request.parent_task_id,
+                   submission_receipt={'key': request.idempotency_key, 'request': submission})
     if backend.PRIVATE_WORKSPACES is not None:
         backend.PRIVATE_WORKSPACES.freeze_owner(payload, project_id)
     now = time.time()
