@@ -29,8 +29,17 @@ if ($WithComfy -and -not (Test-Port 8188)) {
     $comfy = Join-Path $root 'ComfyUI_windows_portable'
     $py = Join-Path $comfy 'python_embeded\python.exe'
     if (Test-Path $py) {
+        # 预留显存由 backend/hardware.py 按真实显卡给出，别在 ps1 里再写一份。
+        # 否则「预热 ComfyUI」用旧值、生成时又用新值，会以先启动的那个为准。
+        $reserve = '0.60'
+        $dwPy = Join-Path $dw '.venv\Scripts\python.exe'
+        $probe = Join-Path $dw 'tools\hardware_probe.py'
+        if ((Test-Path $dwPy) -and (Test-Path $probe)) {
+            $value = & $dwPy $probe reserve-vram 2>$null
+            if ($LASTEXITCODE -eq 0 -and $value) { $reserve = ([string]$value).Trim() }
+        }
         Start-Process -FilePath $py `
-            -ArgumentList '-s','ComfyUI\main.py','--windows-standalone-build','--offline','--reserve-vram','1.0' `
+            -ArgumentList '-s','ComfyUI\main.py','--windows-standalone-build','--offline','--reserve-vram',$reserve `
             -WorkingDirectory $comfy -WindowStyle Hidden `
             -RedirectStandardOutput (Join-Path $logs 'comfyui.out.log') `
             -RedirectStandardError (Join-Path $logs 'comfyui.err.log')

@@ -33,6 +33,43 @@ def _safe(value: str) -> str:
     return label[:64].rstrip(' .') or '清晰化'
 
 
+_UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', re.IGNORECASE)
+# ComfyUI 的输出名是「<uuid>_00001_」：文件名本身没有信息量，全量截进来只会得到一串乱码。
+_COUNTER = re.compile(r'[_-]?\d{5}[_-]?$')
+LABEL_LIMIT = 20
+
+
+def _short(value: Any, limit: int = LABEL_LIMIT) -> str:
+    text = ' '.join(str(value or '').split())
+    return text if len(text) <= limit else text[:limit].rstrip() + '…'
+
+
+def source_label(project_id: str, source: Path) -> str:
+    """清晰化任务的可读名字：素材标题 → 原任务提示词 → 清洗过的文件名。
+
+    直接取文件名词干会得到 ``9e12eb3c-…-00001_`` 这种 UUID，卡片上一片乱码，
+    归档进素材库后文件名也没法认。所以按「人真正认得的东西」依次回退。
+    """
+    from . import app as backend
+    try:
+        asset = _asset_for(backend.require_project_manifest(project_id), source)
+    except (OSError, ValueError):
+        asset = None
+    title = _short((asset or {}).get('title'))
+    if title:
+        return title
+    match = _UUID.search(source.stem)
+    if match:
+        origin = backend.get_task(match.group(0)) or {}
+        prompt = backend._prompt_of(origin)
+        if not prompt:
+            prompt = ((origin.get('payload') or {}).get('enhancement') or {}).get('label') or ''
+        if str(prompt).strip():
+            return _short(prompt)
+    cleaned = _COUNTER.sub('', _UUID.sub('', source.stem)).strip(' _-')
+    return _short(cleaned or '素材')
+
+
 def _dimensions(path: Path) -> tuple[int | None, int | None]:
     """Read the frame size without decoding; None when the container is unreadable."""
     try:
@@ -155,7 +192,8 @@ def archive(project_id: str, task: dict[str, Any], *, overwrite: bool = False) -
     source = backend.resolve_registered_path(str(recipe['source']))
     manifest = backend.require_project_manifest(project_id)
     asset = _asset_for(manifest, source)
-    title = str((asset or {}).get('title') or source.stem)
+    # 归档文件名也要能认：旧任务没有 label，就退回「素材标题 → 文件名」的老路。
+    title = str((asset or {}).get('title') or recipe.get('label') or source.stem)
     stem = _safe(f"{title}{TAG}")
     folder = directory()
     folder.mkdir(parents=True, exist_ok=True)

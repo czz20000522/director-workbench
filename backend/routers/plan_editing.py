@@ -12,7 +12,7 @@ from pathlib import Path
 import time
 from typing import Any
 from fastapi import APIRouter, HTTPException
-from .. import creative_inspection, h3_duration, production_presets, shot_creation
+from .. import creative_inspection, h3_duration, hardware, production_presets, shot_creation
 from ..schemas import PipelineStageCreateRequest, PlanSegmentCreateRequest, PlanSegmentOperationRequest, PlanSegmentUpdateRequest, SegmentDeleteRequest
 from .. import app as backend
 
@@ -314,7 +314,7 @@ def validate_h3_plan_duration(manifest: dict[str, Any], segment: dict[str, Any])
         preset_id = next((key for key in production_presets.PRESET_IDS
                           if selected.get('id') == production_presets.stage_id(key)), None)
         h3_duration.plan(segment.get('duration_seconds'), production_presets.aspect_ratio(preset_id) if preset_id else '1:1',
-                         production_presets.megapixels(preset_id) if preset_id else 0.4)
+                         production_presets.megapixels(preset_id) if preset_id else hardware.video_megapixels())
     except ValueError as exc:
         raise HTTPException(422, f"分镜 {segment.get('id', '')} 时长无效：{exc}") from exc
 

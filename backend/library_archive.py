@@ -14,7 +14,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from . import preset_library
+from . import preset_library, trash
 
 TARGETS = {'reference': '参考图', 'timbre': '音色', 'music': '配乐', 'film': '作品'}
 TIMBRE_SUBTITLE = '音色样本 · 待试听'
@@ -206,11 +206,24 @@ def owned_outputs(rows: list[dict[str, Any]]) -> list[str]:
     A file qualifies only when its name carries one of the task ids and no other
     task references the same path — shared outputs never fall into this net.
     """
+    return _owned_outputs_detail(rows)[0]
+
+
+def retained_outputs(rows: list[dict[str, Any]]) -> list[str]:
+    """Own outputs that another surviving task still points at (e.g. a used first frame).
+
+    预览里必须说清楚这些，否则用户会以为「删了任务、图却还在」是漏删。
+    """
+    return _owned_outputs_detail(rows)[1]
+
+
+def _owned_outputs_detail(rows: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
+    """返回 (可清除, 因被引用而保留)。两个列表互斥。"""
     from . import app as backend
     roots = [backend.OUTPUT_ROOT.resolve(), backend.INPUT_ROOT.resolve()]
     wanted = {str(row.get('id')) for row in rows if row.get('id')}
     if not wanted:
-        return []
+        return [], []
     elsewhere: set[str] = set()
     with backend.DB_LOCK, backend.db() as connection:
         # 按数据库主键排除自己：payload 里不一定有 task_id，用 payload 判断会把
@@ -221,6 +234,7 @@ def owned_outputs(rows: list[dict[str, Any]]) -> list[str]:
             elsewhere.update(str(path) for path in _output_candidates(_loads(payload), _loads(result)))
 
     found: list[str] = []
+    retained: list[str] = []
     for row in rows:
         payload = _loads(row.get('payload'))
         result = _loads(row.get('result'))
@@ -232,10 +246,12 @@ def owned_outputs(rows: list[dict[str, Any]]) -> list[str]:
             if not any(task in resolved.name for task in wanted):
                 continue
             if str(resolved) in elsewhere:
+                if resolved.is_file() and str(resolved) not in retained:
+                    retained.append(str(resolved))
                 continue
             if resolved.is_file() and str(resolved) not in found:
                 found.append(str(resolved))
-    return found
+    return found, retained
 
 
 def _strings(value: Any):
@@ -278,15 +294,15 @@ def prune_assets(project_id: str, asset_ids: set[str]) -> list[str]:
     return removed
 
 
-def delete_files(paths: list[str]) -> list[str]:
-    """Delete only files under the configured ComfyUI roots; ignore everything else.
+def deletable_paths(paths: list[str]) -> list[Path]:
+    """按白名单/黑名单过滤出允许清除的产物，不改动磁盘。
 
     素材库与作品归档根是归档区：即便有人把指向它们的路径塞进来，也一律跳过。
     """
     from . import app as backend
     roots = [backend.OUTPUT_ROOT.resolve(), backend.INPUT_ROOT.resolve()]
     protected = [assets_root().resolve(), works_archive_root().resolve()]
-    removed = []
+    accepted: list[Path] = []
     for value in paths:
         path = Path(str(value))
         if not path.is_absolute():
@@ -296,6 +312,19 @@ def delete_files(paths: list[str]) -> list[str]:
             continue
         if not any(resolved.is_relative_to(root) for root in roots) or not resolved.is_file():
             continue
-        resolved.unlink(missing_ok=True)
-        removed.append(str(resolved))
-    return removed
+        accepted.append(resolved)
+    return accepted
+
+
+def recycle_files(paths: list[str]) -> tuple[list[str], list[str]]:
+    """清除产物，返回 ``(已移入回收站, 未能移入)``。
+
+    11-07 起不再永久删除：文件进 Windows 回收站，误删可以捞回。
+    失败的路径原样保留，调用方要把失败数如实报给用户。
+    """
+    return trash.recycle(deletable_paths(paths))
+
+
+def delete_files(paths: list[str]) -> list[str]:
+    """兼容旧调用的简版：只返回已移入回收站的路径。"""
+    return recycle_files(paths)[0]

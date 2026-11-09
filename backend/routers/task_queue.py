@@ -4,7 +4,7 @@
 删除或修改任务的路由。这里补齐三件事，并守住既有的冻结不变量：提示词在冻结时
 已经写进不可变的 api 快照，所以任务一旦派发就不再原地改 payload；改参数要么发生
 在派发之前，要么以「另起一条带 ``retry_of`` 的新任务」的形式留下溯源。ComfyUI
-输出目录里的图片与成片始终不动。
+输出目录里的图片与成片始终不动；11-07 起被清除的冻结快照改送 Windows 回收站。
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Query
 
 from .. import app as backend
-from .. import keyframes, task_scheduler
+from .. import keyframes, task_scheduler, trash
 from ..schemas import TaskDeleteRequest, TaskEditRequest
 
 
@@ -195,7 +195,9 @@ def _rebuild_keyframe(task: dict[str, Any], manifest: dict[str, Any], edits: dic
     if not 4 <= steps <= 50:
         raise HTTPException(422, '采样步数须为 4 至 50 的整数')
     workspace = backend.resolve_registered_path(str(manifest['workspace_root']))
-    rebuilt = keyframes.prepare_text(task_id, prompt, workspace / 'keyframe-tasks', prefix, seed, width, height, profile, steps)
+    # 参考槽随任务一起重放：暂存文件在作品目录里，重试时仍然有效。
+    rebuilt = keyframes.prepare_text(task_id, prompt, workspace / 'keyframe-tasks', prefix, seed, width, height, profile, steps,
+                                     request.get('references') or None)
     for key in ('project_id', 'owner_user'):
         if payload.get(key):
             rebuilt[key] = payload[key]
@@ -289,8 +291,8 @@ def delete_task(project_id: str, task_id: str, request: TaskDeleteRequest) -> di
         connection.execute('DELETE FROM task_idempotency WHERE task_id = ?', (task_id,))
         connection.execute('DELETE FROM resource_samples WHERE task_id = ?', (task_id,))
         connection.commit()
-    for path in files:
-        path.unlink(missing_ok=True)
+    recycled, failed = trash.recycle(files)
     backend.TASK_SCHEDULER.wake()
-    return {'deleted': task_id, 'status': task['status'], 'removed_snapshots': [str(path) for path in files],
+    return {'deleted': task_id, 'status': task['status'], 'removed_snapshots': recycled,
+            'failed': failed, 'recycled': True,
             'preserved': PRESERVED_NOTE}

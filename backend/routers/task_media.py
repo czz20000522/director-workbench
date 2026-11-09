@@ -7,6 +7,9 @@ monkeypatch（setattr(backend, "X", ...)）语义完全不变。
 """
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import json
 from pathlib import Path
 import time
@@ -16,7 +19,7 @@ from fastapi import APIRouter, HTTPException
 import os
 import psutil
 from urllib.error import HTTPError, URLError
-from .. import audio_edit_tasks, audio_master_tasks, audio_swap, dubbing, keyframes, media_operations, output_resolution, quality_intent, secure_files, speech
+from .. import audio_edit_tasks, audio_master_tasks, audio_swap, dubbing, image_superres, keyframes, media_operations, output_resolution, quality_intent, reference_library, secure_files, speech
 from ..schemas import AudioEditRequest, AudioMasterRequest, AudioSwapRequest, DubbingRequest, KeyframeRequest, MediaOperationRequest, SpeechRequest
 from .. import app as backend
 
@@ -25,7 +28,7 @@ ROUTER = APIRouter()
 
 
 @ROUTER.get('/api/keyframe-capability')
-def keyframe_capability(mode: Literal['reference', 'text'] = 'reference', creative_profile: Literal['general', 'adult-realism', 'adult-anime'] = 'general') -> dict[str, Any]:
+def keyframe_capability(mode: Literal['reference', 'text', 'inpaint'] = 'reference', creative_profile: Literal['general', 'adult-realism', 'adult-anime'] = 'general') -> dict[str, Any]:
     try:
         info = backend.request_json('/object_info')
         if not isinstance(info, dict):
@@ -34,13 +37,29 @@ def keyframe_capability(mode: Literal['reference', 'text'] = 'reference', creati
     except (OSError, HTTPError, URLError):
         # ComfyUI is started on demand: being down is a normal idle state, not a
         # missing-resource failure. The task runner brings it up before submitting.
-        return {'available': False, 'engine_offline': True, 'engine': 'Qwen Image 2.1' if mode == 'text' else 'Qwen Image Edit 2511',
+        engine = ('Qwen Image 2.1' if mode == 'text' else
+                  'Qwen Image 2.1 · 局部重绘' if mode == 'inpaint' else 'Qwen Image 2.1 · 多参考')
+        return {'available': False, 'engine_offline': True, 'engine': engine,
                 'requires_reference_image': mode != 'text', 'creative_profile': creative_profile,
                 'missing_nodes': [], 'missing_models': [], 'reason': '生成引擎待启动，点生成后会自动拉起（约 10–30 秒）。'}
     except ValueError as exc:
-        return {'available': False, 'engine_offline': False, 'engine': 'Qwen Image 2.1' if mode == 'text' else 'Qwen Image Edit 2511',
+        return {'available': False, 'engine_offline': False, 'engine': 'Qwen Image 2.1',
                 'requires_reference_image': mode != 'text', 'creative_profile': creative_profile,
                 'missing_nodes': [], 'missing_models': [], 'reason': f'无法读取 ComfyUI 节点与模型: {exc}'}
+
+
+def decode_mask_image(value: str) -> bytes:
+    """把浏览器画布导出的 data URL 换成 PNG 字节，拒绝其它格式。"""
+    header, _, payload = str(value or '').partition(',')
+    if not header.startswith('data:image/png;base64') or not payload:
+        raise HTTPException(422, '蒙版必须是 PNG data URL')
+    try:
+        data = base64.b64decode(payload, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise HTTPException(422, '蒙版数据无法解码') from exc
+    if not data.startswith(b'\x89PNG\r\n\x1a\n'):
+        raise HTTPException(422, '蒙版不是 PNG')
+    return data
 
 
 # 这两类内容涉及真实存在的人，与是否本机自用无关，任何分区都不放行。
@@ -58,6 +77,13 @@ def validate_creative_prompt(prompt: str) -> None:
             raise HTTPException(422, f'创作区不支持{label}：这类内容指向真实存在的人，本机自用也不放行。')
 
 
+def image_detail_pass(source, size, stopped):
+    """2K/4K/8K 导出先过一次 RealESRGAN；不可用就返回 None，退回 Lanczos。"""
+    return image_superres.enhance(source, size, input_root=backend.INPUT_ROOT,
+                                  output_root=backend.OUTPUT_ROOT,
+                                  model_root=backend.SHARED_ROOT / 'models', stopped=stopped)
+
+
 def complete_keyframe_task(task: dict[str, Any], receipt: dict[str, Any]) -> dict[str, Any]:
     settings = task['payload'].get('output_size')
     if settings:
@@ -66,7 +92,8 @@ def complete_keyframe_task(task: dict[str, Any], receipt: dict[str, Any]) -> dic
             processing_root = backend.OUTPUT_ROOT / '导演工作台工作目录' / task['project_id']
         path, profile = output_resolution.resize(receipt['output'], processing_root,
             settings['resolution'], settings['aspect_ratio'],
-            lambda: bool((backend.get_task(task['id']) or {}).get('stop_requested')))
+            lambda: bool((backend.get_task(task['id']) or {}).get('stop_requested')),
+            enhance=backend.image_detail_pass if settings.get('ai_upscale') else None)
         receipt = {**receipt, 'output': str(path), 'native_output': receipt['output'],
                    'width': profile['width'], 'height': profile['height'], 'output_size': profile}
     if backend.PRIVATE_WORKSPACES is not None:
@@ -97,32 +124,53 @@ def complete_keyframe_task(task: dict[str, Any], receipt: dict[str, Any]) -> dic
 def start_keyframe_task(project_id: str, request: KeyframeRequest) -> dict[str, Any]:
     manifest = backend.require_project_manifest(project_id)
     backend.validate_creative_prompt(request.prompt)
+    mask_bytes: bytes | None = None
+    if request.mode == 'inpaint':
+        if not request.reference_image or not request.mask_image:
+            raise HTTPException(422, '局部重绘需要底图和蒙版')
+        if request.references:
+            raise HTTPException(422, '局部重绘不使用参考槽，请只保留底图')
+        if request.output_resolution != 'native' or request.ai_upscale:
+            raise HTTPException(422, '局部重绘按原生尺寸输出；需要放大请在任务完成后另存')
+        mask_bytes = backend.decode_mask_image(request.mask_image)
+    elif request.mask_image is not None:
+        raise HTTPException(422, '只有局部重绘模式接受蒙版')
     submission = {'kind': 'keyframe', 'prompt': request.prompt, 'reference_image': request.reference_image, 'seed': request.seed,
-                  'creative_profile': request.creative_profile}
+                  'creative_profile': request.creative_profile, 'ai_upscale': bool(request.ai_upscale),
+                  'references': [slot.model_dump() for slot in request.references]}
+    if mask_bytes is not None:
+        # 同一条 idempotency_key 搭配不同蒙版必须判为不同请求，否则会静默复用旧结果。
+        submission.update(mode='inpaint', denoise=request.denoise,
+                          mask_sha256=hashlib.sha256(mask_bytes).hexdigest())
     resolution, quality = request.output_resolution, None
+    if request.ai_upscale and request.output_resolution == 'native':
+        raise HTTPException(422, 'AI 超分只对 2K、4K、8K 导出生效；原生尺寸不需要放大')
     if request.mode == 'text':
         # 提示词里写明的 1K/2K/4K/8K（或高清/超高清）优先于清晰度选择。
         resolution, quality = quality_intent.resolve(request.prompt, request.output_resolution)
+    elif request.mode == 'inpaint':
+        resolution, quality = 'native', None
     else:
         detected = quality_intent.detect(request.prompt)
         if detected:
             quality = {'source': 'prompt', 'requested': detected['resolution'], 'requested_label': detected['label'],
                        'applied': 'native', 'applied_label': quality_intent.label('native'), 'phrase': detected['phrase'],
-                       'capped': True, 'reason': '参考图模式固定按原图尺寸输出；需要放大请使用清晰化。'}
+                       'capped': False, 'reason': '参考图模式按所选清晰度输出。'}
     if resolution != 'native':
-        if request.mode != 'text':
-            raise HTTPException(422, '参考图模式暂时沿用原生尺寸')
         submission['output_resolution'] = resolution
     if quality:
         submission['quality_intent'] = quality
     if request.mode == 'text':
-        if request.reference_image is not None:
+        if request.reference_image is not None or request.references:
             raise HTTPException(422, '文字生图不接收参考图片，请选择参考图模式')
         submission.update(mode='text', width=request.width, height=request.height, steps=request.steps)
-    elif not request.reference_image:
-        raise HTTPException(422, '参考图模式需要选择图片')
-    elif (request.width, request.height) != (768, 1344):
-        raise HTTPException(422, '参考图模式的画幅由参考图片决定')
+    elif request.mode == 'inpaint':
+        submission.update(steps=request.steps)
+    elif not request.references and not request.reference_image:
+        raise HTTPException(422, '参考图模式需要至少一个参考槽')
+    else:
+        # 多参考组合的输出画幅由用户决定（不再沿用参考图尺寸）。
+        submission.update(mode='reference', width=request.width, height=request.height, steps=request.steps)
     existing = backend.find_submission_task(project_id, request.idempotency_key)
     if existing:
         if existing['payload']['submission_receipt']['request'] != submission:
@@ -133,7 +181,9 @@ def start_keyframe_task(project_id: str, request: KeyframeRequest) -> dict[str, 
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     backend.require_submission_capacity()
-    readiness = backend.keyframe_capability(mode='text') if request.mode == 'text' else backend.keyframe_capability()
+    # 参考图是默认档，沿用无参调用，测试里替换 keyframe_capability 的桩不必改签名。
+    mode = {'text': 'text', 'inpaint': 'inpaint'}.get(request.mode)
+    readiness = backend.keyframe_capability(mode=mode) if mode else backend.keyframe_capability()
     if not readiness['available'] and not readiness.get('engine_offline'):
         raise HTTPException(503, {'message': '关键帧生成环境尚未就绪', **readiness})
     task_id = str(uuid.uuid4())
@@ -141,14 +191,41 @@ def start_keyframe_task(project_id: str, request: KeyframeRequest) -> dict[str, 
         workspace = backend.resolve_registered_path(str(manifest['workspace_root']))
         prefix = f'导演工作台工作目录/{project_id}/关键帧/{task_id}'
         if request.mode == 'text':
-            payload = keyframes.prepare_text(task_id, request.prompt, workspace / 'keyframe-tasks', prefix, request.seed, request.width, request.height, request.creative_profile, request.steps)
+            payload = keyframes.prepare_text(task_id, request.prompt, workspace / 'keyframe-tasks', prefix, request.seed, request.width, request.height, request.creative_profile, request.steps, None, request.refine)
             if resolution != 'native':
                 payload['output_size'] = {'resolution': resolution,
+                    'ai_upscale': bool(request.ai_upscale),
                     'aspect_ratio': '1:1' if request.width == request.height else '16:9' if request.width > request.height else '9:16'}
                 payload['request']['output_resolution'] = resolution
+        elif request.mode == 'inpaint':
+            reference = backend.resolve_registered_path(str(request.reference_image))
+            payload = keyframes.prepare_inpaint(task_id, request.prompt, reference, mask_bytes or b'',
+                                                workspace / 'keyframe-tasks', prefix, request.seed,
+                                                request.steps, request.denoise, request.creative_profile)
         else:
-            reference = backend.resolve_registered_path(request.reference_image)
-            payload = keyframes.prepare(task_id, request.prompt, reference, workspace / 'keyframe-tasks', prefix, request.seed, request.creative_profile)
+            # 参考槽只在参考图库索引里按 material_id 取，客户端不直接给路径：
+            # stage_material 会把文件复制进当前作品，顺带拿到中文标签做提示词。
+            slots: list[dict[str, Any]] = []
+            if request.reference_image:
+                # 已生成的首帧或用户上传的图：只走登记路径白名单。
+                # 它作为「底图」排在最前，后面的素材槽就是在这张图上换衣/换姿势，
+                # 这是「先生成一张、再改这张」这条链路的后端支点。
+                reference = backend.resolve_registered_path(request.reference_image)
+                slots.append({'role': '底图', 'path': str(reference), 'label': ''})
+            for slot in request.references:
+                staged, material = reference_library.stage_material(backend.ROOT, slot.material_id, workspace)
+                slots.append({'role': slot.role, 'path': str(staged), 'label': material.get('title') or ''})
+            if not slots:
+                raise HTTPException(422, '参考图模式需要至少一个参考槽')
+            payload = keyframes.prepare_text(task_id, request.prompt, workspace / 'keyframe-tasks', prefix,
+                                             request.seed, request.width, request.height,
+                                             request.creative_profile, request.steps, slots,
+                                             request.refine)
+            if resolution != 'native':
+                payload['output_size'] = {'resolution': resolution,
+                    'ai_upscale': bool(request.ai_upscale),
+                    'aspect_ratio': '1:1' if request.width == request.height else '16:9' if request.width > request.height else '9:16'}
+                payload['request']['output_resolution'] = resolution
         if quality:
             payload['quality_intent'] = quality
         payload = backend.freeze_task_payload(payload, project_id=project_id)

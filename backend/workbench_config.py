@@ -91,6 +91,6 @@ SEGMENT_GENERATION_FIELDS = (
 MATERIAL_EXTENSIONS = {
     "video": {".mp4", ".mov", ".webm", ".mkv", ".m4v"},
     "audio": {".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg"},
-    "image": {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"},
+    "image": {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".heic", ".heif"},
     "document": {".json", ".txt", ".md", ".srt", ".vtt", ".csv"},
 }

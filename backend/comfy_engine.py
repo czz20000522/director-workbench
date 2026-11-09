@@ -15,6 +15,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from . import hardware
 from .workbench_config import COMFY_ROOT, COMFY_URL, ROOT
 
 LOGGER = logging.getLogger("uvicorn.error")
@@ -39,7 +40,8 @@ def launch_command() -> tuple[Path, list[str], Path]:
         "-s", "ComfyUI\\main.py",
         # --windows-standalone-build 默认会顺带在系统浏览器里打开 ComfyUI 页面；
         # 工作台自己在用 8188，不需要再弹一个网页出来。
-        "--windows-standalone-build", "--disable-auto-launch", "--offline", "--reserve-vram", "1.0",
+        "--windows-standalone-build", "--disable-auto-launch", "--offline",
+        "--reserve-vram", hardware.comfy_reserve_vram(),
     ]
     return python, arguments, home
 

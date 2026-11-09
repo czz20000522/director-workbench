@@ -10,8 +10,11 @@ MIN_SECONDS = 4
 MAX_SECONDS = 15
 
 
-def plan(requested_seconds: Any, aspect_ratio: str = '1:1', megapixels: float = 0.4) -> dict[str, Any]:
+def plan(requested_seconds: Any, aspect_ratio: str = '1:1', megapixels: float | None = None) -> dict[str, Any]:
     """Mirror this installation's ComfyMathExpression and H3 17k+5 grid."""
+    if megapixels is None:
+        from .hardware import video_megapixels
+        megapixels = video_megapixels()
     if isinstance(requested_seconds, bool):
         raise ValueError('H3 请求时长必须是 4–15 秒的有限数字')
     try:

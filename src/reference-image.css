@@ -1,0 +1,90 @@
+/* 注意：`.sf-root button { background: none }` 是 (0,1,1)，会压过单类选择器，
+   所以下面所有按钮样式都带 .ri-panel 前缀。
+   另外工具台不在 .sf-root 作用域里（那套变量只挂在工作台页面根节点上），
+   这里补一份同值声明，否则 var(--sf-*) 全部取空：边框消失、按钮背景透明。 */
+.ri-panel {
+  --sf-ink: #202124;
+  --sf-muted: #60646c;
+  --sf-line: #d9dce2;
+  --sf-amber: #365fd6;
+  display: grid; gap: 14px;
+}
+
+.ri-grid { display: grid; grid-template-columns: minmax(0, 290px) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 760px) { .ri-grid { grid-template-columns: minmax(0, 1fr); } }
+
+.ri-label { display: block; margin-bottom: 6px; color: var(--sf-muted); font-size: 11px; }
+.ri-label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.ri-label-row .ri-label { margin: 0; }
+
+.ri-drop { display: grid; place-items: center; gap: 6px; min-height: 210px; padding: 18px; border: 1px dashed #cfd6e2; border-radius: 12px; background: #fbfcfe; color: var(--sf-muted); text-align: center; cursor: pointer; }
+.ri-drop:hover { border-color: var(--sf-amber); background: #f7f9ff; }
+.ri-drop svg { color: var(--sf-amber); }
+.ri-drop strong { color: var(--sf-ink); font-size: 13px; }
+.ri-drop small { font-size: 10px; }
+
+.ri-preview { position: relative; border: 1px solid var(--sf-line); border-radius: 12px; overflow: hidden; background: #f3f4f7; }
+.ri-preview img { display: block; width: 100%; height: auto; max-height: 340px; object-fit: contain; }
+.ri-panel .ri-remove { position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; display: grid; place-items: center; border: 0; border-radius: 50%; background: rgba(20, 22, 26, .62); color: #fff; cursor: pointer; }
+
+.ri-write { display: grid; gap: 10px; }
+.ri-panel .ri-identify { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border: 1px solid #c9d4ea; border-radius: 999px; background: #eef2fb; color: var(--sf-amber); font-size: 11px; cursor: pointer; }
+.ri-panel .ri-identify:disabled { opacity: .45; cursor: not-allowed; }
+.ri-vision { display: inline-flex; align-items: center; gap: 6px; }
+.ri-vision-tabs { display: inline-flex; padding: 2px; border: 1px solid var(--sf-line); border-radius: 8px; background: #fff; }
+.ri-vision-tabs button { padding: 2px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--sf-muted); font-size: 10px; cursor: pointer; }
+.ri-vision-tabs button[aria-selected="true"] { background: #eef2fb; color: var(--sf-amber); font-weight: 600; }
+.ri-prompt { width: 100%; border: 1px solid var(--sf-line); border-radius: 10px; background: #fff; padding: 10px 12px; font: inherit; font-size: 13px; line-height: 1.75; color: var(--sf-ink); resize: vertical; outline: none; }
+.ri-prompt:focus { border-color: #b9c8e8; box-shadow: 0 0 0 3px rgba(54, 95, 214, .08); }
+
+.ri-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.ri-controls label { display: inline-flex; align-items: center; gap: 6px; color: var(--sf-muted); font-size: 11px; }
+/* 只给数字框定宽：写成 .ri-controls input 会把复选框也撑成 58px。 */
+.ri-controls input[type="number"] { width: 58px; border: 1px solid var(--sf-line); border-radius: 7px; padding: 4px 7px; font: inherit; font-size: 12px; text-align: center; }
+.ri-controls input[type="checkbox"] { width: 13px; height: 13px; margin: 0; accent-color: var(--sf-amber); }
+.ri-controls select { border: 1px solid var(--sf-line); border-radius: 7px; padding: 4px 6px; font: inherit; font-size: 11px; color: var(--sf-ink); background: #fff; }
+.ri-controls small { color: var(--sf-muted); font-size: 10px; }
+
+.ri-panel .ri-generate { display: inline-flex; align-items: center; justify-content: center; gap: 7px; width: 100%; padding: 10px 16px; border: 0; border-radius: 10px; background: var(--sf-amber); color: #fff; font-size: 13px; font-weight: 650; cursor: pointer; transition: background .15s ease; }
+.ri-panel .ri-generate:hover:not(:disabled) { background: #284bb8; }
+/* 禁用态要仍然像按钮：只降饱和、不透明化，否则看起来像一行灰字。
+   全局 `button:disabled { opacity: .48 }`（styles.css）要显式压掉。 */
+.ri-panel .ri-generate:disabled { background: #e9ecf1; color: #949aa4; opacity: 1; cursor: not-allowed; }
+
+.ri-message { margin: 0; }
+.ri-results { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 236px)); gap: 12px; justify-content: start; }
+.ri-card { margin: 0; display: grid; gap: 5px; }
+/* 不锁比例：参考图可能是横的、方的；锁 9/16 会把横版结果裁成竖条。 */
+.ri-card img { display: block; width: 100%; height: auto; border-radius: 9px; border: 1px solid var(--sf-line); background: #f3f4f7; }
+.ri-placeholder { aspect-ratio: 3 / 4; display: grid; place-items: center; gap: 6px; border: 1px dashed #cfd6e2; border-radius: 9px; background: #fbfcfe; color: var(--sf-muted); font-size: 11px; }
+.ri-card figcaption { color: var(--sf-muted); font-size: 10px; }
+.ri-card.is-failed img, .ri-card.is-failed .ri-placeholder { border-color: #e6c3bb; background: #fdf4f2; }
+
+/* 结果卡片：点开看大图 + 入库 + 删除 */
+.ri-panel .ri-open { position: relative; display: block; width: 100%; padding: 0; border: 0; background: none; cursor: zoom-in; }
+.ri-open-hint {
+  position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%);
+  padding: 3px 9px; border-radius: 999px; background: rgba(20, 22, 26, .62); color: #fff;
+  font-size: 10px; white-space: nowrap; opacity: 0; transition: opacity .15s ease; pointer-events: none;
+}
+.ri-open:hover .ri-open-hint, .ri-open:focus-visible .ri-open-hint { opacity: 1; }
+
+.ri-card figcaption { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.ri-card-actions { display: inline-flex; align-items: center; gap: 2px; }
+.ri-panel .ri-card-action {
+  display: grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: 6px;
+  background: transparent; color: #8b929c; cursor: pointer; opacity: .75;
+}
+.ri-card:hover .ri-card-action { opacity: 1; }
+.ri-panel .ri-card-action:hover { background: #eef2fb; color: var(--sf-amber); }
+.ri-panel .ri-card-action.is-danger:hover { background: #fdeeee; color: #b42332; }
+.ri-panel .ri-card-action:disabled { opacity: .5; cursor: wait; }
+
+.ri-preview-prompt { margin: 0; color: var(--sf-muted); font-size: 11px; line-height: 1.7; max-height: 88px; overflow: auto; }
+.ri-confirm { width: min(420px, calc(100vw - 40px)); display: grid; gap: 10px; }
+.ri-confirm h2 { margin: 0; font-size: 16px; }
+.ri-confirm p { margin: 0; color: var(--sf-muted); font-size: 12px; line-height: 1.7; }
+.ri-confirm .sf-result-actions { justify-content: flex-end; }
+.ri-panel .sf-secondary.is-danger, .ri-confirm .sf-secondary.is-danger { color: #b42332; border-color: #e8c8c8; }
+.ri-panel .sf-secondary.is-danger:hover { background: #fdeeee; }
+.ri-note { margin: 2px 0 0; color: var(--sf-muted); font-size: 11.5px; line-height: 1.8; }

@@ -4,19 +4,33 @@ The graph follows the official Comfy-Org Qwen Image 2.1 T2I template but keeps
 the prompt enhancer disabled for the first workbench baseline. This avoids a
 second large text model.
 
-Deck profile for this machine (RTX 4060 Ti 8GB): the DiT loads through
-ComfyUI-GGUF at Q4_K_M instead of the int8_convrot checkpoint, because a 6.8 GiB
-single-file weight does not fit next to the KV cache and activations on an 8GB
-card. The Turbo distillation replaces the 25-step sampler with 8 steps, the same
-trade the video presets already make.
+Deck profile (RTX 5070 Ti 16GB / cu130): the DiT loads through ComfyUI-GGUF
+at Q4_K. 8 steps is the Turbo distillation's native working point, not a VRAM
+compromise -- more steps measurably degrade the image (see 使用说明.md).
+Video-side resolution/steps are NOT set here; they come from backend/hardware.py.
+
+`references` feeds the same graph up to three reference images. The text encoder
+encodes them twice — as vision tokens and as VAE reference latents — which is how
+this model composes 人像 + 服装 + 姿势 without the separate Edit checkpoint.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from pathlib import PurePosixPath
+
+MAX_REFERENCES = 5
+
+# 每条 LoRA 的强度单独给：主 LoRA 决定画风/角色走向，去审查 LoRA 只做减法，
+# 叠满会把脸和材质一起推糊，所以默认轻一点。
+LORA_STRENGTH = {'qwen-image-2.1-uncensored-lora.safetensors': 0.7}
+DEFAULT_LORA_STRENGTH = 0.85
 
 
 def graph(prompt: str, prefix: str, seed: int, width: int = 1024, height: int = 1024,
-          lora_name: str | None = None, steps: int = 8) -> dict:
+          lora_name: str | None = None, steps: int = 8,
+          references: list[Path] | None = None,
+          lora_names: list[str] | None = None,
+          refine: bool = False, refine_strength: float = 0.55) -> dict:
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 6000:
         raise ValueError('画面描述长度须为 1 至 6000 字符')
     if type(seed) is not int or not 0 <= seed <= 2**64 - 1:
@@ -42,11 +56,47 @@ def graph(prompt: str, prefix: str, seed: int, width: int = 1024, height: int = 
         '8': {'class_type': 'VAEDecode', 'inputs': {'samples': ['7', 0], 'vae': ['3', 0]}},
         '18': {'class_type': 'SaveImage', 'inputs': {'images': ['8', 0], 'filename_prefix': prefix}},
     }
-    if lora_name:
-        # The LoRA has to sit between the loader and the cache: overwriting node '5'
-        # here used to delete the QwenImage21Cache node and hand the sampler a model
-        # with no KV-cache placement at all.
-        graph['5'] = {'class_type': 'LoraLoaderModelOnly', 'inputs': {'model': ['1', 0], 'lora_name': lora_name, 'strength_model': 0.85}}
-        graph['19'] = {'class_type': 'QwenImage21Cache', 'inputs': {'model': ['5', 0], 'device': 'auto', 'dtype': 'default'}}
+    if references:
+        # Autogrow 输入按 image_0/image_1… 的键排序，键名不能改。
+        if len(references) > MAX_REFERENCES:
+            raise ValueError(f'参考图最多 {MAX_REFERENCES} 张')
+        images: dict[str, list] = {}
+        for index, reference in enumerate(references):
+            path = Path(reference)
+            if not path.is_file():
+                raise ValueError(f'参考图不可读取：{path.name}')
+            node_id = f'ref{index}'
+            graph[node_id] = {'class_type': 'LoadImage', 'inputs': {'image': str(path.resolve())}}
+            images[f'image_{index}'] = [node_id, 0]
+        graph['4']['inputs']['images'] = images
+    chain = [name for name in ([lora_name] if lora_name else []) + list(lora_names or []) if name]
+    if chain:
+        # LoRA 必须串在 loader 和 cache 之间：早先直接覆盖节点 '5' 会把
+        # QwenImage21Cache 删掉，采样器拿到的是一个没有 KV-cache 摆放的模型。
+        # 多条 LoRA 依次串接，最后一条再接到 cache。
+        upstream = ['1', 0]
+        for index, name in enumerate(chain):
+            node_id = str(20 + index)
+            graph[node_id] = {'class_type': 'LoraLoaderModelOnly',
+                              'inputs': {'model': upstream,
+                                         'lora_name': name,
+                                         'strength_model': LORA_STRENGTH.get(name.rsplit('/', 1)[-1].rsplit('\\', 1)[-1],
+                                                                             DEFAULT_LORA_STRENGTH)}}
+            upstream = [node_id, 0]
+        graph['19'] = {'class_type': 'QwenImage21Cache', 'inputs': {'model': upstream, 'device': 'auto', 'dtype': 'default'}}
         graph['7']['inputs']['model'] = ['19', 0]
+    if refine:
+        # 降噪走图像空间，而不是二次采样。实测低 denoise（0.2/0.3）再采样会让
+        # Turbo 在原图上「补细节」，高频能量反而 +100%/+19%，越降越糙。
+        # 这里用「轻度高斯 + 按比例混回原图」：结构不动，只压高频颗粒，
+        # 耗时是毫秒级，不增加采样步数。
+        if not 0.1 <= refine_strength <= 0.9:
+            raise ValueError('降噪强度须在 0.1 至 0.9 之间')
+        graph['40'] = {'class_type': 'ImageBlur',
+                       'inputs': {'image': ['8', 0], 'blur_radius': 1, 'sigma': 1.0}}
+        graph['41'] = {'class_type': 'ImageBlend',
+                       'inputs': {'image1': ['8', 0], 'image2': ['40', 0],
+                                  # blend_factor 是原图的权重：0.55 = 55% 原图 + 45% 轻模糊。
+                                  'blend_factor': refine_strength, 'blend_mode': 'normal'}}
+        graph['18']['inputs']['images'] = ['41', 0]
     return graph

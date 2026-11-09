@@ -2,7 +2,9 @@
 
 > 用途：把这套「导演工作台 + ComfyUI + 本地语音/音乐/视觉引擎」完整复刻到另一台 Windows 电脑。
 > 本文只写**事实和可执行步骤**：每个目录做什么、每个文件放哪里、用什么命令建、怎么验。
-> 本文以本机 `D:\AI本地拓展坞\MiniMax H3` 为示例根；换机器时把 `$ROOT` 换成你的根即可，结构保持一致。
+> 本文以 `$ROOT` 为示例根；换机器时把 `$ROOT` 换成你的根即可，结构保持一致。
+> **硬件数值已集中化**：分辨率、步数、预留显存一律由 `backend/hardware.py` 按真实显卡探测；
+> 本文表格里的具体档位只作历史参考，当前生效值以 `GET /api/hardware` 与 `使用说明.md` 为准。
 
 ---
 
@@ -58,7 +60,8 @@ $ROOT\
 
 ## 2. 硬件与软件要求
 
-- **显卡**：NVIDIA，8GB 显存可跑 H3 量化版（本机 RTX 4060 Ti 8GB），16GB 以上更稳。
+- **显卡**：NVIDIA，8GB 可跑 H3 量化版（compact 档）；本机 RTX 5070 Ti 16GB 走 balanced 档。
+  档位自动探测，见 `backend/hardware.py`；50 系需 cu130（sm_120 + NVFP4）。
 - **内存**：32GB 起（文本编码器要卸载到内存）。
 - **磁盘**：模型约 55–60GB + 作品/素材另算；建议 D 盘 SSD，路径尽量短。
 - **系统**：Windows 10/11 x64；路径**允许中文**，但不要放在同步盘（OneDrive）里。
@@ -185,13 +188,14 @@ minimax_h3:
 
 > 自定义节点：ComfyUI 需带 **GGUF 加载节点**（ComfyUI-GGUF）；ACE-Step 用 ComfyUI 原生 `TextEncodeAceStepAudio1.5` 等节点。
 
-**这张表是 8GB 显存上跑得动的一套组合，不是唯一解。** 换显卡后按新硬件重新选档位：
+**这张表是旧卡时代（8GB）跑得动的一套组合，仅作历史参考。** 现在换卡不需要手工改表，
+`backend/hardware.py` 会按显存自动选档，当前值为：
 
 | 显存 | 建议档位 | 说明 |
 |---|---|---|
-| 8GB | 现表（Q3_K_XL、0.4MP、8 步） | 靠卸载换稳定，速度慢但能出 |
-| 12–16GB | 可上 Q4/Q5，0.6–0.8MP | 文本编码器仍建议卸载，VAE 可常驻 |
-| 24GB 以上 | Q8 / bf16 原生精度，更高分辨率与步数 | 显存不再是瓶颈，改为控制单次时长 |
+| compact（<10GiB） | 0.4MP / 8 步 / reserve 1.0 | 旧卡兜底 |
+| **balanced（10–20GiB，本机）** | **标准 0.6MP / 快速 0.4MP / 对照档 20 步 / reserve 0.6** | 5070 Ti 16GB 实测档 |
+| high（≥20GiB） | 0.8MP / reserve 0.4 | 显存不再是瓶颈 |
 
 改档位时要同步三处，漏一处就会加载失败或跑错模型：
 
@@ -215,7 +219,7 @@ minimax_h3:
 ### 6.2 VoxCPM2（默认配音引擎，可文字造音色）
 
 - 目录：`D:\AI本地拓展坞\VoxCPM`（默认取 `$ROOT` 的同级目录 `..\VoxCPM`；可用环境变量 `DIRECTOR_VOXCPM_ROOT` 覆盖）。
-- 自带 `.venv`（torch 2.14+cu126）与 `pretrained_models\VoxCPM2`（约 4.7GB：`model.safetensors`、`config.json`、`audiovae.pth`）。
+- 自带 `.venv`（VoxCPM/IndexTTS 用 torch 2.8.0+cu128；ComfyUI 用 2.14.1+cu130）与 `pretrained_models\VoxCPM2`（约 4.7GB：`model.safetensors`、`config.json`、`audiovae.pth`）。
 - 输出 48kHz；有随机编号；情绪只支持文字描述。
 
 ### 6.3 配乐（ACE-Step 1.5）
@@ -376,7 +380,7 @@ powershell -ExecutionPolicy Bypass -File .\run_tests.ps1 -Check           # 环�
 | 控制台输出乱码或 `.ps1` 解析失败 | PowerShell 5.1 把无 BOM UTF-8 当 GBK；用 `-EncodedCommand` 或加 `PYTHONUTF8=1` |
 | 本机服务连 127.0.0.1 反而 502 | 系统代理拦截回环；客户端要 `trust_env=False` / `--noproxy "*"` |
 | 4100/8188/11434 被占用 | 先停旧进程；后台任务被杀时可能残留，`netstat -ano` 找 PID |
-| 生成时显存不足 | 先让其它模型任务结束；H3 用 0.4MP/8 步档位 |
+| 生成时显存不足 | 先让其它模型任务结束；或设 `DIRECTOR_HARDWARE_PROFILE=compact` 临时降档 |
 | 长路径报 AccessDenied（测试） | 保持 `.t` 运行时目录、别用系统 TEMP 深路径 |
 
 ---

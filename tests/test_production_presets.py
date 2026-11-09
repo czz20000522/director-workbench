@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend import app as backend
-from backend import production_presets, h3_duration
+from backend import production_presets, h3_duration, hardware
 from support import install, add_shot
 
 
@@ -25,6 +25,11 @@ def preset_client(tmp_path, monkeypatch):
     class NoopThread:
         def __init__(self, *args, **kwargs): pass
         def start(self): pass
+        # hardware 探测会跑一次 nvidia-smi；subprocess.communicate() 需要对
+        # 它创建的读取线程调 join / is_alive，否则 stub 会把用例带崩。
+        def join(self, *args, **kwargs): pass
+        def is_alive(self): return False
+        daemon = False
     monkeypatch.setattr(backend.threading, 'Thread', NoopThread)
     client = TestClient(backend.app)
     response = client.post('/api/projects/create', json={'series': '测试', 'title': '新作', 'project_id': 'preset-test', 'creation_mode': 'advanced'})
@@ -148,7 +153,7 @@ def test_native_landscape_preset_freezes_first_frame_without_audio_guide(preset_
     assert response.status_code == 200, response.text
     manifest = response.json()['project']
     graph = json.loads(backend.resolve_registered_path(manifest['production_preset']['workflow']).read_text(encoding='utf-8'))
-    assert graph['115']['inputs'] == {'aspect_ratio': '16:9 (Widescreen)', 'megapixels': 0.4, 'multiple': 32}
+    assert graph['115']['inputs'] == {'aspect_ratio': '16:9 (Widescreen)', 'megapixels': production_presets.megapixels(preset_id), 'multiple': 32}
     assert graph['105:11']['inputs']['vae_name'] == 'minimax_h3_video_vae_fp16.safetensors'
     assert graph['105:16']['inputs']['conditioning'] == ['105:104', 0]
     assert 'aigc:load-audio-guide' not in graph
@@ -183,7 +188,7 @@ def test_text_video_preset_uses_8gb_safe_canvas_and_turbo_sampling(preset_client
     assert response.status_code == 200, response.text
     manifest = response.json()['project']
     graph = json.loads(backend.resolve_registered_path(manifest['production_preset']['workflow']).read_text(encoding='utf-8'))
-    assert graph['115']['inputs'] == {'aspect_ratio': '16:9 (Widescreen)', 'megapixels': 0.4, 'multiple': 32}
+    assert graph['115']['inputs'] == {'aspect_ratio': '16:9 (Widescreen)', 'megapixels': production_presets.megapixels(preset_id), 'multiple': 32}
     assert graph['105:126']['inputs']['value'] is True
     assert '114' not in graph and 'aigc:load-audio-guide' not in graph
 
@@ -195,14 +200,14 @@ def test_validated_fast_profiles_are_explicit_and_keep_standard_recipe(preset_cl
     image_id = production_presets.FAST_IMAGE_LANDSCAPE_PRESET_ID
     text_graph = production_presets.load_recipe(text_id)
     image_graph = production_presets.load_recipe(image_id)
-    assert text_graph['115']['inputs'] == {'aspect_ratio': '16:9 (Widescreen)', 'megapixels': 0.4, 'multiple': 32}
+    assert text_graph['115']['inputs'] == {'aspect_ratio': '16:9 (Widescreen)', 'megapixels': production_presets.megapixels(text_id), 'multiple': 32}
     assert text_graph['105:121']['inputs']['lora_name'] == 'minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors'
     assert text_graph['105:17']['inputs']['sampler_name'] == 'euler'
     assert text_graph['105:9']['inputs']['scheduler'] == 'beta'
     assert text_graph['105:9']['inputs']['steps'] == 8
-    assert text_graph['h3-fast-sigma-shift']['inputs']['shift_video'] == 12.0
+    assert text_graph['h3-fast-sigma-shift']['inputs']['shift_video'] == hardware.profile().sigma_shift_fast
     assert text_graph['h3-fast-kitchen']['inputs']['attention'] == 'comfy kitchen attention'
-    assert image_graph['115']['inputs']['megapixels'] == 0.4
+    assert image_graph['115']['inputs']['megapixels'] == production_presets.megapixels(image_id)
     assert image_graph['105:9']['inputs']['steps'] == 8
     assert '114' in image_graph and 'aigc:add-audio-guide' not in image_graph
     fast_text = shot_creation.normalize_generation(
@@ -226,7 +231,7 @@ def test_validated_fast_profiles_are_explicit_and_keep_standard_recipe(preset_cl
     assert standard['105:9']['inputs']['steps'] == ['105:123', 0]
 
 
-def test_native_square_preset_is_independent_and_freezes_640_square_graph(preset_client):
+def test_native_square_preset_is_independent_and_freezes_square_graph(preset_client):
     client, project = preset_client
     landscape_id = production_presets.NATIVE_LANDSCAPE_PRESET_ID
     square_id = production_presets.NATIVE_SQUARE_PRESET_ID
@@ -246,7 +251,7 @@ def test_native_square_preset_is_independent_and_freezes_640_square_graph(preset
     assert client.get('/api/plan').json() == before_plan
 
     graph = json.loads(backend.resolve_registered_path(manifest['production_preset']['workflow']).read_text(encoding='utf-8'))
-    assert graph['115']['inputs'] == {'aspect_ratio': '1:1 (Square)', 'megapixels': 0.4, 'multiple': 32}
+    assert graph['115']['inputs'] == {'aspect_ratio': '1:1 (Square)', 'megapixels': production_presets.megapixels(square_id), 'multiple': 32}
     assert graph['105:104']['inputs']['width'] == ['115', 0]
     assert graph['105:104']['inputs']['height'] == ['115', 1]
     assert graph['105:104']['inputs']['first_frame'] == ['114', 0]
@@ -255,7 +260,8 @@ def test_native_square_preset_is_independent_and_freezes_640_square_graph(preset
     assert 'ip-video:last-frame:2' not in graph
     assert 'aigc:load-audio-guide' not in graph
     assert 'aigc:add-audio-guide' not in graph
-    assert round((0.4 * 1024 * 1024) ** 0.5 / 32) * 32 == 640
+    square_mp = production_presets.megapixels(square_id)
+    assert round((square_mp * 1024 * 1024) ** 0.5 / 32) * 32 == h3_duration.plan(4, '1:1', square_mp)['width']
     assert {spec['id'] for spec in manifest['pipeline'][1]['input_specs']}.isdisjoint({'last-frame', 'guide'})
 
     stage_id = production_presets.stage_id(square_id)
@@ -307,7 +313,8 @@ def test_production_square_duration_previews_grid_without_changing_plan_or_recip
         assert checked.status_code == 200, checked.text
         preview = checked.json()['h3_duration']
         assert (preview['requested_seconds'], preview['frame_count'], preview['playback_seconds']) == (seconds, frames, round(frames / 24, 3))
-        assert (preview['width'], preview['height'], preview['fps']) == (640, 640, 24)
+        side = h3_duration.plan(seconds, '1:1', production_presets.megapixels(square_id))['width']
+        assert (preview['width'], preview['height'], preview['fps']) == (side, side, 24)
         assert preview['first_frame'].endswith('S01.png')
         assert preview['prompt'] == 'S01 waves'
         assert checked.json()['binding_count'] == 5
@@ -474,7 +481,9 @@ def test_square_duration_history_timing_separates_queue_and_execution(monkeypatc
     monkeypatch.setattr(backend, 'request_json', lambda path: {'receipt': entry})
     done = backend.history_done('receipt')
     assert done['comfy_timing'] == timing
-    monkeypatch.setattr(h3_duration, 'probe_video', lambda path: {'duration_seconds': 10.125, 'frames': 243, 'width': 640, 'height': 640})
+    monkeypatch.setattr(h3_duration, 'probe_video', lambda path: {
+        'duration_seconds': 10.125, 'frames': 243,
+        'width': h3_duration.plan(10)['width'], 'height': h3_duration.plan(10)['height']})
     monkeypatch.setattr(backend.Path, 'is_file', lambda path: True)
     result = backend.attach_h3_duration_result(
         {**done, 'outputs': ['test.mp4']}, {'h3_duration': h3_duration.plan(10)})

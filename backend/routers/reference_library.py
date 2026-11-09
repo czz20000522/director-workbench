@@ -29,6 +29,11 @@ class StageMaterialRequest(BaseModel):
     project_id: str
 
 
+class SaveFirstFrameRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=2000)
+    title: str = Field(default='', max_length=48)
+
+
 class HideRequest(BaseModel):
     kind: str = Field(max_length=20)
     id: str = Field(min_length=1, max_length=120)
@@ -44,8 +49,20 @@ def reference_library_overview() -> dict[str, Any]:
     return reference_library.overview(backend.ROOT)
 
 
+@ROUTER.get('/api/reference-library/libraries')
+def reference_library_libraries() -> dict[str, Any]:
+    """子库清单：给独立页面左侧的库导航用。"""
+    return reference_library.libraries(backend.ROOT)
+
+
+@ROUTER.get('/api/reference-library/library')
+def reference_library_browse(category: str = '', q: str = '', offset: int = 0, limit: int = 60) -> dict[str, Any]:
+    """单个子库的分页素材，供独立页面滚动加载。"""
+    return reference_library.browse(backend.ROOT, category.strip(), q, offset, limit)
+
+
 @ROUTER.post('/api/reference-library/hide')
-def hide_reference_item(request: HideRequest) -> dict[str, Any]:
+def hide_reference_item(request: "HideRequest") -> dict[str, Any]:
     """从库里移除一个条目；源文件和原文段落都不动，只记一份排除名单。"""
     try:
         return reference_library.hide(backend.ROOT, request.kind, request.id)
@@ -54,7 +71,7 @@ def hide_reference_item(request: HideRequest) -> dict[str, Any]:
 
 
 @ROUTER.post('/api/reference-library/restore')
-def restore_reference_items(request: RestoreRequest) -> dict[str, Any]:
+def restore_reference_items(request: "RestoreRequest") -> dict[str, Any]:
     """恢复一条（带 id）或整类（不带 id）被移除的条目。"""
     try:
         return reference_library.restore(backend.ROOT, request.kind, request.id)
@@ -97,7 +114,7 @@ def reference_library_entry(entry_id: str) -> dict[str, Any]:
 
 
 @ROUTER.post('/api/reference-library/anatomy')
-def reference_library_anatomy(request: AnatomyRequest) -> dict[str, Any]:
+def reference_library_anatomy(request: "AnatomyRequest") -> dict[str, Any]:
     return reference_library.anatomy(backend.ROOT, request.text)
 
 
@@ -126,7 +143,7 @@ def reference_library_material_file(material_id: str) -> FileResponse:
 
 
 @ROUTER.post('/api/reference-library/materials/{material_id}/stage')
-def reference_library_stage_material(material_id: str, request: StageMaterialRequest) -> dict[str, Any]:
+def reference_library_stage_material(material_id: str, request: "StageMaterialRequest") -> dict[str, Any]:
     try:
         manifest = backend.load_project_manifest(request.project_id)
     except RuntimeError as exc:
@@ -147,3 +164,20 @@ def reference_library_stage_material(material_id: str, request: StageMaterialReq
     except OSError as exc:
         raise HTTPException(500, f'素材复制失败：{exc}') from exc
     return {'path': registered, 'material': reference_library.public_material(material)}
+
+
+@ROUTER.post('/api/reference-library/first-frames')
+def reference_library_save_first_frame(request: "SaveFirstFrameRequest") -> dict[str, Any]:
+    """把生成出来的首帧存进素材库的「首帧图参考」，下次可直接选作开始画面。"""
+    try:
+        source = backend.resolve_registered_path(request.path)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(422, f'这张图不在允许读取的目录里：{exc}') from exc
+    try:
+        material = reference_library.save_first_frame(backend.ROOT, backend.ASSETS_ROOT, source, request.title)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(500, f'首帧图保存失败：{exc}') from exc
+    return {'material': material, 'path': material['path'],
+            'library': reference_library.FIRST_FRAME_LIBRARY}

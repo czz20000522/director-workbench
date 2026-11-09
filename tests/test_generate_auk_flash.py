@@ -8,7 +8,11 @@ from unittest.mock import patch
 import wave
 
 import numpy as np
-import soundfile as sf
+import pytest
+
+# soundfile 只装在做音频的独立环境里；这台机器的 venv 没有它时，
+# 原来的裸导入会让整个测试套件在收集阶段就中断（其余几百个用例一个都跑不了）。
+sf = pytest.importorskip('soundfile', reason='没有 soundfile 就跳过音频 worker 契约测试')
 
 SPEC = importlib.util.spec_from_file_location('auk_worker', Path(__file__).resolve().parents[1] / 'tools/generate_auk_flash.py')
 worker = importlib.util.module_from_spec(SPEC)

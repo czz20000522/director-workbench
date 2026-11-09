@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import {
-  ArrowRight, BookOpen, Check, ChevronLeft, Copy, Film, Image as ImageIcon, Images, LoaderCircle, RefreshCw,
-  ScanText, Search, Trash2, X,
+  ArrowRight, BookOpen, Check, ChevronLeft, Copy, Film, Image as ImageIcon, Images, LoaderCircle,
+  Bookmark, Maximize2, Minimize2, PanelRightOpen, RefreshCw, ScanText, Search, Trash2, Wand2, X,
 } from 'lucide-react';
 import { request } from './api/client';
+import PromptWriter from './PromptWriter';
 import './reference-library.css';
 
 type Summary = {
@@ -23,6 +25,13 @@ type Material = {
   description?: string | null; related_entry_id?: string | null; tags: string[];
   thumb_url: string; file_url: string;
 };
+/** 搜索用的扁平文本：7000 多张图 × 每个键都拼一遍数组太慢，预先摊平成一条字符串。 */
+function materialSearchText(item: Material): string {
+  return [item.title, item.category, item.work, item.source_title,
+    item.filename, item.filename.replace(/\.[^.]+$/, ''), item.description || '', ...(item.tags || [])]
+    .map(value => String(value || '').toLocaleLowerCase()).join('\u0000');
+}
+
 type Overview = {
   documents: { id: string; title: string; path: string; work: string; sections: number; origin?: string }[];
   works: Work[];
@@ -182,8 +191,39 @@ export function PromptLibraryPanel({ onUsePrompt, target }: { onUsePrompt: (text
   const [tick, setTick] = useState(0);
   const [entryId, setEntryId] = useState('');
   const [anatomyText, setAnatomyText] = useState<string | null>(null);
+  // 展开成二级页面：左栏太窄，长原文只能看到两三行；展开后按卡片多列排。
+  const [expanded, setExpanded] = useState(false);
+  // 收藏总数：资料库第一张卡片要显示「润色提示词 N 条」。
+  const [favTotal, setFavTotal] = useState<number | null>(null);
+  // 展开页分三个功能区：资料原文浏览 / 写词与润色 / 我的收藏。小面板不显示这个切换。
+  const [view, setView] = useState<'browse' | 'write' | 'favorites'>('browse');
   const debounced = useDebounced(query, 280);
   const initialised = useRef(false);
+
+  useEffect(() => {
+    const load = () => {
+      void request<{ total: number }>('/api/prompt-library?limit=1')
+        .then(data => setFavTotal(data.total))
+        .catch(() => undefined);
+    };
+    load();
+    window.addEventListener('director:prompt-library-changed', load);
+    return () => window.removeEventListener('director:prompt-library-changed', load);
+  }, []);
+
+  // 展开后 Esc 收起；捕获阶段拦一下，别让下层工作台一起响应。
+  useEffect(() => {
+    if (!expanded) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      setExpanded(false);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [expanded]);
+
   // 从库里移除只记一份排除名单，源文档一个字节不动，所以随时可以恢复。
   async function hideEntry(entryId: string) {
     await request('/api/reference-library/hide', { json: { kind: 'entries', id: entryId } });
@@ -240,14 +280,40 @@ export function PromptLibraryPanel({ onUsePrompt, target }: { onUsePrompt: (text
   const backToWorks = () => {
     setWork(''); setDocumentId(''); setKind(''); setQuery(''); setResult(null);
   };
+  // 从这个面板点「复制」：首页没有具体的提示词输入框可回填，复制是唯一说得通的动作。
+  const copyPrompt = (text: string) => {
+    void navigator.clipboard.writeText(text).catch(() => undefined);
+  };
 
-  return <aside className="rl-panel rl-panel-prompts" aria-label="提示词库">
-    <header className="rl-panel-head">
-      <div><h2>提示词库</h2><span>{overview ? work ? `${work} · ${currentWork?.sections || 0} 段原文` : `${overview.works.length} 部作品 · ${overview.counts.sections} 段原文` : '正在读取…'}</span></div>
-      <button className="rl-icon-button" aria-label="刷新索引" title="刷新索引" onClick={() => void refresh()} disabled={refreshing}>
-        {refreshing ? <LoaderCircle size={14} className="sf-spin" /> : <RefreshCw size={14} />}
-      </button>
-    </header>
+  const content = <>
+    {expanded && <div className="rl-expand-backdrop" role="presentation" onClick={() => setExpanded(false)} />}
+    <aside className={`rl-panel rl-panel-prompts${expanded ? ' is-expanded' : ''}`} aria-label="提示词库">
+      <header className="rl-panel-head">
+        <div><h2>提示词库</h2><span>{overview ? work ? `${work} · ${currentWork?.sections || 0} 段原文` : `${overview.works.length} 部作品 · ${overview.counts.sections} 段原文` : '正在读取…'}</span></div>
+        <div className="rl-panel-actions">
+          <button className="rl-icon-button" aria-label={expanded ? '收起提示词库' : '展开提示词库'}
+            title={expanded ? '收起' : '展开成大页面'} onClick={() => setExpanded(value => !value)}>
+            {expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+          </button>
+          <button className="rl-icon-button" aria-label="刷新索引" title="刷新索引" onClick={() => void refresh()} disabled={refreshing}>
+            {refreshing ? <LoaderCircle size={14} className="sf-spin" /> : <RefreshCw size={14} />}
+          </button>
+        </div>
+      </header>
+    <div className="rl-split">
+      {expanded && <nav className="rl-split-nav" aria-label="提示词库功能区">
+        <button type="button" aria-pressed={view === 'browse'} onClick={() => setView('browse')}>
+          <BookOpen size={14} />资料库
+        </button>
+        <button type="button" aria-pressed={view === 'write'} onClick={() => setView('write')}>
+          <Wand2 size={14} />写 / 润色
+        </button>
+        <button type="button" aria-pressed={view === 'favorites'} onClick={() => setView('favorites')}>
+          <Bookmark size={14} />润色提示词
+        </button>
+      </nav>}
+      <div className="rl-split-main">
+    {(!expanded || view === 'browse') && <>
     {(overview?.excluded?.entries ?? 0) > 0 && <p className="rl-warn rl-excluded">已从库中移除 {overview?.excluded?.entries} 段原文（源文件未改动）<button className="rl-inline-link" type="button" onClick={() => void restoreEntries()}>全部恢复</button></p>}
     {work && <div className="rl-scope">
       <button onClick={backToWorks}><ChevronLeft size={13} /> 全部作品</button>
@@ -271,6 +337,12 @@ export function PromptLibraryPanel({ onUsePrompt, target }: { onUsePrompt: (text
       {overview?.config_error && <p className="rl-warn">{overview.config_error}</p>}
       {overview?.notes.map(note => <p className="rl-warn" key={note}>{note}</p>)}
       {showWorks && <div className="rl-works">
+        <button className="rl-work rl-work-fav" onClick={() => { setExpanded(true); setView('favorites'); }}>
+          <span className="rl-work-title">润色提示词</span>
+          <span className="rl-work-meta">{favTotal === null ? '读取中…' : `${favTotal} 条`} · 润色或写好之后存下来的</span>
+          <span className="rl-work-kinds">点开可填入、复制、删除</span>
+          <Bookmark size={14} className="rl-work-arrow" />
+        </button>
         {overview?.works.filter(item => item.sections > 0).map(item => <button className="rl-work" key={item.id} onClick={() => openWork(item.name)}>
           <span className="rl-work-title">{item.name}</span>
           <span className="rl-work-meta">{item.documents.length} 份资料 · {item.sections} 段原文{item.materials ? ` · ${item.materials} 张参考图` : ''}</span>
@@ -293,9 +365,23 @@ export function PromptLibraryPanel({ onUsePrompt, target }: { onUsePrompt: (text
       <button className="rl-foot-button" onClick={() => setAnatomyText('')}><ScanText size={13} /> 拆解一段提示词</button>
       <span className="rl-foot-hint" title={overview?.inbox_path}>{overview ? `资料箱：${overview.inbox_path.split(/[\\/]/).pop()}` : ''}</span>
     </footer>
+    </>}
+    {expanded && view === 'write' && <PromptWriter embedded prompt="" context={{}} onUse={copyPrompt} />}
+    {expanded && view === 'favorites' && <PromptWriter embedded libraryOnly prompt="" context={{}} onUse={copyPrompt} />}
+      </div>
+    </div>
     {entryId && <EntryDialog entryId={entryId} target={target} onClose={() => setEntryId('')} onHide={hideEntry} onUsePrompt={(text, item) => { setEntryId(''); onUsePrompt(text, item); }} onAnatomy={text => { setEntryId(''); setAnatomyText(text); }} />}
     {anatomyText !== null && <AnatomyDialog initialText={anatomyText} onClose={() => setAnatomyText(null)} onOpenEntry={id => { setAnatomyText(null); setEntryId(id); }} />}
-  </aside>;
+    </aside>
+  </>;
+
+  // 展开时挂到 .sf-root 上：左右两栏是兄弟节点，留在左栏里怎么调 z-index 都盖不住
+  // 右侧的素材库（父级层叠上下文把它关住了）。挂到根节点还能保留 --sf-* 变量。
+  if (expanded && typeof document !== 'undefined') {
+    const host = document.querySelector('.sf-root') ?? document.body;
+    return createPortal(content, host);
+  }
+  return content;
 }
 
 /** 嵌在单步工具弹窗里的提示词库：选中原文后写回该工具的提示词框。 */
@@ -307,7 +393,7 @@ export function PromptLibraryDialog({ target, onUse, onClose }: { target: Prompt
   </Modal>;
 }
 
-function MaterialDialog({ material, onClose, onUseFrame, onHide }: { material: Material; onClose: () => void; onUseFrame: (path: string, title: string) => void; onHide?: (id: string) => Promise<void> }) {
+function MaterialDialog({ material, onClose, onUseFrame, onHide }: { material: Material; onClose: () => void; onUseFrame?: (path: string, title: string) => void; onHide?: (id: string) => Promise<void> }) {
   const [related, setRelated] = useState<Entry | null>(null);
   const [entryOpen, setEntryOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -321,6 +407,7 @@ function MaterialDialog({ material, onClose, onUseFrame, onHide }: { material: M
     return () => { cancelled = true; };
   }, [material.related_entry_id]);
   const useFrame = async () => {
+    if (!onUseFrame) return;
     setBusy(true); setError('');
     try {
       const quick = await request<{ project_id: string }>('/api/quick-workspace');
@@ -339,9 +426,11 @@ function MaterialDialog({ material, onClose, onUseFrame, onHide }: { material: M
           <p className="rl-source">{material.source_title} · {material.category} · {material.filename}</p>
           {material.description && <><h3>资料里的参考描述</h3><pre className="rl-body">{material.description}</pre><CopyButton text={material.description} label="复制参考描述" /></>}
           {related && <><h3>相关原文</h3><button className="rl-related-link" onClick={() => setEntryOpen(true)}>{related.title} <ArrowRight size={12} /></button><p className="rl-related-excerpt">{related.plain.slice(0, 220)}{related.plain.length > 220 ? '…' : ''}</p></>}
-          <p className="rl-note">只把这张图复制进单步工具的开始画面；提示词仍由你自己写，工作台不代写。</p>
+          <p className="rl-note">{onUseFrame
+            ? '只把这张图复制进单步工具的开始画面；提示词仍由你自己写，工作台不代写。'
+            : '当前工具不用开始画面（文生图 / 文生视频按提示词出片）。要用这张当首帧，去首页开「图生视频」。'}</p>
           <div className="rl-actions">
-            <button className="rl-action primary" disabled={busy} onClick={() => void useFrame()}>{busy ? <LoaderCircle size={13} className="sf-spin" /> : <Film size={13} />}{busy ? '准备中…' : '用作图生视频开始画面'}</button>
+            {onUseFrame && <button className="rl-action primary" disabled={busy} onClick={() => void useFrame()}>{busy ? <LoaderCircle size={13} className="sf-spin" /> : <Film size={13} />}{busy ? '准备中…' : '用作图生视频开始画面'}</button>}
             <a className="rl-action" href={material.file_url} target="_blank" rel="noreferrer"><ImageIcon size={13} /> 查看原图</a>
             {onHide && <button className="rl-action danger" disabled={busy} onClick={() => void (async () => {
               setBusy(true);
@@ -358,11 +447,18 @@ function MaterialDialog({ material, onClose, onUseFrame, onHide }: { material: M
   </>;
 }
 
-export function MaterialLibraryPanel({ onUseFrame }: { onUseFrame: (path: string, title: string) => void }) {
+/** 新素材进库后广播一次：右栏素材库、各选择器都该看到它，不用手动点刷新。 */
+const LIBRARY_CHANGED = 'director:reference-library-changed';
+export function notifyLibraryChanged() {
+  try { window.dispatchEvent(new Event(LIBRARY_CHANGED)); } catch { /* 老浏览器没有 Event 也无所谓 */ }
+}
+
+export function MaterialLibraryPanel({ onUseFrame }: { onUseFrame?: (path: string, title: string) => void }) {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [error, setError] = useState('');
   const [work, setWork] = useState('');
   const [category, setCategory] = useState('全部');
+  const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Material | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [tick, setTick] = useState(0);
@@ -385,6 +481,13 @@ export function MaterialLibraryPanel({ onUseFrame }: { onUseFrame: (path: string
     return () => { cancelled = true; };
   }, [tick]);
 
+  // 首帧工作台存完图会广播；不重读的话右栏还停在上一次索引上，搜不到刚存的那张。
+  useEffect(() => {
+    const reload = () => setTick(value => value + 1);
+    window.addEventListener(LIBRARY_CHANGED, reload);
+    return () => window.removeEventListener(LIBRARY_CHANGED, reload);
+  }, []);
+
   const refresh = async () => {
     setRefreshing(true); setError('');
     try {
@@ -398,35 +501,59 @@ export function MaterialLibraryPanel({ onUseFrame }: { onUseFrame: (path: string
   const works = (overview?.works || []).filter(item => item.materials > 0);
   const scoped = work ? materials.filter(item => item.work === work) : [];
   const categories = Array.from(new Set(scoped.map(item => item.category))).filter(Boolean);
-  const visible = category === '全部' ? scoped : scoped.filter(item => item.category === category);
+  const keyword = query.trim().toLocaleLowerCase();
+  const searching = Boolean(keyword);
+  // 不进作品时搜全库；进了作品就只在这个作品里搜——面包屑和搜索框写的都是「在 X 里找」，
+  // 结果却跨作品的话，用户会以为这部作品里有那张图。
+  const searchIndex = useMemo(() => {
+    const map = new Map<string, string>();
+    (overview?.materials || []).forEach(item => map.set(item.id, materialSearchText(item)));
+    return map;
+  }, [overview]);
+  const pool = work ? scoped : materials;
+  const matched = keyword
+    ? pool.filter(item => (searchIndex.get(item.id) || '').includes(keyword))
+    : pool;
+  const visible = category === '全部' || searching ? matched : matched.filter(item => item.category === category);
+  const RESULT_LIMIT = 300;
+  const shown = visible.slice(0, RESULT_LIMIT);
 
   const categorySummary = (name: string) => {
     const counts: Record<string, number> = {};
     materials.filter(item => item.work === name).forEach(item => { counts[item.category] = (counts[item.category] || 0) + 1; });
     return Object.entries(counts).map(([label, count]) => `${label} ${count}`).join(' · ');
   };
-  const openWork = (name: string) => { setWork(name); setCategory('全部'); setSelected(null); };
-  const backToWorks = () => { setWork(''); setCategory('全部'); setSelected(null); };
+  const openWork = (name: string) => { setWork(name); setCategory('全部'); setQuery(''); setSelected(null); };
+  const backToWorks = () => { setWork(''); setCategory('全部'); setQuery(''); setSelected(null); };
 
   return <aside className="rl-panel rl-panel-material" aria-label="素材参考库">
     <header className="rl-panel-head">
-      <div><h2>素材参考库</h2><span>{overview ? work ? `${work} · ${scoped.length} 张` : `${works.length} 部作品 · ${materials.length} 张参考图` : '正在读取…'}</span></div>
+      <div><h2>素材参考库</h2><span>{overview ? (searching ? `${visible.length} 张匹配` : work ? `${work} · ${scoped.length} 张` : `${works.length} 部作品 · ${materials.length} 张参考图`) : '正在读取…'}</span></div>
+      <a className="rl-icon-button" href="#/library" target="_self" aria-label="在独立页面打开素材库" title="在独立页面打开素材库">
+        <PanelRightOpen size={14} />
+      </a>
       <button className="rl-icon-button" aria-label="刷新素材索引" title="刷新素材索引" onClick={() => void refresh()} disabled={refreshing}>
         {refreshing ? <LoaderCircle size={14} className="sf-spin" /> : <RefreshCw size={14} />}
       </button>
     </header>
+    <label className="rl-mat-search">
+      <Search size={13} />
+      <input value={query} onChange={event => setQuery(event.target.value)}
+        placeholder={work ? `在「${work}」里找：标题 / 文件名` : '搜全部素材：标题 / 分类 / 作品 / 文件名'} aria-label="搜索素材" />
+      {query && <button type="button" aria-label="清空素材搜索" onClick={() => setQuery('')}><X size={12} /></button>}
+    </label>
     {(overview?.excluded?.materials ?? 0) > 0 && <p className="rl-warn rl-excluded">已从库中移除 {overview?.excluded?.materials} 张参考图（图片文件未删除）<button className="rl-inline-link" type="button" onClick={() => void restoreMaterials()}>全部恢复</button></p>}
     {work && <div className="rl-scope">
       <button onClick={backToWorks}><ChevronLeft size={13} /> 全部作品</button>
       <span>{work}</span>
     </div>}
-    {work && <div className="rl-chips" role="group" aria-label="按素材类型筛选">
+    {work && !searching && <div className="rl-chips" role="group" aria-label="按素材类型筛选">
       <button className={`rl-chip ${category === '全部' ? 'selected' : ''}`} onClick={() => setCategory('全部')}>全部<small>{scoped.length}</small></button>
       {categories.map(name => <button key={name} className={`rl-chip ${category === name ? 'selected' : ''}`} onClick={() => setCategory(name)}>{name}<small>{scoped.filter(item => item.category === name).length}</small></button>)}
     </div>}
     <div className="rl-panel-scroll">
       {error && <p className="sf-error" role="alert">{error}</p>}
-      {!work && <div className="rl-works">
+      {!work && !searching && <div className="rl-works">
         {works.map(item => <button className="rl-work rl-work-material" key={item.id} onClick={() => openWork(item.name)}>
           <span className="rl-work-covers">{item.covers.map(src => <img key={src} src={src} alt="" loading="lazy" />)}</span>
           <span className="rl-work-title">{item.name}</span>
@@ -435,15 +562,16 @@ export function MaterialLibraryPanel({ onUseFrame }: { onUseFrame: (path: string
           <ArrowRight size={14} className="rl-work-arrow" />
         </button>)}
       </div>}
-      {work && <div className="rl-mat-grid">
-        {visible.map(item => <button className="rl-mat" key={item.id} onClick={() => setSelected(item)}>
+      {(work || searching) && <div className="rl-mat-grid">
+        {shown.map(item => <button className="rl-mat" key={item.id} onClick={() => setSelected(item)}>
           <img src={item.thumb_url} alt={item.title} loading="lazy" />
           <span>{item.title}</span>
-          <small>{item.category}</small>
+          <small>{searching && !work ? `${item.category} · ${item.work}` : item.category}</small>
         </button>)}
       </div>}
-      {!work && !works.length && !error && <p className="rl-empty"><Images size={18} />还没有素材。把图片放进资料箱，或检查素材文件夹是否存在。</p>}
-      {work && !visible.length && !error && <p className="rl-empty"><Images size={18} />这部作品在这个分类里还没有素材。</p>}
+      {searching && visible.length > RESULT_LIMIT && <p className="sf-fine">匹配 {visible.length} 张，只显示前 {RESULT_LIMIT} 张；再补一个关键词能看得更全。</p>}
+      {!work && !searching && !works.length && !error && <p className="rl-empty"><Images size={18} />还没有素材。把图片放进资料箱，或检查素材文件夹是否存在。</p>}
+      {(work || searching) && !visible.length && !error && <p className="rl-empty"><Images size={18} />{searching ? (work ? '这部作品里没有匹配的素材；想搜全库先点「全部作品」。' : '没有匹配的素材，换个关键词试试。') : '这部作品在这个分类里还没有素材。'}</p>}
     </div>
     <footer className="rl-panel-foot">
       <span className="rl-foot-hint" title={overview?.config_path}>{overview ? `来源：${overview.documents.length} 份文档 · ${materials.length} 张图` : ''}</span>

@@ -7,6 +7,7 @@ app.py 只重新导出这些名字。pydantic/OpenAPI 的组件名取自类的 _
 from __future__ import annotations
 
 import math
+import secrets
 from pathlib import Path
 from typing import Any, Literal
 
@@ -369,17 +370,36 @@ class ScriptUpdateRequest(BaseModel):
     scenes: list[ScriptScene] = Field(default_factory=list, max_length=1000)
 
 
+class ReferenceSlot(BaseModel):
+    """一个参考图槽位：角色决定提示词里的说法，material_id 指向参考图库里的素材。"""
+
+    role: Literal['底图', '脸型', '造型', '服装', '姿势', '人像'] = '脸型'
+    material_id: str = Field(min_length=1, max_length=160)
+
+
 class KeyframeRequest(BaseModel):
-    mode: Literal['reference', 'text'] = 'reference'
+    mode: Literal['reference', 'text', 'inpaint'] = 'reference'
     creative_profile: Literal['general', 'adult-realism', 'adult-anime'] = 'general'
     prompt: str = Field(min_length=1, max_length=6000)
     reference_image: str | None = Field(default=None, min_length=1, max_length=1000)
+    references: list[ReferenceSlot] = Field(default_factory=list, max_length=5)
+    # 局部重绘：浏览器画布导出的 PNG data URL（白=重画），以及改动幅度。
+    # denoise 越大越偏离原图，0.75 能换掉衣服/发型又保住脸和背景。
+    mask_image: str | None = Field(default=None, max_length=16_000_000)
+    denoise: float = Field(default=0.75, ge=0.1, le=1.0)
     width: int = Field(default=768, ge=512, le=1536)
     height: int = Field(default=1344, ge=512, le=1536)
     # 采样步数：8 是 Turbo 蒸馏的标称值。只有显式传别的值才会偏离，缺省仍是 8。
     steps: int = Field(default=8, ge=4, le=50)
+    # 降噪：第一遍出图后再用低 denoise 走一遍，抹掉真人皮肤/暗部的高频颗粒。
+    # 不改构图，代价是步数 8 → 14，耗时约 1.6–1.8 倍。
+    refine: bool = False
     output_resolution: Literal['native', '2k', '4k', '8k'] = 'native'
-    seed: int = Field(default=340921, ge=0, le=2**64 - 1)
+    # 导出时是否先做 RealESRGAN 2× 超分。默认关：11-08 本机对照显示，对已经
+    # 干净的 AI 人像，超分会磨掉皮肤颗粒、眉眼略糊，通常不如直接 Lanczos。
+    ai_upscale: bool = False
+    # 缺省随机而不是固定值：直接调 API 时不传种子，也该每次出新图。
+    seed: int = Field(default_factory=lambda: secrets.randbelow(2**32), ge=0, le=2**64 - 1)
     idempotency_key: str = Field(min_length=1, max_length=160)
 
 

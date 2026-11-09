@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from . import hardware
+
 PRESET_ID = 'h3-guided'
 FIRST_PRESET_ID = 'h3-first-guided'
 LOCKED_PRESET_ID = 'h3-first-locked-audio'
@@ -16,21 +18,25 @@ TEXT_SQUARE_PRESET_ID = 'h3-text-native-square'
 TEXT_PORTRAIT_PRESET_ID = 'h3-text-native-portrait'
 FAST_TEXT_LANDSCAPE_PRESET_ID = 'h3-text-fast-v4-kitchen'
 FAST_IMAGE_LANDSCAPE_PRESET_ID = 'h3-first-fast-kitchen'
+ADULT_TRIGGER = 'r34l1sm'
+
 ADULT_REALISM_TEXT_PRESET_ID = 'h3-text-realism-people'
 ADULT_REALISM_IMAGE_PRESET_ID = 'h3-first-realism-people'
+QUALITY_IMAGE_LANDSCAPE_PRESET_ID = 'h3-first-quality-landscape'
 ADULT_PRESET_IDS = (ADULT_REALISM_TEXT_PRESET_ID, ADULT_REALISM_IMAGE_PRESET_ID)
+QUALITY_PRESET_IDS = (QUALITY_IMAGE_LANDSCAPE_PRESET_ID,)
 TEXT_PRESET_IDS = (TEXT_LANDSCAPE_PRESET_ID, TEXT_SQUARE_PRESET_ID, TEXT_PORTRAIT_PRESET_ID, ADULT_REALISM_TEXT_PRESET_ID)
-# Deck profile for this machine: RTX 4060 Ti 8GB. A 0.98MP text shot with
-# turbo off (20 steps) measured ~38 minutes; 0.4MP with the 8-step turbo LoRA
-# measured ~5.5 minutes for 5s. Keep text presets on that tested profile so
-# installing a preset can never silently queue the 38-minute variant.
-TEXT_MEGAPIXELS = 0.4
-TEXT_TURBO_DEFAULT = True
+# 分辨率 / 步数 / 预留显存一律读 backend/hardware.py 的档位，这里不再写死。
+# 旧配置（RTX 4060 Ti 8GB：全档 0.4MP、8 步、reserve-vram 1.0）已作废，
+# 只作为 <10 GiB 机器的 compact 兜底保留在 hardware.py 里。
 END_PRESET_IDS = ('h3-frames-native-landscape', 'h3-frames-native-square', 'h3-frames-native-portrait')
 SQUARE_PRESET_IDS = (NATIVE_SQUARE_PRESET_ID, TEXT_SQUARE_PRESET_ID, END_PRESET_IDS[1])
-LANDSCAPE_PRESET_IDS = (NATIVE_LANDSCAPE_PRESET_ID, TEXT_LANDSCAPE_PRESET_ID, ADULT_REALISM_TEXT_PRESET_ID, END_PRESET_IDS[0])
+LANDSCAPE_PRESET_IDS = (NATIVE_LANDSCAPE_PRESET_ID, TEXT_LANDSCAPE_PRESET_ID, ADULT_REALISM_TEXT_PRESET_ID,
+                        QUALITY_IMAGE_LANDSCAPE_PRESET_ID, END_PRESET_IDS[0])
 TEXT_PRESET_IDS = (*TEXT_PRESET_IDS, FAST_TEXT_LANDSCAPE_PRESET_ID)
-NATIVE_PRESET_IDS = (NATIVE_LANDSCAPE_PRESET_ID, NATIVE_SQUARE_PRESET_ID, NATIVE_PORTRAIT_PRESET_ID, FAST_IMAGE_LANDSCAPE_PRESET_ID, ADULT_REALISM_IMAGE_PRESET_ID, *TEXT_PRESET_IDS, *END_PRESET_IDS)
+NATIVE_PRESET_IDS = (NATIVE_LANDSCAPE_PRESET_ID, NATIVE_SQUARE_PRESET_ID, NATIVE_PORTRAIT_PRESET_ID,
+                     FAST_IMAGE_LANDSCAPE_PRESET_ID, ADULT_REALISM_IMAGE_PRESET_ID,
+                     QUALITY_IMAGE_LANDSCAPE_PRESET_ID, *TEXT_PRESET_IDS, *END_PRESET_IDS)
 PRESET_IDS = (PRESET_ID, FIRST_PRESET_ID, LOCKED_PRESET_ID, *NATIVE_PRESET_IDS)
 CONTRACTS = Path(__file__).resolve().parents[1] / 'contracts'
 
@@ -42,49 +48,172 @@ def aspect_ratio(preset_id: str) -> str:
 
 def megapixels(preset_id: str) -> float:
     title(preset_id)
-    return TEXT_MEGAPIXELS if preset_id in TEXT_PRESET_IDS else 0.4
+    if preset_id in (FAST_TEXT_LANDSCAPE_PRESET_ID, FAST_IMAGE_LANDSCAPE_PRESET_ID):
+        return hardware.video_megapixels('fast')
+    if preset_id in ADULT_PRESET_IDS or preset_id in QUALITY_PRESET_IDS:
+        return hardware.video_megapixels('quality')
+    return hardware.video_megapixels('standard')
 
 
 def turbo_default(preset_id: str) -> bool:
     title(preset_id)
-    if preset_id == FAST_TEXT_LANDSCAPE_PRESET_ID:
-        return True
-    if preset_id in ADULT_PRESET_IDS:
+    # False = 关闭 Turbo，走 105:123 的 20 步分支（精细档 / 成人向）。
+    if preset_id in QUALITY_PRESET_IDS or preset_id in ADULT_PRESET_IDS:
         return False
-    return TEXT_TURBO_DEFAULT if preset_id in TEXT_PRESET_IDS else True
+    return True
+
+
+def _steps_for(preset_id: str, graph: dict[str, Any]) -> int | None:
+    """界面要显示的步数：跟着 Turbo 开关走的那一侧。
+
+    `105:9.steps` 接的是 `105:123` 开关，两侧分别是 `105:124`（20 步）和
+    `105:125`（8 步），所以不能直接读 KSampler 的 steps 字段。
+    """
+    switch = graph.get('105:123', {}).get('inputs') or {}
+    turbo = turbo_default(preset_id)
+
+    def value_at(link: Any) -> int | None:
+        if isinstance(link, list) and len(link) == 2:
+            node = graph.get(str(link[0])) or {}
+            raw = (node.get('inputs') or {}).get('value')
+            return raw if type(raw) is int else None
+        return None
+
+    return value_at(switch.get('on_true')) if turbo else value_at(switch.get('on_false'))
 
 
 def title(preset_id: str = PRESET_ID) -> str:
     if preset_id not in PRESET_IDS:
         raise ValueError('制作方案不存在')
-    if preset_id in TEXT_PRESET_IDS:
-        if preset_id == FAST_TEXT_LANDSCAPE_PRESET_ID:
-            return '快速文生视频 · H3 v4 + Kitchen 横屏'
-        if preset_id == ADULT_REALISM_TEXT_PRESET_ID:
-            return '成人向真人质感 · H3 Realism People 横屏'
-        shape = {TEXT_LANDSCAPE_PRESET_ID: '横屏', TEXT_SQUARE_PRESET_ID: '方形', TEXT_PORTRAIT_PRESET_ID: '竖屏', ADULT_REALISM_TEXT_PRESET_ID: '横屏'}[preset_id]
-        return f'纯文本 + H3 原生声音{shape}样片（待小样验证）'
+    return plain_title(preset_id)
+
+
+def plain_title(preset_id: str) -> str:
+    """界面用的白话名：只说「要准备什么」和「出来什么画幅」，不写模型与算子名。
+
+    旧标题里的 `0.4MP + Kitchen`、`H3 原生声音样片（待小样验证）` 是内部验收用语，
+    在单步工具里只会让人不知道该选哪个。技术细节仍留在 description/verification。
+    """
     if preset_id in END_PRESET_IDS:
-        shape = ('横屏', '方形', '竖屏')[END_PRESET_IDS.index(preset_id)]
-        return f'首尾帧 + H3 原生声音{shape}样片（待小样验证）'
+        names = ('横屏 16:9', '方形 1:1', '竖屏 9:16')
+        return f'首尾帧衔接 · {names[END_PRESET_IDS.index(preset_id)]}'
+    if preset_id == TEXT_LANDSCAPE_PRESET_ID:
+        return '纯文字生成 · 横屏 16:9'
+    if preset_id == TEXT_SQUARE_PRESET_ID:
+        return '纯文字生成 · 方形 1:1'
+    if preset_id == TEXT_PORTRAIT_PRESET_ID:
+        return '纯文字生成 · 竖屏 9:16'
+    if preset_id == FAST_TEXT_LANDSCAPE_PRESET_ID:
+        return '快速纯文字生成 · 横屏 16:9'
+    if preset_id == ADULT_REALISM_TEXT_PRESET_ID:
+        return '真人质感（成人向）· 纯文字 · 横屏 16:9'
     if preset_id == FAST_IMAGE_LANDSCAPE_PRESET_ID:
-        return '快速图生视频 · 0.4MP + Kitchen 横屏'
+        return '快速出片 · 横屏 16:9'
     if preset_id == ADULT_REALISM_IMAGE_PRESET_ID:
-        return '成人向真人质感图生视频 · H3 Realism People 横屏'
-    if preset_id == NATIVE_PORTRAIT_PRESET_ID:
-        return '首帧 + H3 原生声音竖屏样片（待小样验证）'
-    if preset_id == LOCKED_PRESET_ID:
-        return '首帧 + 锁定对白视频（待小样验证）'
+        return '真人质感（成人向）· 图生视频 · 横屏 16:9'
+    if preset_id in QUALITY_PRESET_IDS:
+        return '长采样对照 · 横屏 16:9'
     if preset_id == NATIVE_LANDSCAPE_PRESET_ID:
-        return '首帧 + H3 原生声音横屏样片'
+        return '标准出片 · 横屏 16:9'
     if preset_id == NATIVE_SQUARE_PRESET_ID:
-        return '首帧 + H3 原生声音方形样片'
-    return '首帧 + 音频驱动视频' if preset_id == FIRST_PRESET_ID else '首尾帧 + 音频驱动视频'
+        return '标准出片 · 方形 1:1'
+    if preset_id == NATIVE_PORTRAIT_PRESET_ID:
+        return '标准出片 · 竖屏 9:16'
+    if preset_id == LOCKED_PRESET_ID:
+        return '锁定对白口型 · 竖屏 9:16'
+    if preset_id == FIRST_PRESET_ID:
+        return '表演音频驱动动作 · 竖屏 9:16'
+    return '首尾帧 + 表演音频 · 竖屏 9:16'
+
+
+# 同组里的档位差异。写具体差别，不要复述组说明。
+_PLAIN_SUMMARY = {
+    NATIVE_LANDSCAPE_PRESET_ID: '适合横屏成片；画面与速度比较均衡，声音由模型自己生成。',
+    NATIVE_SQUARE_PRESET_ID: '适合方形社媒画面，构图更集中；声音由模型自己生成。',
+    NATIVE_PORTRAIT_PRESET_ID: '适合手机竖屏；声音由模型自己生成。',
+    FAST_IMAGE_LANDSCAPE_PRESET_ID: '本机实测最快：同一片段耗时约为标准档的三分之二；用 8 步采样换速度，细节略少于标准档。',
+    ADULT_REALISM_IMAGE_PRESET_ID: '多挂一层真人质感 LoRA，人物更写实；仅限虚构成年人内容。',
+    QUALITY_IMAGE_LANDSCAPE_PRESET_ID: (
+        '20 步完整采样。11-07 实测：画质与 8 步标准档没有可见差别，只换了一套动作结果，'
+        '耗时却从 211 秒涨到 381 秒。仅用于对照，日常出片请用标准档。'),
+    TEXT_LANDSCAPE_PRESET_ID: '不给图，模型按文字自己构图，横屏输出。',
+    TEXT_SQUARE_PRESET_ID: '不给图，模型按文字自己构图，方形输出。',
+    TEXT_PORTRAIT_PRESET_ID: '不给图，模型按文字自己构图，竖屏输出。',
+    FAST_TEXT_LANDSCAPE_PRESET_ID: '本机实测最快；8 步采样 + 加速注意力，适合先出小样看构图。',
+    ADULT_REALISM_TEXT_PRESET_ID: '多挂一层真人质感 LoRA，人物更写实；仅限虚构成年人内容。',
+    LOCKED_PRESET_ID: '对白时间轴会锁进视频，人物按这段声音开口；口型仍需小样确认。',
+    FIRST_PRESET_ID: '用一段声音引导人物怎么动，不限制结束姿态，适合转身、行走。',
+    PRESET_ID: '两张图之外再加一段声音，动作起点、终点和节奏都定下来。',
+}
+
+
+def guide(preset_id: str) -> dict[str, Any]:
+    """给方案选择器用的结构化白话信息。前端不该再靠 id 猜语义。"""
+    if preset_id in TEXT_PRESET_IDS:
+        group, needs = 'text', ['一句画面描述']
+        summary = '不用准备图片，写好画面与动作就能生成一段视频。'
+    elif preset_id in END_PRESET_IDS or preset_id == PRESET_ID:
+        group, needs = 'frames', ['开始画面', '结束画面', '一句动作描述']
+        summary = '给两张图，模型补出中间的运动；适合控制「从哪里动到哪里」。'
+        if preset_id == PRESET_ID:
+            needs.append('一段表演音频')
+            summary = '两张图之外再加一段声音，动作起点、终点和节奏都定下来。'
+    elif preset_id in (FIRST_PRESET_ID, LOCKED_PRESET_ID):
+        group, needs = 'audio', ['开始画面', '一段表演音频', '一句动作描述']
+        summary = ('对白时间轴会锁进视频，人物按这段声音开口。'
+                   if preset_id == LOCKED_PRESET_ID else
+                   '用一段声音引导人物怎么动，不限制结束姿态，适合转身、行走。')
+    else:
+        group, needs = 'first', ['开始画面', '一句动作描述']
+        summary = '上传或从素材库拼一张开始画面，写清动作与镜头即可。'
+
+    # 同一组里的档位差别必须说出来，否则五张卡写同一句话等于没帮用户选。
+    summary = _PLAIN_SUMMARY.get(preset_id, summary)
+
+    fast = preset_id in (FAST_TEXT_LANDSCAPE_PRESET_ID, FAST_IMAGE_LANDSCAPE_PRESET_ID)
+    quality = preset_id in QUALITY_PRESET_IDS
+    if fast:
+        badge = '本机实测 · 相对最快'
+    elif quality:
+        badge = '仅对照 · 慢 1.8 倍'
+    elif preset_id in ADULT_PRESET_IDS:
+        badge = '真人质感 LoRA'
+    elif group == 'frames':
+        badge = '需要两张图'
+    elif group == 'audio':
+        badge = '需要额外音频'
+    else:
+        badge = ''
+    caveat = ''
+    if preset_id == LOCKED_PRESET_ID:
+        caveat = '需要已定稿的对白时间轴；口型与无字幕画面尚未做本机小样。'
+    elif quality:
+        caveat = '实测画质无明显提升（211s → 381s），只是换了动作轨迹。不是「更清晰」的档，别拿它出成片。'
+    elif preset_id in (NATIVE_PORTRAIT_PRESET_ID, TEXT_PORTRAIT_PRESET_ID, *END_PRESET_IDS):
+        caveat = '这一档还没做本机画质小样，建议先用短片段试一次。'
+    elif preset_id in ADULT_PRESET_IDS:
+        caveat = '仅限虚构成年人内容；提示词前的 r34l1sm 会自动补，不需要自己写。'
+    return {
+        'group': group, 'needs': needs, 'summary': summary,
+        'speed': 'fast' if fast else 'quality' if quality else 'standard',
+        'sound': 'native' if group in ('text', 'first', 'frames') else 'guide',
+        'badge': badge, 'caveat': caveat,
+    }
+
+
+def trigger_prefix(preset_id: str | None) -> str:
+    """现实人像 LoRA 的触发词。
+
+    fal 的 H3 Realism People 只在提示词里出现 `r34l1sm` 时才真正起作用；
+    LoRA 文件放对位置但没有这个词，效果和底模几乎一样。统一在这里给出前缀，
+    三个入口（分镜、单步工具、批量重跑）就不必各写一遍。
+    """
+    return f'{ADULT_TRIGGER}, ' if preset_id in ADULT_PRESET_IDS else ''
 
 
 def stage_id(preset_id: str = PRESET_ID) -> str:
     title(preset_id)
-    if preset_id in (*TEXT_PRESET_IDS, *END_PRESET_IDS, NATIVE_PORTRAIT_PRESET_ID):
+    if preset_id in (*TEXT_PRESET_IDS, *END_PRESET_IDS, NATIVE_PORTRAIT_PRESET_ID, *QUALITY_PRESET_IDS):
         return preset_id.replace('h3-', 'motion-') + '-generation'
     if preset_id == LOCKED_PRESET_ID:
         return 'motion-first-locked-audio-generation'
@@ -112,8 +241,19 @@ def load_recipe(preset_id: str = PRESET_ID) -> dict[str, Any]:
         graph = load_recipe(TEXT_LANDSCAPE_PRESET_ID)
     elif preset_id == ADULT_REALISM_IMAGE_PRESET_ID:
         graph = load_recipe(NATIVE_LANDSCAPE_PRESET_ID)
+    elif preset_id in QUALITY_PRESET_IDS:
+        graph = load_recipe(NATIVE_LANDSCAPE_PRESET_ID)
     else:
         graph = json.loads((CONTRACTS / 'h3-guided-api.json').read_text(encoding='utf-8'))
+    # 档位参数对所有方案生效（含首尾帧 / 音频驱动档）。以前只写在
+    # `if preset_id in NATIVE_PRESET_IDS` 里，导致非 native 方案一直沿用契约图里的旧值。
+    graph['115']['inputs'].update(
+        aspect_ratio={'1:1': '1:1 (Square)', '16:9': '16:9 (Widescreen)',
+                      '9:16': '9:16 (Portrait Widescreen)'}[aspect_ratio(preset_id)],
+        megapixels=megapixels(preset_id))
+    graph['105:124']['inputs']['value'] = hardware.steps('quality')
+    graph['105:125']['inputs']['value'] = hardware.steps('fast')
+    graph['105:126']['inputs']['value'] = turbo_default(preset_id)
     if preset_id in (FIRST_PRESET_ID, LOCKED_PRESET_ID, *NATIVE_PRESET_IDS) and preset_id not in END_PRESET_IDS:
         graph.pop('ip-video:last-frame:2', None)
         for node in graph.values():
@@ -122,8 +262,6 @@ def load_recipe(preset_id: str = PRESET_ID) -> dict[str, Any]:
         graph.pop('aigc:add-audio-guide', None)
         graph.pop('aigc:load-audio-guide', None)
         graph['105:16']['inputs']['conditioning'] = ['105:104', 0]
-        graph['115']['inputs'].update(aspect_ratio={'1:1': '1:1 (Square)', '16:9': '16:9 (Widescreen)', '9:16': '9:16 (Portrait Widescreen)'}[aspect_ratio(preset_id)], megapixels=megapixels(preset_id))
-        graph['105:126']['inputs']['value'] = turbo_default(preset_id)
     if preset_id in TEXT_PRESET_IDS:
         graph.pop('114', None)
         graph['105:104']['inputs'].pop('first_frame', None)
@@ -161,17 +299,31 @@ def load_recipe(preset_id: str = PRESET_ID) -> dict[str, Any]:
             graph['105:17']['inputs']['sampler_name'] = 'euler'
             graph['105:9']['inputs']['scheduler'] = 'beta'
         graph['105:126']['inputs']['value'] = True
-        graph['105:9']['inputs']['steps'] = 8
+        graph['105:9']['inputs']['steps'] = hardware.steps('fast')
         shifted = 'h3-fast-sigma-shift'
         graph[shifted] = {'class_type': 'MiniMaxH3SigmaShift',
-                          'inputs': {'model': ['105:121', 0], 'shift_video': 12.0, 'shift_audio': 5.0}}
+                          'inputs': {'model': ['105:121', 0],
+                                     'shift_video': hardware.profile().sigma_shift_fast,
+                                     'shift_audio': 5.0}}
         graph['h3-fast-kitchen'] = {'class_type': 'ModelAttentionBackend',
                                     'inputs': {'model': [shifted, 0], 'attention': 'comfy kitchen attention'}}
         graph['105:9']['inputs']['model'] = ['h3-fast-kitchen', 0]
         graph['105:16']['inputs']['model'] = ['h3-fast-kitchen', 0]
     if preset_id in ADULT_PRESET_IDS:
-        graph['105:121']['inputs']['lora_name'] = r'adult-safe\h3-realism-people-t2v-i2v-r2v.safetensors'
-        graph['105:121']['inputs']['strength_model'] = 1.0
+        # Turbo 开关（105:126）与真人 LoRA 是两件事：开关只该决定「走不走 8 步加速」。
+        # 原来把 LoRA 名写进 105:121，但 105:122 的 on_false 直连底模，而
+        # ComfySwitchNode 是 lazy 的——未选中的分支整条不求值，于是 105:121 被
+        # 完全绕过。实测同 seed 下「原样」与「把 on_false 接到 LoRA」两版输出
+        # 平均差 8.9、42% 像素差 >10，证明开 LoRA 前后是两个模型。
+        # 现在把 LoRA 挂在开关之后，无论开关选哪一路都会生效。
+        graph['aigc:adult-lora'] = {
+            'class_type': 'LoraLoaderModelOnly',
+            'inputs': {'model': ['105:122', 0],
+                       'lora_name': r'adult-safe\h3-realism-people-t2v-i2v-r2v.safetensors',
+                       'strength_model': 1.0},
+        }
+        graph['105:9']['inputs']['model'] = ['aigc:adult-lora', 0]
+        graph['105:16']['inputs']['model'] = ['aigc:adult-lora', 0]
         graph['105:126']['inputs']['value'] = False
     return graph
 
@@ -197,8 +349,39 @@ def input_specs(preset_id: str = PRESET_ID) -> list[dict[str, Any]]:
     return specs
 
 
+def _technical_description(preset_id: str) -> str:
+    """折叠在「技术细节」里的说明。所有数值从档位读，不写死。"""
+    hw = hardware.profile()
+    if preset_id in END_PRESET_IDS:
+        detail = '首尾帧 + H3 原生声音（待小样）'
+    elif preset_id == FAST_TEXT_LANDSCAPE_PRESET_ID:
+        detail = 'v4 Turbo LoRA + Kitchen attention'
+    elif preset_id == FAST_IMAGE_LANDSCAPE_PRESET_ID:
+        detail = 'Turbo + Kitchen attention + sigma shift'
+    elif preset_id in ADULT_PRESET_IDS:
+        detail = 'Realism People LoRA · 关闭 Turbo'
+    elif preset_id in QUALITY_PRESET_IDS:
+        detail = '关闭 Turbo · 完整采样'
+    elif preset_id == LOCKED_PRESET_ID:
+        detail = '锁定对白 latent（T8）'
+    elif preset_id in TEXT_PRESET_IDS:
+        detail = '纯文本 + Turbo 采样'
+    else:
+        detail = '首帧 + H3 原生声音'
+    if preset_id in ADULT_PRESET_IDS or preset_id in QUALITY_PRESET_IDS:
+        kind = 'quality'
+    elif preset_id in (FAST_TEXT_LANDSCAPE_PRESET_ID, FAST_IMAGE_LANDSCAPE_PRESET_ID):
+        kind = 'fast'
+    else:
+        kind = 'standard'
+    return (f'H3 · {detail} · {aspect_ratio(preset_id)} · {megapixels(preset_id)}MP · '
+            f'{hardware.steps(kind)} 步 · 4–15 秒。'
+            f'硬件档位：{hw.gpu_name} / {hw.vram_gib} GiB / {hw.key}。')
+
+
 def catalog(model_root: Path, preset_id: str = PRESET_ID) -> dict[str, Any]:
     label = title(preset_id)
+    labels = {'turbo': turbo_default(preset_id)}
     try:
         graph = load_recipe(preset_id)
         inputs = input_specs(preset_id)
@@ -206,7 +389,8 @@ def catalog(model_root: Path, preset_id: str = PRESET_ID) -> dict[str, Any]:
             binding = spec['binding']
             graph[binding['node_id']]['inputs'][binding['input']]
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        return {'id': preset_id, 'title': label, 'available': False, 'reason': f'制作方案文件不完整：{exc}', 'missing_models': []}
+        return {'id': preset_id, 'title': label, 'available': False, 'reason': f'制作方案文件不完整：{exc}',
+                'missing_models': [], **labels, **guide(preset_id)}
     categories = {'unet_name': ('diffusion_models', 'unet'), 'clip_name': ('text_encoders', 'clip'), 'vae_name': ('vae',), 'lora_name': ('loras',)}
     missing = []
     for node in graph.values():
@@ -216,35 +400,19 @@ def catalog(model_root: Path, preset_id: str = PRESET_ID) -> dict[str, Any]:
                 missing.append(name)
     return {
         'id': preset_id, 'title': label, 'available': True, 'aspect_ratio': aspect_ratio(preset_id),
-        'description': (f'H3 · 首尾帧 · {aspect_ratio(preset_id)} · 0.4MP · 4–15 秒；原生声音待小样验证。'
-                        if preset_id in END_PRESET_IDS else
-                        f'H3 · 纯文本 · {aspect_ratio(preset_id)} · 0.4MP · 8步 Euler/beta + v4 LoRA + Kitchen attention · 4–15 秒。已在本机 RTX 5070 Ti 实测跨场景速度与可用画质，仍需逐条审核。'
-                        if preset_id == FAST_TEXT_LANDSCAPE_PRESET_ID else
-                        f'H3 · 成人向真人质感 · {aspect_ratio(preset_id)} · 0.4MP · Realism People LoRA · 标准20步 · 4–15 秒。仅限虚构成年人；不支持真人影像与未成年内容。'
-                        if preset_id in ADULT_PRESET_IDS else
-                        f'H3 · 纯文本 · {aspect_ratio(preset_id)} · 0.4MP · 8步 Turbo 采样 · 4–15 秒。只需提示词与参数，不需图片或外部音频；本机音画 latent 路径，原生声音待真实小样验收。'
-                        if preset_id in TEXT_PRESET_IDS else
-                        'H3 · 横屏 · 0.4MP · 8步 + Kitchen attention；首帧与提示词，已完成本机加速实测，仍需逐条审核。'
-                        if preset_id == FAST_IMAGE_LANDSCAPE_PRESET_ID else
-                        'H3 · 竖屏9:16 · 0.4MP · 4–15秒；首帧与提示词，原生声音待小样验证。'
-                        if preset_id == NATIVE_PORTRAIT_PRESET_ID else
-                        'H3 · 横屏 16:9 · 约 0.4MP · 4–15 秒。首帧、提示词，声音由 H3 原生生成；与官方 1344×768 高分辨率设置不同。'
-                        if preset_id == NATIVE_LANDSCAPE_PRESET_ID else
-                        'H3 · 方形 1:1 · 0.4MP（640×640）· 4–15 秒。首帧、提示词，声音由 H3 原生生成。'
-                        if preset_id == NATIVE_SQUARE_PRESET_ID else
-                        'H3 · 首帧 · 4–15 秒。锁定对白 latent，原始对白用于交付；口型及无字幕画面仍需小样验收。'
-                        if preset_id == LOCKED_PRESET_ID else
-                        'H3 · 竖屏 · 约 0.4MP · 4–15 秒。首帧和表演音频引导，不约束结束姿态，适合转身、行走等动作。'
-                        if preset_id == FIRST_PRESET_ID else 'H3 · 竖屏 · 约 0.4MP · 4–15 秒。准备首帧、尾帧、表演音频和提示词后生成样片。'),
+        'description': _technical_description(preset_id),
+        # 这套方案默认走不走 8 步 Turbo：界面据此初始化开关，而不是一律写死 enable。
+        # 写死的后果是成人向/精细方案实际跑的是「Turbo LoRA + 真人 LoRA」双串，
+        # 实测 534 秒，比它自己写的 20 步（361 秒）还慢。
+        'turbo': turbo_default(preset_id),
+        'steps': _steps_for(preset_id, graph),
         'verification': (
-                         '已完成本机 RTX 5070 Ti 多场景实测；保留标准方案作对照，生成后仍需逐条审核。'
-                         if preset_id in (FAST_TEXT_LANDSCAPE_PRESET_ID, FAST_IMAGE_LANDSCAPE_PRESET_ID) else
-                         '已验证图结构与输入契约；未提交 GPU 小样，fp16 VAE 的显存与画质需实测。'
-                         if preset_id in NATIVE_PRESET_IDS else
-                         '已验证连接和输入契约，尚未完成模型小样；不保证口型或无字幕。' if preset_id == LOCKED_PRESET_ID
-                         else '沿用已有作品验证过的执行连接；新作品仍需生成小样并审核。'),
+            '本机 5070 Ti 16GB / cu130 已跑通快速档；其余档位按 hardware 档位自动匹配，生成后仍需逐条审核。'
+            if preset_id in (FAST_TEXT_LANDSCAPE_PRESET_ID, FAST_IMAGE_LANDSCAPE_PRESET_ID) else
+            '档位参数由 backend/hardware.py 按显存自动给出；换卡后会跟着变，无需手改这里。'),
         'missing_models': sorted(set(missing)),
         'model_requirements': model_requirements(preset_id, model_root),
+        **guide(preset_id),
     }
 
 

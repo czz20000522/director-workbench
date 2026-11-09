@@ -23,7 +23,7 @@
     "class_type": "ResolutionSelector",
     "inputs": {
       "aspect_ratio": "9:16 (Portrait Widescreen)",
-      "megapixels": 0.4,
+      "megapixels": 0.6,
       "multiple": 32
     }
   },
@@ -127,7 +127,7 @@
   "105:6": {
     "class_type": "UnetLoaderGGUF",
     "inputs": {
-      "unet_name": "minimax_h3_fl2va_pruned-UD-Q3_K_XL.gguf"
+      "unet_name": "minimax_h3_fl2va_pruned-Q4_K.gguf"
     }
   },
   "105:13": {

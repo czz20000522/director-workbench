@@ -36,8 +36,9 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictInt, field_validator, model_validator
-from . import production_presets, background_jobs, speech, dubbing, vlm, music, creative_settings, keyframes, audio_edit_tasks, audio_master_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, assembly_continuity, assembly_continuity_check, guide, readiness, task_scheduler, creative_inspection
-from . import output_resolution, enhancement, task_store, media_refs, comfy_progress, comfy_engine, quality_intent
+from . import hardware
+from . import production_presets, background_jobs, speech, dubbing, vlm, music, creative_settings, keyframes, audio_edit_tasks, audio_master_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, assembly_continuity, assembly_continuity_check, guide, readiness, task_scheduler, creative_inspection, prompt_writer
+from . import output_resolution, enhancement, task_store, media_refs, comfy_progress, comfy_engine, quality_intent, image_superres, image_formats
 import av
 import paths
 from . import queue_recovery
@@ -788,11 +789,39 @@ def task_row(row: sqlite3.Row) -> dict[str, Any]:
     return value
 
 
+TERMINAL_TASK_STATUSES = {'succeeded', 'failed', 'stopped', 'cancelled'}
+
+
+def quick_task_duration_ms(task: dict[str, Any]) -> int | None:
+    """单步任务的耗时（毫秒）。
+
+    从 `started_at`（真正轮到 GPU 开始跑）算到 `updated_at`；还在跑就给「已用」。
+    旧任务没有 started_at（这一列是 11-09 加的），退回 created_at——会把排队时间
+    算进去，但总比不显示好。
+    """
+    start = task.get('started_at') or task.get('created_at')
+    if not isinstance(start, (int, float)):
+        return None
+    if task.get('status') in TERMINAL_TASK_STATUSES:
+        end = task.get('updated_at')
+        if not isinstance(end, (int, float)):
+            return None
+    else:
+        end = time.time()
+    return max(0, int(round((float(end) - float(start)) * 1000)))
+
+
 def set_task(task_id: str, **fields: Any) -> None:
-    fields["updated_at"] = time.time()
+    now = time.time()
+    fields["updated_at"] = now
     assignments = ", ".join(f"{key} = ?" for key in fields)
+    values = list(fields.values())
+    if fields.get("status") == "running":
+        # 耗时要按「真正开始跑」算；排队等 GPU 的时间不该算成生成时间。
+        assignments += ", started_at = COALESCE(started_at, ?)"
+        values.append(now)
     with DB_LOCK, db() as connection:
-        connection.execute(f"UPDATE tasks SET {assignments} WHERE id = ?", [*fields.values(), task_id])
+        connection.execute(f"UPDATE tasks SET {assignments} WHERE id = ?", [*values, task_id])
         connection.commit()
 
 
@@ -833,7 +862,11 @@ def publish_task_outputs(task: dict[str, Any], done: dict[str, Any]) -> dict[str
         for value in native:
             path, profile = output_resolution.resize(OUTPUT_ROOT / str(value), processing_root,
                 settings['resolution'], settings['aspect_ratio'],
-                lambda: bool((get_task(task['id']) or {}).get('stop_requested')))
+                lambda: bool((get_task(task['id']) or {}).get('stop_requested')),
+                enhance=(lambda source, size, stopped: image_superres.enhance(
+                    source, size, input_root=INPUT_ROOT, output_root=OUTPUT_ROOT,
+                    model_root=SHARED_ROOT / 'models', stopped=stopped))
+                if settings.get('ai_upscale') else None)
             resized.append(str(path.relative_to(OUTPUT_ROOT.resolve())))
             profiles.append(profile)
         done = {**done, 'outputs': resized, 'native_outputs': native, 'output_size': profiles}
@@ -1179,6 +1212,14 @@ def prepare_pipeline_payload(payload: dict[str, Any], stage_id: str, values: dic
         else:
             parameters[input_id] = value
 
+    # 真人质感 LoRA 靠触发词 r34l1sm 起效；在绑定写进图之前统一补上，
+    # 分镜、单步工具、批量重跑三条入口都会经过这里。
+    trigger = production_presets.trigger_prefix(h3_preset_id)
+    if trigger and executed_prompt and not executed_prompt.strip().casefold().startswith(production_presets.ADULT_TRIGGER):
+        executed_prompt = f'{trigger}{executed_prompt.lstrip()}'
+        for item in bindings:
+            if item.get('input_id') == 'prompt':
+                item['value'] = f'{trigger}{str(item["value"]).lstrip()}'
     prepared = dict(payload)
     if 'segment' in locals() and isinstance(segment, dict):
         prepared['segment_dependencies'] = list(segment.get('dependencies') or [])
@@ -1262,7 +1303,17 @@ def freeze_task_payload(payload: dict[str, Any], *, project_id: str) -> dict[str
         graph_bindings = frozen.pop("_graph_bindings", [])
         prompt_nodes: list[str] = []
         if prompt_override is not None:
-            prompt_nodes = apply_prompt_override(graph, str(prompt_override), frozen.get("prompt_node_ids"))
+            text = str(prompt_override)
+            preset_id = (graph.get("92", {}).get("_meta") or {}).get("director_preset")
+            if preset_id not in production_presets.PRESET_IDS and frozen.get("pipeline_stage_id") in {
+                    production_presets.stage_id(key) for key in production_presets.PRESET_IDS}:
+                preset_id = next(key for key in production_presets.PRESET_IDS
+                                 if production_presets.stage_id(key) == frozen["pipeline_stage_id"])
+            trigger = production_presets.trigger_prefix(preset_id)
+            if trigger and not text.strip().casefold().startswith(production_presets.ADULT_TRIGGER):
+                text = f'{trigger}{text.lstrip()}'
+            prompt_override = text
+            prompt_nodes = apply_prompt_override(graph, text, frozen.get("prompt_node_ids"))
         applied_bindings = apply_graph_bindings(graph, graph_bindings) if graph_bindings else []
         staged_materials = stage_comfy_input_files(graph, project_id)
         for binding in applied_bindings:
@@ -1750,7 +1801,7 @@ def write_recipe_snapshot(payload: dict[str, Any], *, project_id: str | None = N
         prompt=payload["prompt"], first_frame=str(shared_path(payload["first_frame"])),
         last_frame=str(shared_path(payload["last_frame"])), duration_seconds=5,
         seed=payload["seed"], filename_prefix=payload["output_prefix"],
-        aspect_ratio="9:16 (Portrait Widescreen)", megapixels=0.4, turbo=True,
+        aspect_ratio="9:16 (Portrait Widescreen)", megapixels=hardware.video_megapixels(), turbo=True,
         audio_guide=str(shared_path(payload["audio_guide"])), preserve_source_audio=False,
     )
     destination = task_snapshot_root(project_id or CURRENT_PROJECT_ID) / f"api-{uuid.uuid4().hex[:16]}.json"
@@ -1800,8 +1851,8 @@ def update_comfy_execution_state(task_id: str, prompt_id: str) -> None:
            for item in queue['queue_running']):
         # A stop request may race this poll. Never overwrite it or a terminal state.
         with DB_LOCK, db() as connection:
-            connection.execute("UPDATE tasks SET status='running',updated_at=? WHERE id=? AND prompt_id=? AND status='queued' AND stop_requested=0",
-                               (time.time(), task_id, prompt_id))
+            connection.execute("UPDATE tasks SET status='running',updated_at=?,started_at=COALESCE(started_at,?) WHERE id=? AND prompt_id=? AND status='queued' AND stop_requested=0",
+                               (time.time(), time.time(), task_id, prompt_id))
             connection.commit()
 
 
@@ -1873,7 +1924,7 @@ def run_submission(task_id: str, payload: dict[str, Any]) -> None:
                    "--template", str(TEMPLATE), "--prompt", payload["prompt"],
                    "--first-frame", str(first), "--last-frame", str(last),
                    "--audio-guide", str(guide), "--duration", "5", "--seed", str(payload["seed"]),
-                   "--aspect-ratio", "9:16 (Portrait Widescreen)", "--megapixels", "0.4",
+                   "--aspect-ratio", "9:16 (Portrait Widescreen)", "--megapixels", str(hardware.video_megapixels()),
                    "--output-prefix", payload["output_prefix"]]
         recipe_path = str((payload.get("execution_snapshot") or {}).get("api_graph") or write_recipe_snapshot(payload, project_id=str(payload.get("project_id") or CURRENT_PROJECT_ID)))
         submission_attempted = True
@@ -2128,6 +2179,8 @@ def run_workflow_submission(task_id: str, payload: dict[str, Any]) -> None:
         graph = json.loads(workflow_path.read_text(encoding="utf-8"))
         if comfy_engine.ensure_online().get("started"):
             _task_log(task_id, payload, "engine_started", started)
+        # 出片前先让写词模型退显存：16 GB 卡装不下 9B + H3。卸不掉也不能挡出片。
+        prompt_writer.release_quietly()
         set_task(task_id, status="submitting")
         # This ComfyUI installation accepts a client-provided UUID. Persist it
         # before sending so a lost HTTP response still has a lookup identity.
@@ -2871,9 +2924,11 @@ from .routers.quick_tasks import ROUTER as _quick_tasks_router
 app.include_router(_quick_tasks_router)
 from .routers.quick_tasks import (
     QUICK_PROJECT_ID, QUICK_SERIES, QUICK_TITLE, QUICK_WORKSPACE_DIRECTORY, TASK_PLAN_TTL_SECONDS,
-    TOOL_LABELS, _batch_rows, _load_task_plan, ensure_quick_project, is_enhancement, quick_prompt_excerpt,
-    quick_task_card, quick_task_list, quick_task_reuse, quick_workspace, task_plan_directory, task_tool,
-    tasks_deletion_apply, tasks_deletion_plan,
+    TOOL_LABELS, _aspect, _batch_rows, _first_frame_of, _load_task_plan, _portable, ensure_quick_project,
+    generated_orphans,
+    is_enhancement,
+    quick_prompt_excerpt, quick_task_card, quick_task_list, quick_task_reuse, quick_workspace,
+    task_plan_directory, task_tool, tasks_deletion_apply, tasks_deletion_plan,
 )
 # 这些名称原本定义在 app.py 模块层，拆出后按原样再导出：
 # app.py、private_mode.py 与既有测试都以 backend.<名称> 取用它们。
@@ -3255,9 +3310,16 @@ def save_project_manifest(manifest: dict[str, Any]) -> None:
     persist_project_manifest(manifest, make_default=(str(manifest.get("id")) == CURRENT_PROJECT_ID))
 
 
+@app.get("/api/hardware")
+def hardware_profile_api() -> dict[str, Any]:
+    """当前生效的硬件档位。界面据此显示，避免换卡后没人发现还在用旧参数。"""
+    return hardware.profile().public()
+
+
 @app.get("/api/production-presets")
 def production_preset_catalog() -> dict[str, Any]:
-    return {"presets": [production_presets.catalog(SHARED_ROOT / "models", preset_id) for preset_id in production_presets.PRESET_IDS]}
+    return {"presets": [production_presets.catalog(SHARED_ROOT / "models", preset_id) for preset_id in production_presets.PRESET_IDS],
+            "hardware": hardware.profile().public()}
 
 
 @app.get('/api/projects/{project_id}/reusable-templates')
@@ -3297,13 +3359,79 @@ def install_production_preset(project_id: str, preset_id: str) -> dict[str, Any]
     return configure_production_preset(manifest, preset_id)
 
 
+def _workflow_file_exists(workflow: str) -> bool:
+    try:
+        return resolve_registered_path(workflow).is_file()
+    except (ValueError, OSError):
+        return False
+
+
+def _rebuild_preset_workflow(manifest: dict[str, Any], preset_id: str,
+                             stage: dict[str, Any], missing: str) -> str:
+    """Re-create a preset graph whose JSON was pruned with an old task.
+
+    Only the missing file is replaced; the stage keeps its position and inputs,
+    and any other references stay untouched.
+    """
+    try:
+        graph = production_presets.load_recipe(preset_id)
+        for spec in production_presets.input_specs(preset_id):
+            binding = spec["binding"]
+            graph[binding["node_id"]]["inputs"][binding["input"]]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(422, f"制作方案不可用：{exc}") from exc
+    project_id = str(manifest["id"])
+    workspace = resolve_registered_path(str(manifest["workspace_root"]))
+    destination = workspace / "workflows" / "api" / f"{preset_id}-{uuid.uuid4().hex[:10]}.json"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    graph["92"]["inputs"]["filename_prefix"] = f"导演工作台工作目录/{project_id}/video/h3"
+    graph["92"]["_meta"] = {"director_preset": preset_id}
+    write_json_atomic(destination, graph)
+    healed = root_relative_path(destination)
+    execution = stage.setdefault("execution", {})
+    execution["references"] = [healed if str(item) == missing else item
+                               for item in (execution.get("references") or [])] or [healed]
+    return healed
+
+
 def configure_production_preset(manifest: dict[str, Any], preset_id: str) -> dict[str, Any]:
     """Reuse recipe configuration; an explicit install never overwrites an installed stage."""
     project_id = str(manifest['id'])
-    if (manifest.get("production_preset") or {}).get("id") == preset_id:
-        return {"project": public_project(manifest), "already_installed": True}
     stages = manifest.get("pipeline") or []
-    if any(item.get("id") == production_presets.preset_stage_id(preset_id) for item in stages):
+    preset = (manifest.get("production_preset") or {})
+    existing = next((item for item in stages if item.get("id") == production_presets.preset_stage_id(preset_id)), None)
+    if preset.get("id") == preset_id and existing is not None:
+        # 已经是当前方案时也要体检：任务删除会带走 workflows/api 里的快照，
+        # 而 pipeline 里那条引用还在，不补的话这个方案下次一定 422。
+        references = (existing.get("execution") or {}).get("references") or []
+        current = str(preset.get("workflow") or (references[0] if references else ""))
+        if current and not _workflow_file_exists(current):
+            healed = _rebuild_preset_workflow(manifest, preset_id, existing, current)
+            manifest["production_preset"] = {**preset, "workflow": healed}
+            save_project_manifest(manifest)
+            if project_id == CURRENT_PROJECT_ID:
+                apply_project_manifest(manifest)
+            return {"project": public_project(manifest), "already_installed": True, "healed_workflow": healed}
+        if current:
+            return {"project": public_project(manifest), "already_installed": True}
+    if existing is not None:
+        # 这个方案以前装过（单步容器会把历次方案留在 pipeline 里）。
+        # 执行配置不动，只把「当前方案」指回这一条——这样换方案不会 409，
+        # 也不会悄悄改掉已经验收过的工作流。
+        references = (existing.get("execution") or {}).get("references") or []
+        workflow = str(references[0]) if references else str(preset.get("workflow") or "")
+        if workflow:
+            # 删除任务会连 workflows/api 里的快照一起清理，但 pipeline 里仍留着这条引用。
+            # 文件没了就地重建一份，否则这个方案会一直卡在「工作流 JSON 不存在」——
+            # 单步容器尤其容易踩到，因为它的历次方案都留在同一条 pipeline 里。
+            if not _workflow_file_exists(workflow):
+                workflow = _rebuild_preset_workflow(manifest, preset_id, existing, workflow)
+            manifest["production_preset"] = {"id": preset_id, "title": production_presets.title(preset_id),
+                                             "workflow": workflow}
+            save_project_manifest(manifest)
+            if project_id == CURRENT_PROJECT_ID:
+                apply_project_manifest(manifest)
+            return {"project": public_project(manifest), "already_installed": True, "reused_stage": True}
         raise HTTPException(409, "项目已有视频制作步骤，不能覆盖其执行配置")
     try:
         graph = production_presets.load_recipe(preset_id)
@@ -3626,6 +3754,8 @@ async def upload_project_files(project_id: str, files: list[UploadFile] = File(.
             destination = PRIVATE_WORKSPACES.file(workspace / 'assets' / 'uploads' / (uuid.uuid4().hex + suffix))
             destination.parent.mkdir(parents=True, exist_ok=True)
             await stream_upload(upload, destination)
+            # iPhone 实况图的主图是 HEIC：落盘就换成 JPEG，后面预览/识图都不用分叉。
+            destination = image_formats.convert_upload(destination)
             stored = root_relative_path(destination)
             uploaded.append(stored)
             if material_kind(destination) in {'image', 'audio', 'video'}:
@@ -3651,7 +3781,17 @@ async def upload_project_files(project_id: str, files: list[UploadFile] = File(.
         if workspace != destination and workspace not in destination.parents:
             raise HTTPException(422, f"上传路径越界: {raw_name}")
         destination.parent.mkdir(parents=True, exist_ok=True)
+        # 同名不覆盖：加 -1 / -2 后缀。覆盖时若旧文件正被生成任务或索引器占着，
+        # os.replace 会抛 WinError 5，整个上传直接 500（11-09 实测踩到）。
+        if destination.exists():
+            stem, suffix = destination.stem, destination.suffix
+            for index in range(1, 1000):
+                candidate = destination.with_name(f'{stem}-{index}{suffix}')
+                if not candidate.exists():
+                    destination = candidate
+                    break
         await stream_upload(upload, destination)
+        destination = image_formats.convert_upload(destination)
         uploaded.append(root_relative_path(destination))
     try:
         refreshed, report = scan_import_directory(workspace, project_id)
@@ -3919,6 +4059,7 @@ app.include_router(_task_entry_router)
 from .routers.task_entry import (
     archive_enhancement,
     build_finish_workflow_snapshot,
+    delete_enhance_library_file,
     describe_enhancement_result,
     enhance_library_files,
     enhancement_capability,
@@ -3943,6 +4084,8 @@ app.include_router(_task_media_router)
 # 这些名称原本定义在 app.py 模块层，拆出后按原样再导出：
 # app.py、private_mode.py 与既有测试都以 backend.<名称> 取用它们。
 from .routers.task_media import (
+    decode_mask_image,
+    image_detail_pass,
     audio_edit_owner_alive,
     audio_master_owner_alive,
     audio_edit_source,
@@ -3997,7 +4140,8 @@ from .routers.music_tasks import music_capability, start_music_task
 # 剧本库（草稿/归档）已拆到 backend/routers/script_library.py。
 from .routers.script_library import ROUTER as _script_library_router
 app.include_router(_script_library_router)
-from .routers.script_library import (archive_script_draft, create_script_draft, delete_script_draft,
+from .routers.script_library import (archive_script_draft, create_script_draft, delete_archived_script,
+                                     delete_script_draft,
                                      list_script_library, update_script_draft)
 
 
@@ -4005,6 +4149,7 @@ from .routers.script_library import (archive_script_draft, create_script_draft, 
 from .routers.settings_library import ROUTER as _settings_library_router
 app.include_router(_settings_library_router)
 from .routers.settings_library import (delete_creative_setting, delete_preset_card, list_creative_settings,
+                                       rename_preset_card,
                                        list_preset_library, save_creative_setting, save_preset_card)
 
 
@@ -4172,6 +4317,14 @@ from .routers.media_access import (
 # 本地提示词库与素材参考库：只读索引 + 明确点击后的素材复制。
 from .routers.reference_library import ROUTER as _reference_library_router
 app.include_router(_reference_library_router)
+from .routers.reference_library import (
+    AnatomyRequest, HideRequest, RestoreRequest, SaveFirstFrameRequest, StageMaterialRequest,
+    hide_reference_item, reference_library_anatomy, reference_library_browse,
+    reference_library_entry, reference_library_libraries, reference_library_material_file,
+    reference_library_material_thumb, reference_library_overview, reference_library_refresh,
+    reference_library_save_first_frame, reference_library_search, reference_library_stage_material,
+    restore_reference_items,
+)
 
 
 class WorkbenchStaticFiles(StaticFiles):
@@ -4186,6 +4339,20 @@ class WorkbenchStaticFiles(StaticFiles):
 from . import remote_mcp
 REMOTE_MCP = remote_mcp.install(app,http_app_provider=lambda:app,
     token_provider=lambda: current_principal.get().token if current_principal.get() is not None else None)
+
+# 提示词代写（本机 Ollama 上的无审查模型）已拆到 backend/routers/prompt_writing.py。
+# 必须留在静态挂载之前：/ 的静态挂载会吞掉后面注册的 /api 路由。
+# 模块级定义在这里原样再导出：测试和别的模块都用 `backend.<名称>` 取用/打补丁。
+from .routers.prompt_writing import (
+    ROUTER as _prompt_writing_router,
+    DescribeImageRequest, LocalSettings, OnlineSettings, PromptConfigRequest, PromptDraftRequest,
+    PromptSaveRequest, PromptUpdateRequest, PromptUseRequest,
+    _conflict,
+    prompt_describe_image, prompt_draft, prompt_library_create, prompt_library_delete,
+    prompt_library_list, prompt_library_update, prompt_library_use, prompt_writer_capability,
+    prompt_writer_config, prompt_writer_release, prompt_writer_save_config,
+)
+app.include_router(_prompt_writing_router)
 
 
 if DIST.is_dir():

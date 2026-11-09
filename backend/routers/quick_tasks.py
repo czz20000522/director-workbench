@@ -6,7 +6,8 @@
 只是一条条以提示词开头命名的单步任务。
 
 批量删除沿用作品删除的同一份两段式合同：预览冻结范围，apply 必须显式确认，
-状态或范围与预览不一致就拒绝，ComfyUI 输出目录里的产物始终不动。
+状态或范围与预览不一致就拒绝。11-07 起被清除的快照与产物送进 Windows 回收站，
+不再永久删除；被其它任务引用的产物、归档区、模型文件一律保留。
 """
 from __future__ import annotations
 
@@ -19,7 +20,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from .. import app as backend
-from .. import library_archive
+from .. import generated_orphans as orphan_scan
+from .. import library_archive, trash
 from .. import task_scheduler
 from ..schemas import TaskBatchDeleteRequest, TaskBatchPlanRequest
 
@@ -60,11 +62,39 @@ def ensure_quick_project() -> str:
 
 def task_tool(payload: dict[str, Any]) -> str:
     """配音 that starts from a written timbre description is the 音色设计 tool, not a dialogue take."""
-    if is_enhancement(payload):
+    if backend.is_enhancement(payload):
         return '清晰化'
+    # 局部重绘也走 keyframe 图，但用户心里它是「改图」不是「文生图」：
+    # 混在文生图堆里，昨天的重绘任务看起来就像一个没写好的出图任务。
+    if payload.get('kind') == 'keyframe' and (payload.get('request') or {}).get('mode') == 'inpaint':
+        return '局部重绘'
     if payload.get('kind') == 'speech' and (payload.get('request') or {}).get('mode') == 'design':
         return '音色设计'
+    # 视频任务走的是作品管线，payload 里没有 kind，只有 pipeline_stage_id。
+    # 以前这里落到兜底的「任务」，首页就把图生视频那条丢进「其他」。
+    if payload.get('kind') is None and payload.get('pipeline_stage_id'):
+        return '视频'
     return TOOL_LABELS.get(str(payload.get('kind')), '任务')
+
+
+def _first_frame_of(payload: dict[str, Any]) -> str | None:
+    """Which frame did this video start from?  Three payload shapes exist,
+    because the runner has been through three generations of submission code."""
+    direct = payload.get('first_frame')
+    if isinstance(direct, str) and direct:
+        return direct
+    materials = payload.get('materials')
+    if isinstance(materials, dict) and isinstance(materials.get('first-frame'), str):
+        return materials['first-frame']
+    values = payload.get('pipeline_values')
+    if isinstance(values, dict) and isinstance(values.get('first-frame'), str):
+        return values['first-frame']
+    snapshot = payload.get('segment_snapshot')
+    if isinstance(snapshot, dict):
+        keyframes = snapshot.get('keyframes')
+        if isinstance(keyframes, dict) and isinstance(keyframes.get('first_frame'), str):
+            return keyframes['first_frame']
+    return None
 
 
 def is_enhancement(payload: dict[str, Any]) -> bool:
@@ -99,8 +129,8 @@ def quick_task_reuse(payload: dict[str, Any]) -> dict[str, Any] | None:
     首页「编辑重生成」把这些值带回对应工具，由你改完再显式提交——工作台不会自动重跑。
     带不全的工具就不给这个入口：表单看着像上次、其实不是，比没有入口更糟。
     """
-    if is_enhancement(payload):
-        source = _portable((payload.get('enhancement') or {}).get('source'))
+    if backend.is_enhancement(payload):
+        source = backend._portable((payload.get('enhancement') or {}).get('source'))
         return {'tool': 'enhance', 'values': {'source': source}} if source else None
     kind = str(payload.get('kind') or '')
     if kind == 'keyframe':
@@ -115,7 +145,7 @@ def quick_task_reuse(payload: dict[str, Any]) -> dict[str, Any] | None:
             values['seed'] = request['seed']
         if type(request.get('steps')) is int:
             values['steps'] = request['steps']
-        aspect = _aspect(request.get('width'), request.get('height'))
+        aspect = backend._aspect(request.get('width'), request.get('height'))
         if aspect:
             values['aspect'] = aspect
         return {'tool': 'image', 'values': values}
@@ -126,7 +156,7 @@ def quick_task_reuse(payload: dict[str, Any]) -> dict[str, Any] | None:
         if not prompt:
             return None
         values = {'prompt': prompt}
-        frame = _portable(payload.get('first_frame') or (snapshot.get('keyframes') or {}).get('first'))
+        frame = backend._portable(payload.get('first_frame') or (snapshot.get('keyframes') or {}).get('first'))
         if frame:
             values['frame'] = frame
         duration = snapshot.get('duration_seconds')
@@ -165,8 +195,10 @@ def quick_task_reuse(payload: dict[str, Any]) -> dict[str, Any] | None:
 def quick_prompt_excerpt(task: dict[str, Any], length: int = 46) -> str:
     payload = task.get('payload') or {}
     prompt = backend._prompt_of(task)
-    if not prompt and is_enhancement(payload):
-        prompt = Path(str((payload.get('enhancement') or {}).get('source') or '')).stem
+    if not prompt and backend.is_enhancement(payload):
+        recipe = payload.get('enhancement') or {}
+        # 清晰化任务没有提示词，标题取提交时冻结的 label；老任务退回文件名词干。
+        prompt = str(recipe.get('label') or Path(str(recipe.get('source') or '')).stem)
     collapsed = ' '.join(prompt.split())
     if not collapsed:
         return backend.task_tool(payload)
@@ -176,18 +208,27 @@ def quick_prompt_excerpt(task: dict[str, Any], length: int = 46) -> str:
 def quick_task_card(task: dict[str, Any]) -> dict[str, Any]:
     payload = task.get('payload') or {}
     result = task.get('result') or {}
-    enhance = is_enhancement(payload)
+    tool = backend.task_tool(payload)
     outputs = (result or {}).get('published_outputs') or [f"output/{item}" for item in (result or {}).get('outputs') or []]
+    if not outputs and isinstance((result or {}).get('output'), str) and result['output']:
+        # 关键帧任务把产物写在 output（绝对路径）里，不是 outputs。
+        outputs = [result['output']]
     return {
         'id': task['id'], 'kind': payload.get('kind'),
-        'tool': backend.task_tool(payload),
+        'tool': tool,
         # 视频任务再分文生/图生：有首帧就是图生视频，没有就是文生视频。
-        'video_mode': (('image-video' if payload.get('first_frame') else 'text-video')
-                       if payload.get('kind') == 'workflow' and not enhance else None),
+        # 首帧可能写在 first_frame、materials 或 pipeline_values 里，三者都要认。
+        'video_mode': (('image-video' if backend._first_frame_of(payload) else 'text-video') if tool == '视频' else None),
         'title': backend.quick_prompt_excerpt(task), 'status': task['status'],
         'created_at': task.get('created_at'), 'updated_at': task.get('updated_at'),
+        # 耗时：终态是「花了多久」，运行中是「已用多久」（首页每 2 秒刷新一次）。
+        'started_at': task.get('started_at'),
+        'duration_ms': backend.quick_task_duration_ms(task),
+        # 视频/音乐这类任务把产物写在 outputs 里，只有清晰化曾经单独处理。
+        # 现在统一取：单产物直接给 output，多产物留给前端列清单。
         'output': ((result or {}).get('output') or (result or {}).get('video_path')
-                   or (outputs[0] if enhance and len(outputs) == 1 else None)),
+                   or (outputs[0] if len(outputs) == 1 else None)),
+        'outputs': outputs,
         'error': task.get('error'), 'revision': payload.get('revision', 0),
         'retry_of': payload.get('retry_of'), 'queue': task.get('queue') or {},
         'progress': backend.comfy_progress.visible_progress(task),
@@ -249,18 +290,30 @@ def tasks_deletion_plan(request: TaskBatchPlanRequest) -> dict[str, Any]:
     directory = backend.task_plan_directory()
     directory.mkdir(parents=True, exist_ok=True)
     created = time.time()
+    # 预览计划只在「被 apply 读取」时才检查 TTL，不主动清就会一直堆在 runtime 里。
+    # 每次生成新计划顺手扫一遍，只清确实过期的元数据文件。
+    for stale_plan in directory.glob('*.json'):
+        try:
+            document = json.loads(stale_plan.read_text(encoding='utf-8'))
+            if created - float(document.get('created_at', 0)) > TASK_PLAN_TTL_SECONDS:
+                stale_plan.unlink(missing_ok=True)
+        except (OSError, ValueError):
+            continue
     rows = backend._batch_rows([entry['task_id'] for entry in entries])
     archivable: list[dict[str, Any]] = []
     for project_id in dict.fromkeys(str(row.get('project_id') or '') for row in rows):
         ids = {row['id'] for row in rows if str(row.get('project_id') or '') == project_id}
         archivable.extend(library_archive.candidates(project_id, ids))
     outputs = library_archive.owned_outputs(rows)
+    retained = library_archive.retained_outputs(rows)
     backend.write_json_atomic(directory / f'{plan_id}.json',
                               {'plan_id': plan_id, 'created_at': created, 'entries': entries,
-                               'archivable': archivable, 'outputs': outputs})
+                               'archivable': archivable, 'outputs': outputs,
+                               'retained_outputs': retained})
     return {'plan_id': plan_id, 'expires_at': created + TASK_PLAN_TTL_SECONDS, 'entries': entries,
-            'archivable': archivable, 'outputs': outputs,
-            'preserved': '模型文件与其它任务的产物不会被删除；这些任务在 ComfyUI 输出目录里的产物会一起清除，除非你勾选归档。'}
+            'archivable': archivable, 'outputs': outputs, 'retained_outputs': retained,
+            'preserved': '模型文件、归档区与其它任务的产物不会被删除。被清除的快照与产物移入 Windows 回收站，可恢复；'
+                         '被其它任务引用的产物会保留，勾选归档的会移进素材库。'}
 
 
 def _load_task_plan(plan_id: str) -> dict[str, Any]:
@@ -300,13 +353,14 @@ def tasks_deletion_apply(request: TaskBatchDeleteRequest) -> dict[str, Any]:
     chosen = [archivable[key] for key in dict.fromkeys(request.archive_asset_ids) if key in archivable]
     archived = library_archive.archive(chosen) if chosen else []
     kept_sources = {str(item.get('source')) for item in chosen}
-    removed_outputs = library_archive.delete_files(
+    removed_outputs, failed_outputs = library_archive.recycle_files(
         [path for path in document.get('outputs') or [] if path not in kept_sources])
     purged_assets: dict[str, set[str]] = {}
     for item in chosen:
         purged_assets.setdefault(str(item.get('project_id') or ''), set()).add(str(item.get('asset_id') or ''))
     deleted: list[str] = []
     removed: list[str] = []
+    failed_snapshots: list[str] = []
     for task_id in requested:
         task = current[task_id]
         entry = planned[task_id]
@@ -319,13 +373,14 @@ def tasks_deletion_apply(request: TaskBatchDeleteRequest) -> dict[str, Any]:
             connection.execute('DELETE FROM task_idempotency WHERE task_id = ?', (task_id,))
             connection.execute('DELETE FROM resource_samples WHERE task_id = ?', (task_id,))
             connection.commit()
-        for path in stale:
-            if path.is_file():
-                path.unlink(missing_ok=True)
-                removed.append(str(path))
-            # 任务自己的冻结目录（keyframe-tasks/<task_id>/）删空后一并移除，
+        # 快照整批送回收站；失败的路径原样留在磁盘，并如实回给界面。
+        recycled, failed = trash.recycle([path for path in stale if path.is_file()])
+        removed.extend(recycled)
+        failed_snapshots.extend(failed)
+        for path in recycled:
+            # 任务自己的冻结目录（keyframe-tasks/<task_id>/）搬空后一并移除，
             # 否则会在工作区留下一个空目录。共享模板目录名不是任务 id，不受影响。
-            holder = path.parent
+            holder = Path(path).parent
             if holder.name == task_id and holder.is_dir() and not any(holder.iterdir()):
                 holder.rmdir()
         deleted.append(task_id)
@@ -337,4 +392,12 @@ def tasks_deletion_apply(request: TaskBatchDeleteRequest) -> dict[str, Any]:
     backend.task_plan_directory().joinpath(f'{request.plan_id}.json').unlink(missing_ok=True)
     return {'deleted': deleted, 'archived': archived, 'removed_snapshots': removed,
             'removed_outputs': removed_outputs,
-            'preserved': '模型文件与其它任务的产物未被删除。'}
+            'failed': [*failed_outputs, *failed_snapshots],
+            'recycled': True,
+            'preserved': '模型文件、归档区与其它任务的产物未动；被清除的快照与产物已移入 Windows 回收站，可恢复。'}
+
+
+@ROUTER.get('/api/generated-orphans')
+def generated_orphans() -> dict[str, Any]:
+    """只读：列出任务删除碰不到的生成物，供用户自行决定要不要清理。"""
+    return orphan_scan.scan()

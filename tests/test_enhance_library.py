@@ -36,10 +36,13 @@ def _register(project_id, asset_id, path, title):
     backend.save_project_manifest(manifest)
 
 
-def _task(project_id, task_id, source, output):
+def _task(project_id, task_id, source, output, label=None):
+    recipe = {'source': str(source), 'source_facts': {'kind': 'image', 'width': 64, 'height': 64}}
+    if label is not None:
+        recipe['label'] = label
     payload = {'kind': 'workflow', 'pipeline_stage_id': 'media-enhancement',
                'project_id': project_id, 'asset_id': f'HD-{task_id[:8]}',
-               'enhancement': {'source': str(source), 'source_facts': {'kind': 'image', 'width': 64, 'height': 64}}}
+               'enhancement': recipe}
     result = {'published_outputs': [str(output)], 'output_facts': {'width': 128, 'height': 128}}
     with backend.DB_LOCK, backend.db() as connection:
         connection.execute(
@@ -130,3 +133,53 @@ def test_archive_rejects_unfinished_or_foreign_tasks(lib):
     response = client.get('/api/enhance-library')
     assert response.status_code == 200 and response.json()['items'] == []
     assert client.post(f'/api/projects/{work}/enhancements/missing/archive', json={}).status_code == 404
+
+
+def test_source_label_prefers_the_registered_asset_title(lib):
+    client, project, assets = lib
+    work = _project(client)
+    workspace = _workspace(work)
+    source = workspace / 'assets' / '9e12eb3c-c851-4e7c-8f44-00cb27d14fe3_00001_.png'
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(b'source')
+    _register(work, 'orig', source, '林夏全身')
+    assert enhance_library.source_label(work, source) == '林夏全身'
+
+
+def test_source_label_reads_the_origin_prompt_instead_of_the_uuid(lib):
+    client, project, assets = lib
+    work = _project(client)
+    workspace = _workspace(work)
+    origin = '9e12eb3c-c851-4e7c-8f44-00cb27d14fe3'
+    _task(work, origin, workspace / 'x.png', workspace / 'y.png')
+    with backend.DB_LOCK, backend.db() as connection:
+        payload = {'kind': 'keyframe', 'request': {'prompt': '雨夜霓虹街角，人物回头'}}
+        connection.execute('UPDATE tasks SET payload=? WHERE id=?', (json.dumps(payload), origin))
+        connection.commit()
+    source = workspace / f'{origin}_00001_.png'
+    source.write_bytes(b'source')
+    assert enhance_library.source_label(work, source) == '雨夜霓虹街角，人物回头'
+
+
+def test_source_label_falls_back_to_a_cleaned_filename(lib):
+    client, project, assets = lib
+    work = _project(client)
+    workspace = _workspace(work)
+    source = workspace / 'unknown-name_00003_.png'
+    source.write_bytes(b'source')
+    assert enhance_library.source_label(work, source) == 'unknown-name'
+
+
+def test_archive_names_the_file_after_the_frozen_label(lib):
+    client, project, assets = lib
+    work = _project(client)
+    workspace = _workspace(work)
+    source = workspace / '9e12eb3c-c851-4e7c-8f44-00cb27d14fe3_00001_.png'
+    source.write_bytes(b'source')
+    enhanced = workspace / 'enhance' / 'out.png'
+    enhanced.parent.mkdir(parents=True, exist_ok=True)
+    enhanced.write_bytes(b'enhanced')
+    _task(work, 'task-hd-label', source, enhanced, label='皮夹克')
+    body = client.post(f'/api/projects/{work}/enhancements/task-hd-label/archive', json={}).json()
+    assert body['name'].endswith('皮夹克 · 清晰化.png')
+    assert body['title'] == '皮夹克 · 清晰化'

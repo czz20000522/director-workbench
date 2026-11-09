@@ -39,7 +39,7 @@ export const checkpointLabel = (checkpoint: CheckpointRecord | undefined, hasCon
 // 不能把快速预览或别的画幅的原生配方说成成人向配方。
 export function adultVideoProfileNote(profile: CreativeProfile, aspect: string, speed: string) {
   const used = speed === 'fast'
-    ? '本次改用「快速预览」方案（8 步 + Kitchen attention，0.4MP 横屏）'
+    ? '本次改用「快速预览」方案（低分辨率、少采样步，具体档位按本机显卡自动决定）'
     : '本次改用该画幅的 H3 原生配方';
   if (profile === 'adult-anime') return `动漫质感只在关键帧图像加载 Qwen Anime Consistency，视频生成没有对应的成人向配方；${used}，其中不含成人向配方。`;
   if (aspect === '16:9' && speed === 'standard') return '成人向视频将使用：H3 Realism People（标准步数）。';

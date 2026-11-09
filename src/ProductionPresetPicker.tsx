@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-type Preset = { id: string; title: string; available: boolean; reason?: string; description?: string; verification?: string; missing_models: string[] };
+type Preset = { id: string; title: string; available: boolean; reason?: string; description?: string; summary?: string; verification?: string; missing_models: string[] };
 
 export default function ProductionPresetPicker({ projectId, installed, onInstalled }: {
   projectId: string; installed?: string; onInstalled: () => Promise<void>;
@@ -29,7 +29,8 @@ export default function ProductionPresetPicker({ projectId, installed, onInstall
   return <details className="director-preset-compact">
     <summary>首次生成设置 <span>{installed ? '已设置' : '选择生成方式'}</span></summary>
     {presets.map(preset => <section key={preset.id} className="director-inspector-body">
-      <h3>{preset.title}</h3><p>{preset.description ?? preset.reason}</p>
+      <h3>{preset.title}</h3><p>{preset.summary ?? preset.description ?? preset.reason}</p>
+      {preset.summary && preset.description && <details className="director-muted"><summary>技术细节</summary><p>{preset.description}</p></details>}
       <p className="director-muted">{preset.verification}</p>
       {preset.missing_models.length > 0 && <details><summary>缺少 {preset.missing_models.length} 个模型，补齐后才能生成</summary><ul>{preset.missing_models.map(name => <li key={name}>{name}</li>)}</ul></details>}
       <button type="button" className="button primary compact" disabled={!preset.available || busy || installed === preset.id} onClick={() => void install(preset.id)}>{installed === preset.id ? '已选用' : busy ? '设置中…' : '选用'}</button>

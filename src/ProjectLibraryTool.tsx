@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { AudioLines, FolderOpen, LoaderCircle, Music, Sparkles } from 'lucide-react';
+import { AudioLines, FolderOpen, Images, LoaderCircle, Music, Sparkles } from 'lucide-react';
 import { ApiError, mediaUrl, request } from './api/client';
 import { emitBringIn } from './libraryBus';
 
 type Card = { name: string; params: Record<string, unknown>; builtin?: boolean };
 type FileItem = { name: string; path: string; size: number; modified: number };
+type RefLibrary = { name: string; count: number; covers: string[] };
 const engineLabel: Record<string, string> = { 'voxcpm-2': 'VoxCPM2', 'indextts-2.5': 'IndexTTS 2.5' };
 
 // 项目内的「库」：只做显式带入。音色→锚点配音，配乐→配乐；其余库给出所在位置。
@@ -12,6 +13,7 @@ export default function ProjectLibraryTool() {
   const [timbre, setTimbre] = useState<Card[] | null>(null);
   const [music, setMusic] = useState<Card[] | null>(null);
   const [files, setFiles] = useState<FileItem[] | null>(null);
+  const [refLibs, setRefLibs] = useState<RefLibrary[] | null>(null);
   const [message, setMessage] = useState('');
 
   useEffect(() => {
@@ -22,6 +24,9 @@ export default function ProjectLibraryTool() {
     request<{ items: FileItem[] }>('/api/enhance-library')
       .then(data => { if (active) setFiles(data.items || []); })
       .catch(reason => { if (!active) return; setFiles([]); setMessage(reason instanceof ApiError ? reason.message : ''); });
+    request<{ libraries: RefLibrary[] }>('/api/reference-library/libraries')
+      .then(data => { if (active) setRefLibs(data.libraries || []); })
+      .catch(() => { if (active) setRefLibs([]); });
     return () => { active = false; };
   }, []);
 
@@ -62,8 +67,19 @@ export default function ProjectLibraryTool() {
       </li>)}</ul>}
     </div>
     <div className="sf-post-subblock">
-      <div className="sf-post-section-head"><h3 className="sf-post-subtitle"><FolderOpen size={14} /> 提示词库 / 素材参考库 / 剧本库</h3><p className="sf-post-meta">首页左栏 / 右栏 / 剧本库弹窗</p></div>
-      <p className="sf-post-hint">这三个库的内容需要先落到本作：提示词库「带入」生成提示词；素材参考库「用作开始画面」；剧本库把草稿写进镜头提示词。回到首页即可操作，不会自动写入本作。</p>
+      <div className="sf-post-section-head"><h3 className="sf-post-subtitle"><Images size={14} /> AI 参考图库</h3><p className="sf-post-meta">每个子库都有独立页面</p></div>
+      {!refLibs ? <p className="sf-post-hint"><LoaderCircle size={14} className="sf-spin" /> 正在读取…</p>
+        : refLibs.length === 0 ? <p className="sf-post-hint">参考图库还没挂上目录，检查 director-data\config\reference-library.json。</p>
+        : <div className="lib-grid">{refLibs.map(lib => <a className="lib-card" key={lib.name} href={`#/library/${encodeURIComponent(lib.name)}`} style={{ textDecoration: 'none', color: 'inherit' }}>
+            <strong>{lib.name}</strong>
+            <span>{lib.count} 张</span>
+            <small className="library-covers">{lib.covers.map((src, index) => <img key={index} src={src} alt="" loading="lazy" />)}</small>
+          </a>)}</div>}
+      <p className="sf-post-hint">点卡片进入该库的独立页面：可以按中文标签搜索、逐张看大图、下载原图。关键帧的「参考图组合」里也是从这些库挑图。</p>
+    </div>
+    <div className="sf-post-subblock">
+      <div className="sf-post-section-head"><h3 className="sf-post-subtitle"><FolderOpen size={14} /> 提示词库 / 剧本库</h3><p className="sf-post-meta">首页左栏 / 剧本库弹窗</p></div>
+      <p className="sf-post-hint">这两个库的内容需要先落到本作：提示词库「带入」生成提示词；剧本库把草稿写进镜头提示词。回到首页即可操作，不会自动写入本作。</p>
     </div>
   </div>;
 }

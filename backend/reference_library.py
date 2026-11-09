@@ -259,16 +259,22 @@ def _image_sources(data_root: Path, config: dict[str, Any]) -> list[dict[str, An
     sources: list[dict[str, Any]] = []
     seen: set[str] = set()
 
-    def add(directory: Path, title: str | None, origin: str, work: str | None) -> None:
+    def add(directory: Path, title: str | None, origin: str, work: str | None,
+            category: str | None = None, labels: str | None = None) -> None:
         key = str(directory).lower()
         if key in seen or not directory.is_dir():
             return
         seen.add(key)
         label = (title or directory.name).strip()
-        sources.append({'path': directory, 'title': label, 'origin': origin, 'work': _work_name(work, label)})
+        sources.append({'path': directory, 'title': label, 'origin': origin,
+                        'work': _work_name(work, label), 'category': category,
+                        'labels': labels})
 
     for item in config['image_directories']:
-        add(_resolved(item['path']), item.get('title') or None, 'configured', item.get('work') or None)
+        # category / labels 是给整库素材一套统一分类与可读标题用的：
+        # 缺省时仍按文件名前缀猜，老配置行为不变。
+        add(_resolved(item['path']), item.get('title') or None, 'configured', item.get('work') or None,
+            category=(item.get('category') or None), labels=(item.get('labels') or None))
     add(inbox_root(data_root), '资料箱', 'inbox', '资料箱')
     return sources
 
@@ -538,11 +544,28 @@ def ensure_thumbnail(data_root: Path, material_id: str, source: Path) -> Path | 
     return destination
 
 
+def _label_map(path_value: str | None) -> dict[str, str]:
+    """Read the optional per-library title map (filename -> human readable label)."""
+    if not path_value:
+        return {}
+    path = _resolved(path_value)
+    if not path.is_file():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(key): str(value) for key, value in raw.items() if isinstance(value, str) and value.strip()}
+
+
 def _scan_materials(data_root: Path, config: dict[str, Any], entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     descriptions = _table_descriptions(entries)
     materials: list[dict[str, Any]] = []
     seen: set[str] = set()
     for source in _image_sources(data_root, config):
+        labels = _label_map(source.get('labels'))
         for path in _image_files(source['path']):
             key = str(path.resolve()).lower()
             if key in seen:
@@ -552,6 +575,9 @@ def _scan_materials(data_root: Path, config: dict[str, Any], entries: list[dict[
             if source['origin'] == 'inbox':
                 work = _work_name(_inbox_work(path, source['path'], '资料箱'), path.stem)
             title, category = _material_title(path.name)
+            if source.get('category'):
+                category = source['category']
+            title = labels.get(path.name) or labels.get(path.stem) or title
             material_id = 'mat-' + hashlib.sha1(key.encode('utf-8')).hexdigest()[:12]
             description, description_entry = _lookup_description(title, descriptions)
             related = description_entry or _related_entry(title, entries)
@@ -569,7 +595,10 @@ def _scan_materials(data_root: Path, config: dict[str, Any], entries: list[dict[
                 'related_entry_id': related,
                 'tags': [category, source['title']],
             })
-    materials.sort(key=lambda item: (item['category'] != '角色', item['category'] != '场景', item['title']))
+    # 分类放在标题之前当分组键：整库挂进来（数千张）时，「全部」视图才会按子库聚拢，
+    # 而不是把五个库的图按标题打散混排。
+    materials.sort(key=lambda item: (item['category'] != '角色', item['category'] != '场景',
+                                     item['category'], item['title']))
     return materials
 
 
@@ -657,12 +686,15 @@ def build_index(data_root: str | Path) -> dict[str, Any]:
         materials = [item for item in materials if item['id'] not in hidden['materials']]
     for record in document_records:
         record['sections'] = sum(1 for entry in entries if entry['document_id'] == record['id'])
+    # 缩略图改按需生成：目录里挂整库（数千张）时，不能在这个总览请求里逐张渲染，
+    # 否则首次打开素材库会卡好几分钟。这里只做一次 stat，真正的渲染留给 /thumb 路由。
+    thumbs = thumb_root(root)
     for material in materials:
         try:
-            thumbnail = ensure_thumbnail(root, material['id'], Path(material['path']))
+            stamp = Path(material['path']).stat().st_mtime_ns
         except OSError:
-            thumbnail = None
-        material['has_thumbnail'] = thumbnail is not None
+            stamp = 0
+        material['has_thumbnail'] = (thumbs / f"{material['id']}-{stamp}.jpg").is_file()
     by_id = {entry['id']: entry for entry in entries}
     featured = _pick_featured(entries)
     works: dict[str, dict[str, Any]] = {}
@@ -760,6 +792,65 @@ def find_material(data_root: str | Path, material_id: str) -> dict[str, Any] | N
 
 def find_entry(data_root: str | Path, entry_id: str) -> dict[str, Any] | None:
     return build_index(data_root)['by_id'].get(entry_id)
+
+
+LIBRARY_ORDER = ('首帧图参考', '服饰·写实', '服饰·动画', '脸型·发型', '姿势·线稿', '姿势·深度')
+# 服饰库内部按标题过滤时，这几类排在最后：整库第一屏应当是常服，不是内衣。
+TAIL_PREFIXES = ('内衣', '泳装', '性感')
+
+
+def _library_rank(name: str) -> int:
+    return LIBRARY_ORDER.index(name) if name in LIBRARY_ORDER else len(LIBRARY_ORDER)
+
+
+def _tail_rank(title: str) -> int:
+    return 1 if str(title).startswith(TAIL_PREFIXES) else 0
+
+
+def libraries(data_root: str | Path) -> dict[str, Any]:
+    """Sub-library inventory for the dedicated library pages.
+
+    One entry per image_directories source that actually produced materials, with
+    a few thumbnails for the rail card. Counts come from the same index the panel
+    uses, so the numbers cannot drift.
+    """
+    library = build_index(data_root)
+    buckets: dict[str, dict[str, Any]] = {}
+    for material in library['materials']:
+        category = material['category']
+        bucket = buckets.setdefault(category, {'name': category, 'count': 0, 'covers': [],
+                                               'source_title': material.get('source_title') or ''})
+        bucket['count'] += 1
+        if len(bucket['covers']) < 4:
+            bucket['covers'].append(public_material(material)['thumb_url'])
+    ordered = sorted(buckets.values(), key=lambda item: (_library_rank(item['name']), item['name']))
+    return {'libraries': ordered, 'total': library['counts']['materials']}
+
+
+def browse(data_root: str | Path, category: str = '', query: str = '',
+           offset: int = 0, limit: int = 60) -> dict[str, Any]:
+    """Paged slice of one sub-library, filtered by a plain substring on the label."""
+    library = build_index(data_root)
+    keyword = str(query or '').strip().casefold()
+    items = [
+        material for material in library['materials']
+        if (not category or material['category'] == category)
+        and (not keyword
+             or keyword in str(material['title']).casefold()
+             or keyword in str(material['filename']).casefold())
+    ]
+    start = max(0, int(offset))
+    size = max(1, min(int(limit), 200))
+    items.sort(key=lambda material: (_library_rank(material['category']), _tail_rank(material['title']), material['title']))
+    page = [dict(public_material(material), size=material.get('size', 0)) for material in items[start:start + size]]
+    return {
+        'category': category,
+        'query': query,
+        'total': len(items),
+        'offset': start,
+        'limit': size,
+        'items': page,
+    }
 
 
 def search(data_root: str | Path, query: str, limit: int = 12, kind: str | None = None, work: str | None = None, document: str | None = None) -> dict[str, Any]:
@@ -883,3 +974,87 @@ def stage_material(data_root: str | Path, material_id: str, workspace: Path) -> 
     if not destination.is_file() or destination.stat().st_size != source.stat().st_size:
         copy_checked(source, destination)
     return destination, material
+
+
+# 首帧图参考：用户自己生成的首帧存回素材库，下次能直接拿来当开始画面。
+# 它落在素材库根目录下（而不是 data-root），因为用户心里「素材库」就是
+# D:/AI/MiniMax H3/素材库，翻文件夹时看得见；同时这个位置在允许读取的
+# 存储根里，路径可以直接回填到开始画面。
+FIRST_FRAME_LIBRARY = '首帧图参考'
+FIRST_FRAME_WORK = '我的首帧图'
+
+
+def first_frame_root(assets_root: str | Path) -> Path:
+    return (Path(assets_root) / FIRST_FRAME_LIBRARY).resolve()
+
+
+def _safe_label(value: str) -> str:
+    label = re.sub(r'[\\/:*?"<>|\r\n\t]+', ' ', str(value or '')).strip(' .')
+    return label[:48].rstrip(' .') or '首帧'
+
+
+def ensure_first_frame_library(data_root: str | Path, assets_root: str | Path) -> Path:
+    """把「首帧图参考」注册成一个子库；已注册过就不重复写配置。"""
+    directory = first_frame_root(assets_root)
+    directory.mkdir(parents=True, exist_ok=True)
+    labels = directory / 'labels.json'
+    if not labels.is_file():
+        labels.write_text('{}\n', encoding='utf-8')
+    config, _ = load_config(data_root)
+    wanted = str(directory)
+    registered = {str(_resolved(item.get('path') or '')) for item in config['image_directories']}
+    if wanted not in registered:
+        config['image_directories'].append({
+            'title': FIRST_FRAME_LIBRARY, 'work': FIRST_FRAME_WORK, 'category': FIRST_FRAME_LIBRARY,
+            'path': wanted, 'labels': str(labels),
+        })
+        save_config(data_root, config)
+    return directory
+
+
+def save_first_frame(data_root: str | Path, assets_root: str | Path,
+                     source: str | Path, title: str = '') -> dict[str, Any]:
+    """Copy one generated frame into the material library and index it.
+
+    The filename carries the readable label so the folder stays browsable in
+    Explorer; ``labels.json`` keeps the exact title (no prefix stripping).
+    """
+    src = Path(str(source))
+    if not src.is_file() or src.suffix.lower() not in IMAGE_SUFFIXES:
+        raise ValueError('首帧图不可读取')
+    directory = ensure_first_frame_library(data_root, assets_root)
+    label = _safe_label(str(title or '').strip() or src.stem)
+    suffix = src.suffix.lower()
+    destination = (directory / f'{label}{suffix}').resolve()
+    if directory not in destination.parents:
+        raise ValueError('首帧图只能存进素材库的首帧图参考')
+    # 同名不等于同一张：同一个提示词生成两次，默认名字是一样的。内容相同就当作
+    # 重复保存（不动文件）；内容不同就加序号，绝不让第二张悄悄覆盖第一张。
+    counter = 2
+    while destination != src.resolve() and destination.is_file() and destination.read_bytes() != src.read_bytes():
+        destination = (directory / f'{label} ({counter}){suffix}').resolve()
+        counter += 1
+    if counter > 2:
+        # 加了序号就叫「名字 (2)」，标题跟着文件名走，避免两张图在库里同名。
+        label = destination.stem
+    if destination != src.resolve():
+        copy_checked(src, destination)
+    labels_path = directory / 'labels.json'
+    labels = _label_map(str(labels_path))
+    labels[destination.name] = label
+    labels_path.write_text(json.dumps(labels, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    invalidate(data_root)
+    # 这里不做 build_index：库里七千多张图，重建一次要几秒，按钮会一直卡在「保存中」。
+    # 素材 id 的算法与 _scan_materials 完全一致（路径小写后的 sha1 前 12 位），
+    # 下一次索引重建时天然对得上。
+    key = str(destination).lower()
+    material_id = 'mat-' + hashlib.sha1(key.encode('utf-8')).hexdigest()[:12]
+    return {
+        'id': material_id, 'title': label, 'filename': destination.name,
+        'category': FIRST_FRAME_LIBRARY, 'work': FIRST_FRAME_WORK,
+        'source_title': FIRST_FRAME_LIBRARY, 'description': None, 'related_entry_id': None,
+        'tags': [FIRST_FRAME_LIBRARY, FIRST_FRAME_LIBRARY],
+        'thumb_url': f'/api/reference-library/materials/{material_id}/thumb',
+        'file_url': f'/api/reference-library/materials/{material_id}/file',
+        'path': str(destination),
+    }

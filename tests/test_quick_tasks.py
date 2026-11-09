@@ -131,7 +131,8 @@ def test_batch_delete_keeps_a_snapshot_still_used_by_another_task(quick_client):
         'plan_id': plan['plan_id'], 'task_ids': [dropped['id']], 'confirm': True,
     })
     assert applied.status_code == 200, applied.text
-    assert applied.json()['removed_snapshots'] == []
+    # 共享的 workflow 必须留下；被删任务自己独占的 request.json 等记录清掉是正确的。
+    assert str(shared) not in applied.json()['removed_snapshots']
     assert shared.is_file()
     assert client.get(f'/api/projects/{backend.QUICK_PROJECT_ID}/tasks/{kept["id"]}').status_code == 200
 
@@ -149,7 +150,7 @@ def test_image_card_carries_its_own_inputs_back_for_editing(quick_client):
     _submit(client, '雨夜街角，霓虹在积水里拉长', seed=77)
     card = client.get('/api/quick-tasks').json()['tasks'][0]
     assert card['reuse'] == {'tool': 'image', 'values': {
-        'prompt': '雨夜街角，霓虹在积水里拉长', 'quality': 'native', 'seed': 77, 'aspect': '9:16'}}
+        'prompt': '雨夜街角，霓虹在积水里拉长', 'quality': 'native', 'seed': 77, 'aspect': '9:16', 'steps': 8}}
 
 
 def test_enhancement_rows_are_grouped_as_enhancement_not_video(quick_client):
@@ -209,3 +210,111 @@ def test_reuse_stays_absent_when_the_inputs_cannot_be_reproduced(quick_client):
     assert backend.quick_task_reuse({'kind': 'workflow'}) is None
     assert backend.quick_task_reuse({'kind': 'audio_swap'}) is None
 
+
+
+def test_inpaint_rows_are_labelled_as_inpaint_not_text_to_image():
+    from backend.routers.quick_tasks import task_tool
+    assert task_tool({'kind': 'keyframe', 'request': {'mode': 'inpaint'}}) == '局部重绘'
+    assert task_tool({'kind': 'keyframe', 'request': {'mode': 'text'}}) == '图片'
+    assert task_tool({'kind': 'keyframe'}) == '图片'
+    assert task_tool({'kind': 'speech', 'request': {'mode': 'inpaint'}}) == '配音'
+
+
+def test_inpaint_rows_are_labelled_as_inpaint_not_text_to_image():
+    from backend.routers.quick_tasks import task_tool
+    assert task_tool({'kind': 'keyframe', 'request': {'mode': 'inpaint'}}) == '局部重绘'
+    assert task_tool({'kind': 'keyframe', 'request': {'mode': 'text'}}) == '图片'
+    assert task_tool({'kind': 'keyframe'}) == '图片'
+    assert task_tool({'kind': 'speech', 'request': {'mode': 'inpaint'}}) == '配音'
+
+
+def test_video_tasks_without_a_kind_are_labelled_as_video():
+    """视频任务走作品管线，payload 里没有 kind；以前这里落到兜底的「任务」，首页归到「其他」。"""
+    from backend.routers.quick_tasks import task_tool
+    assert task_tool({'pipeline_stage_id': 'motion-first-realism-people-generation'}) == '视频'
+    assert task_tool({'kind': 'workflow', 'pipeline_stage_id': 'x'}) == '视频'
+    assert task_tool({'kind': 'keyframe'}) == '图片'
+
+
+def test_quick_card_reads_first_frame_from_the_materials_block():
+    from backend.routers.quick_tasks import quick_task_card
+    payload = {'pipeline_stage_id': 'motion-first-realism-people-generation',
+               'materials': {'first-frame': r'D:/out/frame.png'},
+               'pipeline_values': {'prompt': '雨夜街角'}}
+    result = {'outputs': [r'导演工作台工作目录\quick-tasks\video/S01-8.mp4']}
+    card = quick_task_card({'id': 't1', 'payload': payload, 'result': result, 'status': 'succeeded',
+                            'created_at': 0, 'updated_at': 0, 'error': None})
+    assert card['tool'] == '视频'
+    assert card['video_mode'] == 'image-video'
+    assert card['output'] == r'output/导演工作台工作目录\quick-tasks\video/S01-8.mp4'
+    assert card['outputs'] == [r'output/导演工作台工作目录\quick-tasks\video/S01-8.mp4']
+
+
+def test_quick_card_without_a_first_frame_is_text_to_video():
+    from backend.routers.quick_tasks import quick_task_card
+    card = quick_task_card({'id': 't2', 'status': 'succeeded', 'created_at': 0, 'updated_at': 0,
+                            'payload': {'pipeline_stage_id': 'motion-first-generation'},
+                            'result': {'outputs': ['a.mp4', 'b.mp4']}})
+    assert card['video_mode'] == 'text-video'
+    assert card['output'] is None
+    assert card['outputs'] == ['output/a.mp4', 'output/b.mp4']
+
+
+def test_video_tasks_without_a_kind_are_labelled_as_video():
+    """视频任务走作品管线，payload 里没有 kind；以前这里落到兜底的「任务」，首页归到「其他」。"""
+    from backend.routers.quick_tasks import task_tool
+    assert task_tool({'pipeline_stage_id': 'motion-first-realism-people-generation'}) == '视频'
+    assert task_tool({'kind': 'workflow', 'pipeline_stage_id': 'x'}) == '视频'
+    assert task_tool({'kind': 'keyframe'}) == '图片'
+
+
+def test_quick_card_reads_first_frame_from_the_materials_block():
+    from backend.routers.quick_tasks import quick_task_card
+    payload = {'pipeline_stage_id': 'motion-first-realism-people-generation',
+               'materials': {'first-frame': r'D:\out\frame.png'},
+               'pipeline_values': {'prompt': '雨夜街角'}}
+    result = {'outputs': [r'导演工作台工作目录\quick-tasks\video/S01-8.mp4']}
+    card = quick_task_card({'id': 't1', 'payload': payload, 'result': result, 'status': 'succeeded',
+                            'created_at': 0, 'updated_at': 0, 'error': None})
+    assert card['tool'] == '视频'
+    assert card['video_mode'] == 'image-video'
+    assert card['output'] == r'output/导演工作台工作目录\quick-tasks\video/S01-8.mp4'
+    assert card['outputs'] == [r'output/导演工作台工作目录\quick-tasks\video/S01-8.mp4']
+
+
+def test_quick_card_without_a_first_frame_is_text_to_video():
+    from backend.routers.quick_tasks import quick_task_card
+    card = quick_task_card({'id': 't2', 'status': 'succeeded', 'created_at': 0, 'updated_at': 0,
+                            'payload': {'pipeline_stage_id': 'motion-first-generation'},
+                            'result': {'outputs': ['a.mp4', 'b.mp4']}})
+    assert card['video_mode'] == 'text-video'
+    assert card['output'] is None
+    assert card['outputs'] == ['output/a.mp4', 'output/b.mp4']
+
+
+def test_card_duration_uses_started_at_not_created_at():
+    """耗时从「真正开始跑」算：排队等 GPU 的那段不该算进生成时间。"""
+    card = backend.quick_task_card({
+        'id': 't1', 'status': 'succeeded', 'payload': {}, 'result': {},
+        'created_at': 100.0, 'started_at': 130.0, 'updated_at': 145.5,
+    })
+    assert card['started_at'] == 130.0
+    assert card['duration_ms'] == 15500
+
+
+def test_card_duration_falls_back_for_legacy_tasks_without_started_at():
+    """11-09 之前入库的任务没有 started_at，退回 created_at 显示，别整块不显示。"""
+    card = backend.quick_task_card({
+        'id': 't2', 'status': 'failed', 'payload': {}, 'result': {},
+        'created_at': 100.0, 'updated_at': 112.0,
+    })
+    assert card['duration_ms'] == 12000
+
+
+def test_card_duration_is_live_while_running(monkeypatch):
+    monkeypatch.setattr(backend.time, 'time', lambda: 200.0)
+    card = backend.quick_task_card({
+        'id': 't3', 'status': 'running', 'payload': {}, 'result': {},
+        'created_at': 150.0, 'started_at': 180.0, 'updated_at': 181.0,
+    })
+    assert card['duration_ms'] == 20000

@@ -56,7 +56,9 @@ def test_openapi_route_and_schema_snapshot() -> None:
     # 同日加入清晰化库：列出清晰化成品与「归档/覆盖原件」接口（EnhanceArchiveRequest）。
     # 同日加入剧本库草稿/归档接口（ScriptDraftRequest）。
     # 同日加入项目档案只读接口（GET /api/projects/{id}/dossier）。
-    assert hashlib.sha256(encoded).hexdigest() == "687dfd2ab18e1c433334934262a7014d4d91c18e02731943fd2c8cdb4b67db3c"
+    # 2026-11-08：加入首帧入库接口（POST /api/reference-library/first-frames, SaveFirstFrameRequest）：
+    # 把生成出来的首帧存进素材库的「首帧图参考」子库，供图生视频直接选作开始画面。
+    assert hashlib.sha256(encoded).hexdigest() == "756367290c613987576762ff1c725f9bc77e82a778026ed140d7da471cc7c354"
     assert {"StartRequest", "AssemblyRequest", "ProjectCreateRequest"} <= set(snapshot["schemas"])
 
 

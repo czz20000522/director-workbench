@@ -62,7 +62,7 @@ def test_image_request_freezes_size_and_rejects_changed_retry(preset_client, mon
     response = client.post(endpoint, json=args)
     assert response.status_code == 202, response.text
     task = response.json()
-    assert task['payload']['output_size'] == {'resolution': '4k', 'aspect_ratio': '9:16'}
+    assert task['payload']['output_size'] == {'resolution': '4k', 'aspect_ratio': '9:16', 'ai_upscale': False}
     assert client.post(endpoint, json=args).json()['id'] == task['id']
     assert client.post(endpoint, json={**args, 'output_resolution': '8k'}).status_code == 409
     graph = json.loads(Path(task['payload']['workflow']).read_text(encoding='utf-8'))
@@ -79,3 +79,18 @@ def test_public_version_snapshot_exposes_processing_profile():
     })
     assert snapshot['output_size']['resolution'] == '4k'
     assert snapshot['processing_method'] == 'lanczos_resize'
+
+
+def test_ai_upscale_is_opt_in_and_needs_a_larger_target(preset_client, monkeypatch):
+    client, project = preset_client
+    monkeypatch.setattr(backend, 'keyframe_capability', lambda **kwargs: {'available': True})
+    endpoint = '/api/projects/preset-test/keyframe-tasks'
+    base = {'mode': 'text', 'prompt': 'Coastal sunrise', 'width': 768, 'height': 1344}
+    native = client.post(endpoint, json={**base, 'ai_upscale': True, 'idempotency_key': 'sr-native'})
+    assert native.status_code == 422, native.text
+    upscaled = client.post(endpoint, json={**base, 'ai_upscale': True, 'output_resolution': '2k',
+                                           'idempotency_key': 'sr-2k'})
+    assert upscaled.status_code == 202, upscaled.text
+    assert upscaled.json()['payload']['output_size'] == {'resolution': '2k', 'aspect_ratio': '9:16', 'ai_upscale': True}
+    plain = client.post(endpoint, json={**base, 'output_resolution': '2k', 'idempotency_key': 'plain-2k'})
+    assert plain.json()['payload']['output_size']['ai_upscale'] is False

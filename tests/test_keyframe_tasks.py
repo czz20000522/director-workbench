@@ -10,7 +10,9 @@ def test_text_mode_needs_no_image_and_preserves_submission_identity(preset_clien
     client, project = preset_client
     monkeypatch.setattr(backend, 'keyframe_capability', lambda **kwargs: {'available': True})
     endpoint = '/api/projects/preset-test/keyframe-tasks'
-    args = {'mode': 'text', 'prompt': '清晨的小镇', 'idempotency_key': 'first-image'}
+    # 固定种子：这个用例验的是「同一份请求重复提交拿回同一任务」。
+    # 种子的缺省值现在是随机的（每次调用都不同），不写死会让第二次提交变成另一份请求。
+    args = {'mode': 'text', 'prompt': '清晨的小镇', 'idempotency_key': 'first-image', 'seed': 340921}
     invalid = client.post(endpoint, json={**args, 'reference_image': 'ignored.png'})
     assert invalid.status_code == 422
     assert client.post(endpoint, json={**args, 'width': 513}).status_code == 422
@@ -42,7 +44,8 @@ def test_keyframe_submit_recover_and_register_once(preset_client, monkeypatch):
     assert response.status_code == 202, response.text
     task = response.json()
     recipe = json.loads(Path(task['payload']['workflow']).read_text(encoding='utf-8'))
-    image_reference = recipe['17']['inputs']['image']
+    # 多参考改造后节点名是 ref0；参考图仍先落到 ComfyUI input 再以相对路径引用。
+    image_reference = recipe['ref0']['inputs']['image']
     assert not Path(image_reference).is_absolute()
     assert (backend.INPUT_ROOT / image_reference).read_bytes() == reference.read_bytes()
     assert client.post(endpoint, json=args).json()['id'] == task['id']

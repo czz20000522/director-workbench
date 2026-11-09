@@ -82,6 +82,8 @@
 !/tests/test_secure_files.py
 !/tests/conftest.py
 !/tests/support.py
+!/tests/test_image_superres.py
+!/tests/test_inpaint.py
 !/tests/test_audio_master.py
 !/tools/
 /tools/*
@@ -495,6 +497,29 @@
 !/src/qualityIntent.ts
 !/src/reference-library.css
 !/src/subtitles.ts
+# 素材库独立页面（11-07）
+!/src/LibraryPage.tsx
+!/src/library-page.css
+# 参考图组合槽位与图生视频首帧工作台（11-07）
+!/src/ReferenceSlotField.tsx
+!/src/FirstFrameStudio.tsx
+!/src/InpaintDialog.tsx
+!/src/ReferenceImagePanel.tsx
+!/src/reference-image.css
+!/src/VideoPresetPicker.tsx
+# 硬件档位模块与启动脚本探针（11-07）
+!/backend/hardware.py
+!/backend/trash.py
+!/backend/generated_orphans.py
+# 提示词代写：本机 Ollama 无审查模型（11-09）
+!/backend/prompt_writer.py
+!/backend/prompt_library.py
+!/backend/routers/prompt_writing.py
+!/src/PromptWriter.tsx
+!/backend/image_formats.py
+!/backend/inpaint_recipe.py
+!/backend/image_superres.py
+!/tools/hardware_probe.py
 !/tests/audio_swap_panel.browser.mjs
 !/tests/dubbing_panel.browser.mjs
 !/tests/keyframe_batch.browser.mjs
@@ -515,6 +540,11 @@
 !/tests/test_preset_library.py
 !/tests/test_project_deletion.py
 !/tests/test_prompt_quality_rule.py
+!/tests/test_prompt_library.py
+!/tests/test_prompt_writer.py
+!/tests/test_image_refine.py
+!/tests/test_image_formats.py
+!/tests/test_trash.py
 !/tests/test_quick_tasks.py
 !/tests/test_reference_library.py
 !/tests/test_script_library.py

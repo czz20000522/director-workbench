@@ -7,7 +7,7 @@ import threading
 from pathlib import Path
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6  # 6: tasks.started_at（耗时按真正开始执行算）
 _MIGRATION_LOCK = threading.RLock()
 
 
@@ -51,7 +51,9 @@ def _migrate(connection: sqlite3.Connection) -> None:
         )"""
     )
     columns = _columns(connection, "tasks")
-    for column, declaration in (("batch_id", "TEXT"), ("sequence", "INTEGER"), ("project_id", "TEXT")):
+    for column, declaration in (("batch_id", "TEXT"), ("sequence", "INTEGER"), ("project_id", "TEXT"),
+                                # 实际开始执行的时间：耗时按它算，排队等待不计入。
+                                ("started_at", "REAL")):
         if column not in columns:
             connection.execute(f"ALTER TABLE tasks ADD COLUMN {column} {declaration}")
     connection.execute(

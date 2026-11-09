@@ -49,6 +49,16 @@ def preset_client_factory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             def start(self):
                 pass
 
+            # 任何走 subprocess / concurrent.futures 的路径都会对线程调 join / is_alive，
+            # stub 缺方法会让请求处理器抛 AttributeError，TestClient 表现为 CancelledError。
+            def join(self, *args, **kwargs):
+                pass
+
+            def is_alive(self):
+                return False
+
+            daemon = False
+
         monkeypatch.setattr(backend.threading, 'Thread', NoopThread)
         client = TestClient(backend.app)
         response = client.post('/api/projects/create', json={

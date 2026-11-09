@@ -288,9 +288,15 @@ def start_enhancement_task(project_id: str, request: enhancement.EnhancementRequ
         workflow.write_text(json.dumps(graph, ensure_ascii=False), encoding='utf-8')
     else:
         workflow = backend.build_finish_workflow_snapshot(project_id, asset_id, source, enhancement.MODEL, None, 'uniform', 0)
+    # 标题在这里就定好并冻进任务：卡片列表和归档文件名都读它，不必每次再查一遍。
+    try:
+        label = enhance_library.source_label(project_id, source)
+    except (OSError, ValueError):
+        label = source.stem
     payload = {'kind': 'workflow', 'pipeline_stage_id': 'media-enhancement',
                'project_id': project_id, 'asset_id': asset_id, 'workflow': str(workflow),
-               'enhancement': {'source': request.source, 'source_facts': facts, 'model': enhancement.MODEL, 'scale': 2},
+               'enhancement': {'source': request.source, 'label': label,
+                               'source_facts': facts, 'model': enhancement.MODEL, 'scale': 2},
                'submission_receipt': {'key': request.idempotency_key, 'request': submission}}
     try:
         payload = backend.freeze_task_payload(payload, project_id=project_id)

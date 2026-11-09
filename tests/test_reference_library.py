@@ -168,3 +168,107 @@ def test_api_reads_index_and_rejects_unknown_material(data_root: Path, monkeypat
     search = client.get('/api/reference-library/search', params={'q': '负面', 'kind': '负面'})
     assert search.status_code == 200
     assert search.json()['items'][0]['title'] == '5.2 视频镜用负面'
+
+
+def test_save_first_frame_creates_the_library_and_keeps_the_exact_title(data_root: Path, tmp_path: Path) -> None:
+    assets = tmp_path / '素材库'
+    source = tmp_path / 'generated_00001_.png'
+    source.write_bytes(PNG)
+    saved = library.save_first_frame(data_root, assets, source, '林夏 · 雨夜街角')
+    assert saved['category'] == library.FIRST_FRAME_LIBRARY
+    assert saved['title'] == '林夏 · 雨夜街角'
+    assert Path(saved['path']).is_file()
+    assert Path(saved['path']).parent == assets / library.FIRST_FRAME_LIBRARY
+    # 子库要真的注册进配置，否则选择器里看不到这批图。
+    config, error = library.load_config(data_root)
+    assert error is None
+    entry = next(item for item in config['image_directories'] if item.get('category') == library.FIRST_FRAME_LIBRARY)
+    assert Path(entry['path']) == assets / library.FIRST_FRAME_LIBRARY
+    assert any(material['title'] == '林夏 · 雨夜街角' for material in library.build_index(data_root)['materials'])
+
+
+def test_save_first_frame_is_registered_once_and_overwrites_the_same_title(data_root: Path, tmp_path: Path) -> None:
+    assets = tmp_path / '素材库'
+    source = tmp_path / 'generated_00001_.png'
+    source.write_bytes(PNG)
+    library.save_first_frame(data_root, assets, source, '同一张')
+    library.save_first_frame(data_root, assets, source, '同一张')
+    config, _ = library.load_config(data_root)
+    entries = [item for item in config['image_directories'] if item.get('category') == library.FIRST_FRAME_LIBRARY]
+    assert len(entries) == 1
+    folder = assets / library.FIRST_FRAME_LIBRARY
+    assert sorted(path.name for path in folder.glob('*.png')) == ['同一张.png']
+
+
+def test_save_first_frame_rejects_a_missing_source(data_root: Path, tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        library.save_first_frame(data_root, tmp_path / '素材库', tmp_path / 'nope.png', 'x')
+
+
+def test_save_first_frame_creates_the_library_and_keeps_the_exact_title(data_root: Path, tmp_path: Path) -> None:
+    assets = tmp_path / '素材库'
+    source = tmp_path / 'generated_00001_.png'
+    source.write_bytes(PNG)
+    saved = library.save_first_frame(data_root, assets, source, '林夏 · 雨夜街角')
+    assert saved['category'] == library.FIRST_FRAME_LIBRARY
+    assert saved['title'] == '林夏 · 雨夜街角'
+    assert Path(saved['path']).is_file()
+    assert Path(saved['path']).parent == assets / library.FIRST_FRAME_LIBRARY
+    # 子库要真的注册进配置，否则选择器里看不到这批图。
+    config, error = library.load_config(data_root)
+    assert error is None
+    entry = next(item for item in config['image_directories'] if item.get('category') == library.FIRST_FRAME_LIBRARY)
+    assert Path(entry['path']) == assets / library.FIRST_FRAME_LIBRARY
+    assert any(material['title'] == '林夏 · 雨夜街角' for material in library.build_index(data_root)['materials'])
+
+
+def test_save_first_frame_is_registered_once_and_overwrites_the_same_title(data_root: Path, tmp_path: Path) -> None:
+    assets = tmp_path / '素材库'
+    source = tmp_path / 'generated_00001_.png'
+    source.write_bytes(PNG)
+    library.save_first_frame(data_root, assets, source, '同一张')
+    library.save_first_frame(data_root, assets, source, '同一张')
+    config, _ = library.load_config(data_root)
+    entries = [item for item in config['image_directories'] if item.get('category') == library.FIRST_FRAME_LIBRARY]
+    assert len(entries) == 1
+    folder = assets / library.FIRST_FRAME_LIBRARY
+    assert sorted(path.name for path in folder.glob('*.png')) == ['同一张.png']
+
+
+def test_save_first_frame_rejects_a_missing_source(data_root: Path, tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        library.save_first_frame(data_root, tmp_path / '素材库', tmp_path / 'nope.png', 'x')
+
+
+def test_saved_first_frames_with_the_same_title_never_overwrite_each_other(data_root: Path, tmp_path: Path) -> None:
+    assets = tmp_path / '素材库'
+    first = tmp_path / 'a.png'
+    second = tmp_path / 'b.png'
+    first.write_bytes(PNG)
+    second.write_bytes(PNG + b'\x00')
+    one = library.save_first_frame(data_root, assets, first, '同名')
+    two = library.save_first_frame(data_root, assets, second, '同名')
+    assert one['filename'] == '同名.png'
+    assert two['filename'] == '同名 (2).png'
+    folder = assets / library.FIRST_FRAME_LIBRARY
+    assert sorted(path.name for path in folder.glob('*.png')) == ['同名 (2).png', '同名.png']
+    # 同样的内容再存一次不算新条目，也不改名
+    again = library.save_first_frame(data_root, assets, first, '同名')
+    assert again['filename'] == '同名.png'
+
+
+def test_saved_first_frames_with_the_same_title_never_overwrite_each_other(data_root: Path, tmp_path: Path) -> None:
+    assets = tmp_path / '素材库'
+    first = tmp_path / 'a.png'
+    second = tmp_path / 'b.png'
+    first.write_bytes(PNG)
+    second.write_bytes(PNG + b'\x00')
+    one = library.save_first_frame(data_root, assets, first, '同名')
+    two = library.save_first_frame(data_root, assets, second, '同名')
+    assert one['filename'] == '同名.png'
+    assert two['filename'] == '同名 (2).png'
+    folder = assets / library.FIRST_FRAME_LIBRARY
+    assert sorted(path.name for path in folder.glob('*.png')) == ['同名 (2).png', '同名.png']
+    # 同样的内容再存一次不算新条目，也不改名
+    again = library.save_first_frame(data_root, assets, first, '同名')
+    assert again['filename'] == '同名.png'

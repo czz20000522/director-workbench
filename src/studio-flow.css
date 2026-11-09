@@ -482,7 +482,9 @@
 .sf-work-row { width: 100%; display: flex; align-items: center; gap: 13px; text-align: left; padding: 12px 4px; border-bottom: 1px solid var(--sf-line); background: transparent; }
 .sf-work-row:hover { background: #fafbfc; }
 .sf-work-row .sf-work-mark { width: 30px; height: 30px; font-size: 13px; border-radius: 6px; background: #f3f5f8; color: #687386; }
-.sf-work-main { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 10px; }
+/* 标题一行、状态/耗时一行：挤在同一行时「耗时」会把日期顶掉（11-09）。 */
+.sf-work-main { flex: 1; min-width: 0; display: grid; align-content: center; gap: 1px; }
+.sf-work-main > * { min-width: 0; }
 .sf-work-main strong { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sf-work-main small { color: var(--sf-muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sf-work-step { color: var(--sf-muted); font-size: 11px; width: 82px; flex: none; }
@@ -699,7 +701,8 @@
 }
 .sf-intent-field { min-height: 128px; resize: vertical; line-height: 1.7; }
 .sf-field .sf-fine { display: block; margin-top: 2px; }
-.qt-tools { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 4px 0 28px; }
+/* 自适应列数：写死 3 列时第 4 张卡片会单独占一行，看着像漏排。 */
+.qt-tools { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin: 4px 0 28px; }
 .qt-tools button { text-align: left; padding: 16px; border: 1px solid var(--sf-line); border-radius: 10px; background: #fff; display: grid; gap: 5px; }
 .qt-tools button:hover { border-color: #b9c8e8; background: #fbfcff; }
 .qt-tools button svg { color: var(--sf-amber); margin-bottom: 4px; }
@@ -828,3 +831,69 @@
 .lib-card span { color: var(--sf-muted); font-size: 11px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .lib-card small { color: #9aa1ab; font-size: 10px; }
 .lib-card button { margin-top: 4px; justify-self: start; }
+
+/* 「库」面板里的参考图库卡片：书名 + 数量 + 一排封面 */
+.lib-card .library-covers { display: flex; gap: 4px; margin-top: 2px; -webkit-line-clamp: unset; }
+.lib-card .library-covers img { width: 34px; height: 44px; border-radius: 5px; object-fit: cover; background: var(--sf-line); }
+.lib-card[href]:hover { border-color: var(--accent); }
+
+/* ── 孤儿产物只读清单（orphan- 前缀，避免与其它面板撞类名） ── */
+.orphan-modal { display: flex; flex-direction: column; width: min(920px, 92vw); max-height: 82vh; }
+.orphan-list { flex: 1 1 auto; overflow: auto; margin: 10px 0; border: 1px solid var(--post-line, #e4e7ec); border-radius: 8px; }
+.orphan-row { display: grid; grid-template-columns: minmax(160px, 1.3fr) 84px 104px minmax(180px, 2fr); gap: 8px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--post-line, #e4e7ec); font-size: 12px; }
+.orphan-row:last-child { border-bottom: 0; }
+.orphan-main { display: grid; gap: 2px; min-width: 0; }
+.orphan-main > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.orphan-main > small { color: var(--post-muted, #6b7280); font-size: 11px; }
+.orphan-size, .orphan-date { color: var(--post-muted, #6b7280); white-space: nowrap; }
+.orphan-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--post-muted, #6b7280); font-size: 10px; }
+
+/* ── 单步工具：从「一条窄栏」改成三栏工作台 ──────────────────
+   以前 .qt-page 固定 900px，宽屏两边各空 350px，像新闻正文。
+   现在和首页同一套 rail 骨架：左边查提示词、中间干活、右边翻素材。 */
+.sf-root .qt-shell { align-items: start; grid-template-columns: 280px minmax(0, 1fr) 300px; }
+.sf-root .qt-shell .qt-page { width: 100%; margin: 0; padding: 6px 0 40px; min-width: 0; }
+.sf-root .qt-shell .sf-rail-col { height: calc(100dvh - 96px); grid-template-rows: minmax(0, 1fr); }
+
+/* 中间再分两栏：表单在左，产物预览钉在右侧 */
+.qt-studio { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; align-items: start; }
+.qt-studio-main { display: grid; gap: 14px; min-width: 0; }
+.qt-studio-side { position: sticky; top: 84px; display: grid; gap: 12px; align-self: start; }
+.qt-pair { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 14px; align-items: start; }
+.qt-preview { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--sf-line); border-radius: 12px; background: #fff; box-shadow: 0 8px 24px rgba(20, 24, 32, .05); }
+.qt-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--sf-muted); font-size: 11px; }
+.qt-preview-head > span { color: var(--sf-ink); font-size: 12px; font-weight: 600; }
+.qt-preview video { width: 100%; max-height: 62vh; border-radius: 8px; background: #111; }
+.qt-preview-frame { margin: 0; display: grid; gap: 5px; }
+.qt-preview-frame img { width: 100%; max-height: 62vh; object-fit: contain; border-radius: 8px; background: #f2f3f5; }
+.qt-preview-frame figcaption { color: var(--sf-muted); font-size: 10.5px; }
+.qt-preview-empty { margin: 0; padding: 18px 12px; border: 1px dashed var(--sf-line); border-radius: 8px; color: var(--sf-muted); font-size: 11.5px; line-height: 1.6; }
+.qt-preview-tips { padding: 10px 12px; border-radius: 10px; background: #f7f8fa; color: var(--sf-muted); font-size: 11px; line-height: 1.6; }
+.qt-preview-tips strong { display: block; margin-bottom: 3px; color: var(--sf-ink); font-size: 11.5px; }
+.qt-preview-tips p { margin: 0; }
+
+/* 单步任务结果预览 */
+.sf-result-modal { width: min(880px, calc(100vw - 48px)); display: grid; gap: 12px; }
+.sf-result-stage { display: grid; place-items: center; min-height: 240px; border-radius: 10px; background: #0f1218; overflow: hidden; }
+.sf-result-stage video, .sf-result-stage img { max-width: 100%; max-height: 66vh; border-radius: 10px; }
+.sf-result-thumbs { display: flex; flex-wrap: wrap; gap: 6px; }
+.sf-result-thumbs > button { display: inline-flex; align-items: center; gap: 5px; max-width: 260px; padding: 5px 9px; border: 1px solid var(--sf-line); border-radius: 7px; background: #fff; color: var(--sf-muted); font: inherit; font-size: 11px; cursor: pointer; }
+.sf-result-thumbs > button.selected { border-color: var(--sf-accent); color: var(--sf-accent); }
+.sf-result-thumbs > button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sf-result-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+@media (max-width: 1440px) {
+  .qt-studio { grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; }
+  .sf-root .qt-shell { grid-template-columns: 260px minmax(0, 1fr) 280px; }
+}
+@media (max-width: 1180px) {
+  .qt-studio { grid-template-columns: 1fr; }
+  .qt-studio-side { position: static; }
+  .sf-root .qt-shell { grid-template-columns: 240px minmax(0, 1fr); }
+  .sf-root .qt-shell .sf-rail-col--right { display: none; }
+}
+@media (max-width: 900px) {
+  .sf-root .qt-shell { grid-template-columns: minmax(0, 1fr); }
+  .sf-root .qt-shell .sf-rail-col { display: none; }
+  .qt-pair { grid-template-columns: 1fr; }
+}

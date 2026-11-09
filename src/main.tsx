@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import StudioFlowLive from './StudioFlowLive';
+import LibraryPage from './LibraryPage';
 import LoginGate from './LoginGate';
 import './styles.css';
 
@@ -44,9 +45,28 @@ function installRandomUuidFallback() {
 
 installRandomUuidFallback();
 
+function useHashRoute() {
+  const [hash, setHash] = React.useState(() => window.location.hash);
+  React.useEffect(() => {
+    const onChange = () => setHash(window.location.hash);
+    window.addEventListener('hashchange', onChange);
+    return () => window.removeEventListener('hashchange', onChange);
+  }, []);
+  return hash;
+}
+
+// #/library → 全部；#/library/<子库名> → 只开那一个库。返回 null 表示不是库路由。
+function parseLibraryRoute(hash: string): string | null {
+  if (!hash.startsWith('#/library')) return null;
+  const rest = hash.slice('#/library'.length).replace(/^\//, '');
+  if (!rest) return '';
+  try { return decodeURIComponent(rest); } catch { return ''; }
+}
+
 function WorkbenchEntry() {
   const [privateMode, setPrivateMode] = React.useState<boolean | null>(null);
   const [failed, setFailed] = React.useState(false);
+  const hash = useHashRoute();
   React.useEffect(() => {
     const controller = new AbortController();
     fetch('/api/auth/config', { signal: controller.signal })
@@ -60,7 +80,10 @@ function WorkbenchEntry() {
   }, []);
   if (failed) return <main className="workspace-login"><p role="alert">无法连接工作台，请刷新重试。</p></main>;
   if (privateMode === null) return <main className="workspace-login"><p role="status" aria-live="polite">正在连接工作台…</p></main>;
-  return privateMode ? <LoginGate /> : <StudioFlowLive username="本机" onLogout={() => window.location.reload()} />;
+  if (privateMode) return <LoginGate />;
+  const libraryCategory = parseLibraryRoute(hash);
+  if (libraryCategory !== null) return <LibraryPage key={libraryCategory} initialCategory={libraryCategory} />;
+  return <StudioFlowLive username="本机" onLogout={() => window.location.reload()} />;
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><ErrorBoundary><WorkbenchEntry /></ErrorBoundary></React.StrictMode>);
