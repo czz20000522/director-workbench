@@ -12,6 +12,7 @@ import binascii
 import hashlib
 import json
 from pathlib import Path
+import threading
 import time
 from typing import Any, Literal
 import uuid
@@ -19,7 +20,7 @@ from fastapi import APIRouter, HTTPException
 import os
 import psutil
 from urllib.error import HTTPError, URLError
-from .. import audio_edit_tasks, audio_master_tasks, audio_swap, dubbing, image_superres, keyframes, media_operations, output_resolution, quality_intent, reference_library, secure_files, speech
+from .. import audio_edit_tasks, audio_master_tasks, audio_swap, dubbing, image_superres, keyframes, media_operations, output_resolution, preset_library, quality_intent, reference_library, secure_files, speech
 from ..schemas import AudioEditRequest, AudioMasterRequest, AudioSwapRequest, DubbingRequest, KeyframeRequest, MediaOperationRequest, SpeechRequest
 from .. import app as backend
 
@@ -27,13 +28,48 @@ from .. import app as backend
 ROUTER = APIRouter()
 
 
+# ComfyUI 的 /object_info 要序列化 30 MB，实测冷响应 25 秒、热响应直接超时；
+# 而这里只用到其中十几个节点的定义。缓存一份：节点与模型清单在一次会话里几乎
+# 不变，ComfyUI 重启后最迟 TTL 秒自动刷新。
+_OBJECT_INFO_CACHE: dict[str, Any] = {'at': 0.0, 'info': None}
+OBJECT_INFO_TTL = float(os.environ.get('DIRECTOR_CAPABILITY_TTL', '120'))
+OBJECT_INFO_TIMEOUT = float(os.environ.get('DIRECTOR_CAPABILITY_TIMEOUT', '60'))
+
+
+def _object_info() -> dict[str, Any]:
+    now = time.monotonic()
+    cached = _OBJECT_INFO_CACHE.get('info')
+    if isinstance(cached, dict) and now - float(_OBJECT_INFO_CACHE.get('at') or 0) < OBJECT_INFO_TTL:
+        return cached
+    # 默认的 8 秒超时对这张 30 MB 的表根本不够（实测 25 秒），超时会被上层
+    # 当成「引擎离线」，于是每次提交都白等 8 秒还误报「生成引擎待启动」。
+    # 位置传参（path, payload, timeout）：测试里把 request_json 换成
+    # lambda *args: {} 的桩不会认关键字参数。
+    fresh = backend.request_json('/object_info', None, OBJECT_INFO_TIMEOUT)
+    if not isinstance(fresh, dict):
+        raise ValueError('节点注册表格式无效')
+    _OBJECT_INFO_CACHE['info'] = fresh
+    _OBJECT_INFO_CACHE['at'] = now
+    return fresh
+
+
+def warm_object_info(delay: float = 5.0) -> None:
+    """服务启动时后台预热节点表，别让第一个点生成的人白等半分钟。
+
+    ComfyUI 没起时 request_json 会立刻连接失败，这里静默跳过；下次请求还会再取。
+    """
+    def run() -> None:
+        try:
+            _object_info()
+        except Exception:
+            pass
+    threading.Timer(max(0.0, delay), run).start()
+
+
 @ROUTER.get('/api/keyframe-capability')
 def keyframe_capability(mode: Literal['reference', 'text', 'inpaint'] = 'reference', creative_profile: Literal['general', 'adult-realism', 'adult-anime'] = 'general') -> dict[str, Any]:
     try:
-        info = backend.request_json('/object_info')
-        if not isinstance(info, dict):
-            raise ValueError('节点注册表格式无效')
-        return keyframes.capability(info, mode, creative_profile)
+        return keyframes.capability(_object_info(), mode, creative_profile)
     except (OSError, HTTPError, URLError):
         # ComfyUI is started on demand: being down is a normal idle state, not a
         # missing-resource failure. The task runner brings it up before submitting.
@@ -191,7 +227,7 @@ def start_keyframe_task(project_id: str, request: KeyframeRequest) -> dict[str, 
         workspace = backend.resolve_registered_path(str(manifest['workspace_root']))
         prefix = f'导演工作台工作目录/{project_id}/关键帧/{task_id}'
         if request.mode == 'text':
-            payload = keyframes.prepare_text(task_id, request.prompt, workspace / 'keyframe-tasks', prefix, request.seed, request.width, request.height, request.creative_profile, request.steps, None, request.refine)
+            payload = keyframes.prepare_text(task_id, request.prompt, workspace / 'keyframe-tasks', prefix, request.seed, request.width, request.height, request.creative_profile, request.steps, None, request.refine, request.style_block)
             if resolution != 'native':
                 payload['output_size'] = {'resolution': resolution,
                     'ai_upscale': bool(request.ai_upscale),
@@ -214,13 +250,14 @@ def start_keyframe_task(project_id: str, request: KeyframeRequest) -> dict[str, 
                 slots.append({'role': '底图', 'path': str(reference), 'label': ''})
             for slot in request.references:
                 staged, material = reference_library.stage_material(backend.ROOT, slot.material_id, workspace)
-                slots.append({'role': slot.role, 'path': str(staged), 'label': material.get('title') or ''})
+                slots.append({'role': slot.role, 'path': str(staged), 'label': material.get('title') or '',
+                              'category': material.get('category') or ''})
             if not slots:
                 raise HTTPException(422, '参考图模式需要至少一个参考槽')
             payload = keyframes.prepare_text(task_id, request.prompt, workspace / 'keyframe-tasks', prefix,
                                              request.seed, request.width, request.height,
                                              request.creative_profile, request.steps, slots,
-                                             request.refine)
+                                             request.refine, request.style_block)
             if resolution != 'native':
                 payload['output_size'] = {'resolution': resolution,
                     'ai_upscale': bool(request.ai_upscale),
@@ -633,6 +670,19 @@ def complete_speech_task(task: dict[str, Any], receipt: dict[str, Any]) -> dict[
             backend.save_project_manifest(manifest)
             if task['project_id'] == backend.CURRENT_PROJECT_ID:
                 backend.apply_project_manifest(manifest)
+    if designed and receipt.get('output'):
+        # 生成成功后把试听小样写回音色卡：描述没改才覆盖原卡，改了不碰任何卡。
+        try:
+            preset_library.attach_sample(
+                str(request.get('voice_description') or ''),
+                source_card=task['payload'].get('source_card'),
+                sample_path=backend.root_relative_path(Path(receipt['output'])),
+                sample_duration_seconds=float(receipt.get('duration_seconds') or 0),
+                sample_text=str(request.get('text') or ''),
+            )
+        except (ValueError, OSError):
+            # 小样回写失败不该把已经生成的语音判成失败；下一次生成还能补。
+            pass
     backend.set_task(task['id'], status='succeeded', stop_requested=0, error=None,
              result=json.dumps(receipt, ensure_ascii=False))
     return backend.get_task(task['id']) or task
@@ -659,6 +709,8 @@ def start_speech_task(project_id: str, request: SpeechRequest) -> dict[str, Any]
     manifest = backend.require_project_manifest(project_id)
     engine = request.engine
     submission = {'kind': 'speech', 'text': request.text}
+    if request.source_card:
+        submission['source_card'] = request.source_card
     if request.mode == 'design':
         submission.update(mode='design', voice_description=request.voice_description)
     else:
@@ -711,6 +763,7 @@ def start_speech_task(project_id: str, request: SpeechRequest) -> dict[str, Any]
     except (OSError, ValueError) as exc:
         raise HTTPException(422, str(exc)) from exc
     payload.update(project_id=project_id, parent_task_id=request.parent_task_id,
+                   source_card=request.source_card,
                    submission_receipt={'key': request.idempotency_key, 'request': submission})
     if backend.PRIVATE_WORKSPACES is not None:
         backend.PRIVATE_WORKSPACES.freeze_owner(payload, project_id)

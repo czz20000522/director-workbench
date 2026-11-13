@@ -272,3 +272,36 @@ def test_saved_first_frames_with_the_same_title_never_overwrite_each_other(data_
     # 同样的内容再存一次不算新条目，也不改名
     again = library.save_first_frame(data_root, assets, first, '同名')
     assert again['filename'] == '同名.png'
+
+
+def test_save_material_variant_keeps_the_original_and_lands_in_the_same_sub_library(data_root: Path) -> None:
+    """液化/精修的结果是**新增**一张：原图不能被覆盖，分类要跟着原素材走。"""
+    target = next(item for item in library.build_index(data_root)['materials']
+                  if item['filename'].startswith('01 角色'))
+    original = Path(target['path'])
+    before = original.read_bytes()
+    saved = library.save_material_variant(data_root, target['id'], PNG, '于乘风 液化')
+    assert Path(saved['path']).parent == original.parent
+    assert Path(saved['path']).is_file()
+    assert original.read_bytes() == before
+    assert saved['category'] == target['category']
+    # 重新索引后同一子库里能看到它，标题读的是 labels.json 里那条可读名字。
+    library.invalidate(data_root)
+    titles = [item['title'] for item in library.build_index(data_root)['materials']]
+    assert '于乘风 液化' in titles
+
+
+def test_variant_api_rejects_unknown_material_and_non_png(data_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(backend, 'ROOT', data_root)
+    client = TestClient(backend.app)
+    missing = client.post('/api/reference-library/materials/mat-does-not-exist/variants',
+                          files={'file': ('x.png', PNG, 'image/png')})
+    assert missing.status_code == 422
+    material_id = client.get('/api/reference-library').json()['materials'][0]['id']
+    bad = client.post(f'/api/reference-library/materials/{material_id}/variants',
+                      files={'file': ('x.png', b'not a png', 'image/png')})
+    assert bad.status_code == 422
+    ok = client.post(f'/api/reference-library/materials/{material_id}/variants',
+                     files={'file': ('x.png', PNG, 'image/png')}, data={'title': '液化测试'})
+    assert ok.status_code == 200, ok.text
+    assert ok.json()['material']['title'] == '液化测试'

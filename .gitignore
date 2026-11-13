@@ -44,6 +44,8 @@
 !/backend/routers/queue_scheduler.py
 !/backend/routers/events_media.py
 !/backend/routers/dialogue_shots.py
+!/backend/routers/video_edit.py
+!/backend/video_edit.py
 !/backend/assembly_continuity.py
 !/backend/assembly_continuity_check.py
 !/backend/audio_master_tasks.py
@@ -88,6 +90,7 @@
 !/tools/
 /tools/*
 !/tools/qwen_image_t2i.py
+!/tools/qwen_union_control.py
 !/tools/index_tts_generate.py
 # Test-impact selection: the tool, its impact map and their contract tests. The map
 # names only repository-relative public paths.
@@ -158,6 +161,7 @@
 !/backend/workbench_config.py
 !/contracts/h3-guided-api.json
 !/contracts/pipeline-inputs.json
+!/contracts/style-blocks.json
 !/docs/github-collaboration.md
 !/enable_lan_access.ps1
 !/index.html
@@ -412,6 +416,7 @@
 !/src/material-library.css
 !/src/post-tools.css
 !/src/QuickTools.tsx
+!/src/VideoEditPanel.tsx
 
 !/tests/test_model_catalog.py
 !/backend/refinement.py
@@ -549,8 +554,30 @@
 !/tests/test_reference_library.py
 !/tests/test_script_library.py
 !/tests/test_task_queue.py
+!/tests/test_video_edit.py
 !/tests/test_vlm_observations.py
 !/tools/generate_dub.py
 !/tools/generate_dub_voxcpm.py
 !/tools/generate_speech_voxcpm.py
 !/start_services.ps1
+# 库面板二级页面与音色小样索引（11-10）
+!/src/LibraryExpand.tsx
+!/src/library-expand.css
+!/src/timbreSamples.ts
+# 提示词辅助层：译英按钮与风格锁（11-11）
+!/backend/style_blocks.py
+!/src/TranslateButton.tsx
+!/src/translate-button.css
+!/src/StyleBlockPicker.tsx
+!/src/style-block.css
+# 液化塑形与低强度精修（11-12）
+!/src/LiquifyDialog.tsx
+!/src/liquify.css
+# 剧本素材清单（11-12）
+!/src/ScriptBreakdown.tsx
+!/src/script-breakdown.css
+# 分镜提议与提示词读取分工（11-12）
+!/backend/shot_parse.py
+!/tests/test_shot_parse.py
+!/contracts/prompt-reading-roles.md
+!/src/VideoEditPanel.tsx

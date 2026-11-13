@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { LoaderCircle } from 'lucide-react';
 import { mediaUrl, request } from './api/client';
+import { notifyPresetLibraryChanged, rememberSample } from './timbreSamples';
 
 // 图生视频页内嵌的精简版配套制作：只留"写一句话就能出东西"的必要输入，
 // 其余参数走固定默认值；产物带 parent_task_id，所以能看出属于哪条视频。
@@ -25,7 +26,14 @@ export default function CompanionStudio({ projectId, parentTaskId, duration, kin
   const [busy, setBusy] = useState(false);
   const [task, setTask] = useState<Task | null>(null);
   const [error, setError] = useState('');
+  const [cardName, setCardName] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [savedNote, setSavedNote] = useState('');
+  const cardId = useId();
   const timer = useRef<number | undefined>(undefined);
+  // 提交时的音色描述才是这次结果的身份证：生成后用户可能继续改输入框，
+  // 用小样索引按描述回挂时要认准提交那一刻的原文。
+  const submitted = useRef<{ description: string; line: string } | null>(null);
 
   useEffect(() => () => { if (timer.current) window.clearTimeout(timer.current); }, []);
 
@@ -45,7 +53,8 @@ export default function CompanionStudio({ projectId, parentTaskId, duration, kin
   async function submit() {
     const value = text.trim();
     if (!value) { setError(kind === 'music' ? '先写风格标签' : '先写音色描述'); return; }
-    setBusy(true); setError(''); setTask(null);
+    setBusy(true); setError(''); setTask(null); setSavedNote('');
+    submitted.current = { description: value, line: line.trim() };
     try {
       const body = kind === 'music'
         ? { tags: value, lyrics: '', duration_seconds: Math.max(4, Math.round(duration)), bpm: 90,
@@ -66,6 +75,33 @@ export default function CompanionStudio({ projectId, parentTaskId, duration, kin
 
   const output = task?.result?.output || task?.result?.audio_output || '';
   const running = Boolean(task && !terminals.includes(task.status));
+
+  // 生成成功后把小样按音色描述挂到音色库：描述没改 → 覆盖那张卡的小样；
+  // 描述改了 → 记成另一条音色。这样回库里可直接试听，不必重新生成。
+  useEffect(() => {
+    if (kind !== 'timbre' || task?.status !== 'succeeded' || !output) return;
+    const source = submitted.current;
+    if (!source?.description) return;
+    rememberSample({ path: output, description: source.description, text: source.line, source: 'companion' });
+  }, [kind, task?.status, output]);
+
+  async function saveCard() {
+    const name = cardName.trim();
+    if (!name || !submitted.current?.description) return;
+    setSaving(true); setError(''); setSavedNote('');
+    try {
+      await request(`/api/preset-library/timbre/${encodeURIComponent(name)}`, {
+        init: { method: 'PUT' },
+        json: { params: { engine: 'voxcpm-2', voice_description: submitted.current.description,
+          text: submitted.current.line || '这是一段音色试听，用来判断质感。' } },
+      });
+      notifyPresetLibraryChanged();
+      setSavedNote(`已存入音色库：${name}`);
+      setCardName('');
+    } catch (reason) {
+      setError(reason instanceof Error ? `存入音色库失败：${reason.message}` : '存入音色库未完成');
+    } finally { setSaving(false); }
+  }
 
   return <div className="qt-companion">
     <div className="qt-companion-head">
@@ -91,6 +127,16 @@ export default function CompanionStudio({ projectId, parentTaskId, duration, kin
     {output && <div className="qt-companion-result">
       <audio controls preload="metadata" src={mediaUrl(output)} aria-label={kind === 'music' ? '配乐试听' : '音色试听'} />
       <a className="button secondary compact" href={mediaUrl(output)} download={`${kind === 'music' ? '配乐' : '音色'}-${task?.id.slice(0, 8)}.mp3`}>下载</a>
+    </div>}
+    {kind === 'timbre' && output && <div className="qt-companion-save">
+      <div className="qt-companion-save-head">
+        <label htmlFor={cardId}>把设计的音色存进音色库</label>
+        <input id={cardId} value={cardName} maxLength={40}
+          placeholder="卡片名称，例如：纪录片旁白" onChange={event => setCardName(event.target.value)} />
+        <button className="button secondary compact" type="button" disabled={saving || !cardName.trim()}
+          onClick={() => void saveCard()}>{saving ? '存入中…' : '存入音色库'}</button>
+      </div>
+      <small>{savedNote ? `${savedNote} · 小样已按描述挂上，回音色库可直接试听` : '小样已按这段描述挂到音色库对应卡片，不用重新生成就能试听；填名字可另存一张新卡。'}</small>
     </div>}
     {error && <p className="qt-error" role="alert">{error}</p>}
   </div>;

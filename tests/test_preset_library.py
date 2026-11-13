@@ -12,17 +12,19 @@ MUSIC = {'tags': '悬疑氛围，弦乐铺底', 'bpm': 88, 'keyscale': 'A minor'
          'duration_seconds': 24, 'language': 'unknown'}
 
 
-def test_builtin_cards_are_read_only_starting_points():
-    cards = preset_library.cards('timbre')
+def test_builtin_cards_are_read_only_starting_points(tmp_path):
+    # 传空库文件：真实 config 里可能已经有用户卡片，不该影响内置卡的断言。
+    empty = tmp_path / 'empty.json'
+    cards = preset_library.cards('timbre', empty)
     assert all(card['builtin'] and card['modified'] is False for card in cards)
     assert '沉稳中年旁白' in {card['name'] for card in cards}
-    music = preset_library.cards('music')
+    music = preset_library.cards('music', empty)
     assert music and all(set(card['params']) <= set(MUSIC) for card in music)
 
 
-def test_builtin_timbre_cards_only_promise_what_voxcpm_can_do():
+def test_builtin_timbre_cards_only_promise_what_voxcpm_can_do(tmp_path):
     # IndexTTS cannot design a timbre from words, so no built-in may pretend otherwise.
-    for card in preset_library.cards('timbre'):
+    for card in preset_library.cards('timbre', tmp_path / 'empty.json'):
         assert card['params']['engine'] == 'voxcpm-2'
         assert card['params']['voice_description'].strip()
 
@@ -119,3 +121,97 @@ def test_http_library_lists_saves_and_deletes(preset_client):
     assert client.delete('/api/preset-library/music/%E6%B2%A1%E6%9C%89%E7%9A%84').status_code == 404
     assert client.delete('/api/preset-library/timbre/%E6%88%91%E7%9A%84%E6%97%81%E7%99%BD').json() == {'removed': True}
     assert json.loads((backend.ROOT / 'config' / 'preset-library.json').read_text(encoding='utf-8'))['timbre'] == []
+
+
+def test_timbre_card_accepts_sample_fields(tmp_path):
+    path = tmp_path / 'preset-library.json'
+    params = {**TIMBRE, 'sample_path': 'output/x.wav',
+              'sample_duration_seconds': 5.12, 'sample_text': '试听台词'}
+    preset_library.save('timbre', '带小样', params, path=path)
+    card = next(item for item in preset_library.cards('timbre', path) if item['name'] == '带小样')
+    assert card['params']['sample_path'] == 'output/x.wav'
+    assert card['params']['sample_duration_seconds'] == 5.12
+    assert card['params']['sample_text'] == '试听台词'
+
+
+def test_attach_sample_prefers_card_name_then_description(tmp_path):
+    path = tmp_path / 'preset-library.json'
+    preset_library.save('timbre', '甲', {'engine': 'voxcpm-2', 'voice_description': '描述甲'}, path=path)
+    preset_library.save('timbre', '乙', {'engine': 'voxcpm-2', 'voice_description': '描述乙'}, path=path)
+
+    # 名字优先：描述没改 → 只写这张卡。
+    assert preset_library.attach_sample('描述甲', source_card='甲', sample_path='output/a.wav',
+                                        sample_duration_seconds=3.2, sample_text='台词甲', path=path) == '甲'
+    cards = {item['name']: item for item in preset_library.cards('timbre', path)}
+    assert cards['甲']['params']['sample_path'] == 'output/a.wav'
+    assert 'sample_path' not in cards['乙']['params']
+
+    # 描述改了 → 一张都不写（包括名字指向的那张）。
+    assert preset_library.attach_sample('描述乙', source_card='甲', sample_path='output/b.wav',
+                                        sample_duration_seconds=2.0, path=path) is None
+    cards = {item['name']: item for item in preset_library.cards('timbre', path)}
+    assert 'sample_path' not in cards['乙']['params']
+
+    # 卡片不在了 → 退回按描述精确匹配。
+    assert preset_library.attach_sample('描述乙', source_card='已改名', sample_path='output/c.wav',
+                                        sample_duration_seconds=1.5, path=path) == '乙'
+
+
+def test_attach_sample_creates_builtin_override(tmp_path):
+    path = tmp_path / 'preset-library.json'
+    builtin = next(item for item in preset_library.cards('timbre', path) if item['name'] == '沉稳中年旁白')
+    description = builtin['params']['voice_description']
+    assert preset_library.attach_sample(description, source_card='沉稳中年旁白',
+                                        sample_path='output/voice.wav',
+                                        sample_duration_seconds=4.5, sample_text='试听', path=path) == '沉稳中年旁白'
+    card = next(item for item in preset_library.cards('timbre', path) if item['name'] == '沉稳中年旁白')
+    assert card['modified'] is True
+    assert card['params']['sample_path'] == 'output/voice.wav'
+    assert card['params']['sample_text'] == '试听'
+
+
+def test_timbre_card_accepts_sample_fields(tmp_path):
+    path = tmp_path / 'preset-library.json'
+    params = {**TIMBRE, 'sample_path': 'output/x.wav',
+              'sample_duration_seconds': 5.12, 'sample_text': '试听台词'}
+    preset_library.save('timbre', '带小样', params, path=path)
+    card = next(item for item in preset_library.cards('timbre', path) if item['name'] == '带小样')
+    assert card['params']['sample_path'] == 'output/x.wav'
+    assert card['params']['sample_duration_seconds'] == 5.12
+    assert card['params']['sample_text'] == '试听台词'
+
+
+def test_attach_sample_prefers_card_name_then_description(tmp_path):
+    path = tmp_path / 'preset-library.json'
+    preset_library.save('timbre', '甲', {'engine': 'voxcpm-2', 'voice_description': '描述甲'}, path=path)
+    preset_library.save('timbre', '乙', {'engine': 'voxcpm-2', 'voice_description': '描述乙'}, path=path)
+
+    # 名字优先：描述没改 → 只写这张卡。
+    assert preset_library.attach_sample('描述甲', source_card='甲', sample_path='output/a.wav',
+                                        sample_duration_seconds=3.2, sample_text='台词甲', path=path) == '甲'
+    cards = {item['name']: item for item in preset_library.cards('timbre', path)}
+    assert cards['甲']['params']['sample_path'] == 'output/a.wav'
+    assert 'sample_path' not in cards['乙']['params']
+
+    # 描述改了 → 一张都不写（包括名字指向的那张）。
+    assert preset_library.attach_sample('描述乙', source_card='甲', sample_path='output/b.wav',
+                                        sample_duration_seconds=2.0, path=path) is None
+    cards = {item['name']: item for item in preset_library.cards('timbre', path)}
+    assert 'sample_path' not in cards['乙']['params']
+
+    # 卡片不在了 → 退回按描述精确匹配。
+    assert preset_library.attach_sample('描述乙', source_card='已改名', sample_path='output/c.wav',
+                                        sample_duration_seconds=1.5, path=path) == '乙'
+
+
+def test_attach_sample_creates_builtin_override(tmp_path):
+    path = tmp_path / 'preset-library.json'
+    builtin = next(item for item in preset_library.cards('timbre', path) if item['name'] == '沉稳中年旁白')
+    description = builtin['params']['voice_description']
+    assert preset_library.attach_sample(description, source_card='沉稳中年旁白',
+                                        sample_path='output/voice.wav',
+                                        sample_duration_seconds=4.5, sample_text='试听', path=path) == '沉稳中年旁白'
+    card = next(item for item in preset_library.cards('timbre', path) if item['name'] == '沉稳中年旁白')
+    assert card['modified'] is True
+    assert card['params']['sample_path'] == 'output/voice.wav'
+    assert card['params']['sample_text'] == '试听'

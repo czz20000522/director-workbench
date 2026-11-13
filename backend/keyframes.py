@@ -6,10 +6,90 @@ import shutil
 from pathlib import Path, PurePosixPath
 
 import av
+from PIL import Image, ImageDraw, ImageFilter
 
+from tools import qwen_union_control
 from tools.qwen_image_edit import graph
-from tools.qwen_image_t2i import graph as text_graph
+from tools.qwen_image_t2i import CONTROL_STRENGTH, graph as text_graph
+from . import h3_duration
 from . import inpaint_recipe
+from . import style_blocks
+
+
+def _crop_to_aspect(source: Path, width: int, height: int, target: Path) -> Path:
+    """把参考图按目标比例裁切，保持原始像素尺寸（不放大）。
+
+    Union 的参考编码会用第一张参考图决定输出尺寸；这里只统一比例，
+    让 ReferenceEncode 自己按 resolution 缩放。提前放大到 1344×768 会让人脸
+    占满参考画面，模型容易把背景也画成一条竖幅面板。
+    """
+    try:
+        with Image.open(source) as image:
+            image = image.convert('RGB')
+            # 视频首帧统一用 16:9 / 9:16 的参考比例；用 1344/768=1.75 这类
+            # 近似的画布比例会让参考人像的裁切位置和训练分布对不上。
+            ratio = 16 / 9 if width >= height else 9 / 16
+            current = image.width / image.height
+            if current > ratio:
+                crop_width = max(1, round(image.height * ratio))
+                left = max(0, (image.width - crop_width) // 2)
+                image.crop((left, 0, left + crop_width, image.height)).save(target)
+            else:
+                crop_height = max(1, round(image.width / ratio))
+                # 人脸参考取「额头到肩」这一段，比正中裁到鼻子更接近常用人像参考。
+                top = max(0, min(image.height - crop_height, round(image.height * 0.08)))
+                image.crop((0, top, image.width, top + crop_height)).save(target)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f'参考图无法裁切：{source.name}') from exc
+    return target
+
+
+def _fit_control_image(source: Path, width: int, height: int, target: Path,
+                       background_source: Path | None = None) -> Path:
+    """把姿势控制图按比例放进目标画幅，边缘做羽化过渡。
+
+    姿势库常见 3:4（900×1200），成片可能是 16:9。直接拉伸会把人体压扁；
+    硬补边又会在控制图里留下一条竖线，模型会照着画成白墙/侧栏。
+    这里保持比例居中，并把贴合边缘的 alpha 渐变到背景色，消除硬边。
+
+    ``background_source`` 给了参考图时，用参考图角落的墙面纹理做底，
+    比纯色更接近真实背景，模型不会把补边区画成一块白色板子。
+    """
+    try:
+        with Image.open(source) as image:
+            image = image.convert('RGB')
+            scale = min(width / image.width, height / image.height)
+            fitted = image.resize((max(1, round(image.width * scale)),
+                                   max(1, round(image.height * scale))), Image.LANCZOS)
+            corners = [fitted.getpixel((0, 0)), fitted.getpixel((fitted.width - 1, 0)),
+                       fitted.getpixel((0, fitted.height - 1)),
+                       fitted.getpixel((fitted.width - 1, fitted.height - 1))]
+            background = tuple(sum(pixel[channel] for pixel in corners) // 4 for channel in range(3))
+            if background_source is not None:
+                with Image.open(background_source) as wall:
+                    wall = wall.convert('RGB')
+                    patch = wall.crop((0, 0, min(80, wall.width), min(80, wall.height)))
+                    canvas = patch.resize((width, height), Image.LANCZOS).filter(ImageFilter.GaussianBlur(6))
+            else:
+                canvas = Image.new('RGB', (width, height), background)
+            mask = Image.new('L', fitted.size, 255)
+            draw = ImageDraw.Draw(mask)
+            feather = max(1, min(96, fitted.width // 8, fitted.height // 8))
+            pad_x = width - fitted.width
+            pad_y = height - fitted.height
+            for step in range(feather):
+                alpha = int(255 * step / feather)
+                if pad_x > 0:
+                    draw.line([(step, 0), (step, fitted.height - 1)], fill=alpha)
+                    draw.line([(fitted.width - 1 - step, 0), (fitted.width - 1 - step, fitted.height - 1)], fill=alpha)
+                if pad_y > 0:
+                    draw.line([(0, step), (fitted.width - 1, step)], fill=alpha)
+                    draw.line([(0, fitted.height - 1 - step), (fitted.width - 1, fitted.height - 1 - step)], fill=alpha)
+            canvas.paste(fitted, ((width - fitted.width) // 2, (height - fitted.height) // 2), mask)
+            canvas.save(target)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f'姿势控制图无法读取：{source.name}') from exc
+    return target
 
 
 def _image_loras(profile: str | None) -> list[str]:
@@ -69,7 +149,7 @@ def prepare_text(task_id: str, prompt: str, snapshot_root: Path, output_prefix: 
                  seed: int, width: int = 768, height: int = 1344,
                  creative_profile: str = 'general', steps: int = 8,
                  references: list[dict] | None = None,
-                 refine: bool = False) -> dict:
+                 refine: bool = False, style_block: str | None = None) -> dict:
     if not task_id or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for c in task_id):
         raise ValueError('关键帧任务 ID 无效')
     directory = snapshot_root / task_id
@@ -84,18 +164,64 @@ def prepare_text(task_id: str, prompt: str, snapshot_root: Path, output_prefix: 
         shutil.copy2(source, target)
         frozen.append(target.resolve())
         slots.append({'role': str(item.get('role') or ''), 'label': str(item.get('label') or ''),
+                      'category': str(item.get('category') or ''),
                       'path': str(target.resolve())})
-    prefix_text = build_reference_prefix(slots)
-    graph_prompt = f'{prefix_text}。{prompt}' if prefix_text else prompt
-    recipe = text_graph(graph_prompt, output_prefix, seed, width, height,
-                        None, steps, frozen or None, _image_loras(creative_profile),
-                        refine=refine)
+    prefix_text = build_reference_prefix([slot for slot in slots if slot['role'] != '姿势'])
+    semantic = [slot for slot in slots if slot['role'] != '姿势']
+    control_slot = next((slot for slot in slots if slot['role'] == '姿势'), None)
+    control_path = None
+    control_mode = None
+    if control_slot is not None:
+        # 姿势槽走 ControlNet 的结构控制图；按目标画幅补边，避免骨架被拉伸。
+        # 线稿也能用，但实测线稿上的关节圆圈会被画进衣服，深度图更干净。
+        control_path = _fit_control_image(
+            Path(control_slot['path']), width, height, directory / 'pose-control.png',
+            background_source=Path(semantic[0]['path']) if semantic else None)
+        control_mode = 'Lineart' if '线稿' in control_slot.get('category', '') else 'Depth'
+    graph_parts = [part for part in (
+        '姿势按结构控制图执行' if control_path else '',
+        prefix_text,
+    ) if part]
+    graph_prompt = (f'{"；".join(graph_parts)}。{prompt}' if graph_parts else prompt)
+    # 风格锁只加在送模型的这一份前面：prompt 仍是用户原文，回看时能分清哪句是他写的。
+    graph_prompt, applied_style = style_blocks.apply(graph_prompt, style_block)
+    if control_path is not None and len(semantic) > 3:
+        # Union 的参考编码最多吃 3 张图。以前这里用 semantic[1:3] 静默截断，
+        # 提示词却仍会称呼「参考图4」，模型只能凭空编。宁可报错也不悄悄丢。
+        dropped = '」「'.join(slot.get('label') or slot.get('role') or '参考图'
+                             for slot in semantic[3:])
+        raise ValueError(
+            f'带姿势控制时最多 3 张参考图（当前 {len(semantic)} 张）：'
+            f'请先去掉「{dropped}」中的一张，再用「继续改这张」补细节。')
+    if control_path is not None and semantic:
+        # Union 的参考编码用第一张图决定画幅，先裁到目标比例，避免补边变成侧栏；
+        # 其余参考（造型/服装）作为 image_2、image_3 补充外观。
+        main_reference = _crop_to_aspect(Path(semantic[0]['path']), width, height,
+                                         directory / 'reference-main.png')
+        recipe = qwen_union_control.graph(
+            graph_prompt, output_prefix, seed, width, height,
+            [main_reference, *[Path(slot['path']) for slot in semantic[1:3]]],
+            control_path, control_mode=control_mode or 'Depth',
+            control_strength=1.0, steps=steps, lora_names=_image_loras(creative_profile))
+    else:
+        recipe = text_graph(graph_prompt, output_prefix, seed, width, height,
+                            None, steps, [Path(slot['path']) for slot in semantic] or None,
+                            _image_loras(creative_profile),
+                            refine=refine, control_image=control_path,
+                            control_strength=CONTROL_STRENGTH)
     workflow = directory / 'workflow.json'
     workflow.write_text(json.dumps(recipe, ensure_ascii=False, indent=2), encoding='utf-8')
     request = {'task_id': task_id, 'mode': 'reference' if slots else 'text',
-               'engine': 'Qwen Image 2.1 · 多参考' if slots else 'Qwen Image 2.1',
+               'engine': ('Qwen Image 2.1 · 参考图 + 姿势控制' if control_path and semantic else
+                          'Qwen Image 2.1 · 多参考 + 姿势控制' if control_path else
+                          'Qwen Image 2.1 · 多参考' if slots else 'Qwen Image 2.1'),
                'creative_profile': creative_profile, 'prompt': prompt, 'prompt_for_model': graph_prompt,
+               'style_block': applied_style,
                'reference_prefix': prefix_text, 'references': slots,
+               'control': ({'role': '姿势', 'source': control_slot['path'],
+                            'path': str(control_path), 'mode': control_mode,
+                            'strength': 1.0 if semantic else CONTROL_STRENGTH}
+                           if control_path and control_slot else None),
                'seed': seed, 'output_prefix': output_prefix, 'width': width, 'height': height,
                'steps': steps, 'refine': refine}
     (directory / 'request.json').write_text(json.dumps(request, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -193,8 +319,11 @@ def read_result(history: dict, prompt_id: str, payload: dict, output_root: Path)
     entry = history.get(prompt_id)
     if not entry or entry.get('status', {}).get('status_str') not in {'success', 'error'}:
         return None
+    # 「耗时」要按 ComfyUI 自己的毫秒时间戳算，不能拿 updated_at 减 created_at：
+    # 排队时间和事后人工核对回执的时间都不属于生成耗时（曾出现 21 秒的图显示 9 分 32 秒）。
+    timing = h3_duration.history_timing(entry)
     if entry['status']['status_str'] == 'error':
-        return {'status': 'error', 'raw_status': entry['status']}
+        return {'status': 'error', 'raw_status': entry['status'], 'comfy_timing': timing}
     images = entry.get('outputs', {}).get('18', {}).get('images', [])
     if len(images) != 1 or images[0].get('type') != 'output':
         raise ValueError('关键帧成功回执没有唯一的保存图片')
@@ -206,7 +335,8 @@ def read_result(history: dict, prompt_id: str, payload: dict, output_root: Path)
         raise ValueError('关键帧输出与本次任务不匹配')
     with av.open(str(output)) as media:
         frame = next(media.decode(video=0))
-    return {'status': 'success', 'output': str(output), 'width': frame.width, 'height': frame.height}
+    return {'status': 'success', 'output': str(output), 'width': frame.width, 'height': frame.height,
+            'comfy_timing': timing}
 
 
 def prepare(task_id: str, prompt: str, reference: Path, snapshot_root: Path,

@@ -13,7 +13,10 @@ MAX_VIDEO_PIXELS = 256_000_000
 
 
 class EnhancementRequest(BaseModel):
-    source: str = Field(min_length=1, max_length=2000)
+    # 两条互斥的输入路径：source 指本作产物/本机上传/清晰化库成品，
+    # material_id 指素材库里的一张图（服务端暂存到本作后再处理）。
+    source: str = Field(default='', max_length=2000)
+    material_id: str = Field(default='', max_length=120)
     idempotency_key: str = Field(min_length=1, max_length=160)
 
 

@@ -1,0 +1,14 @@
+/* 译英按钮：主键 + 通道下拉合在一个胶囊里，窄面板里也不占地方。 */
+.tb { position: relative; display: inline-flex; align-items: center; }
+.tb-main { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border: 1px solid var(--sf-line); border-radius: 999px 0 0 999px; background: #fff; color: var(--sf-ink); font-size: 11px; line-height: 1.5; cursor: pointer; }
+.tb-main:hover:not(:disabled) { border-color: #c9d4ea; background: #f7f9ff; }
+.tb-caret { display: grid; place-items: center; padding: 3px 4px; border: 1px solid var(--sf-line); border-left: 0; border-radius: 0 999px 999px 0; background: #fff; color: var(--sf-muted); cursor: pointer; }
+.tb-caret:hover:not(:disabled) { background: #f7f9ff; }
+.tb-main:disabled, .tb-caret:disabled { opacity: .45; cursor: not-allowed; }
+.tb-menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 30; display: grid; min-width: 132px; padding: 4px; border: 1px solid var(--sf-line); border-radius: 10px; background: #fff; box-shadow: 0 10px 24px rgba(16, 24, 40, .12); }
+.tb-menu button { padding: 6px 8px; border: 0; border-radius: 6px; background: none; color: var(--sf-ink); font-size: 11px; text-align: left; cursor: pointer; }
+.tb-menu button:hover { background: #f2f5fb; }
+.tb-undo { margin-left: 6px; padding: 0; border: 0; background: none; color: var(--sf-amber); font-size: 10px; text-decoration: underline; cursor: pointer; white-space: nowrap; }
+.tb-error { margin-left: 6px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #b42332; font-size: 10px; }
+/* 塞进已有的 label 行时用：文字和按钮竖对齐，不要被行高拉开。 */
+.tb-row { display: inline-flex; align-items: center; gap: 8px; }

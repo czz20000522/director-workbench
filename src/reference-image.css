@@ -30,6 +30,11 @@
 .ri-write { display: grid; gap: 10px; }
 .ri-panel .ri-identify { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border: 1px solid #c9d4ea; border-radius: 999px; background: #eef2fb; color: var(--sf-amber); font-size: 11px; cursor: pointer; }
 .ri-panel .ri-identify:disabled { opacity: .45; cursor: not-allowed; }
+/* 润色是第二动作：描边不填色，不跟「识别内容」抢注意力。 */
+.ri-panel .ri-polish { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border: 1px solid var(--sf-line); border-radius: 999px; background: #fff; color: var(--sf-ink); font-size: 11px; cursor: pointer; }
+.ri-panel .ri-polish:hover:not(:disabled) { border-color: #c9d4ea; background: #f7f9ff; }
+.ri-panel .ri-polish:disabled { opacity: .45; cursor: not-allowed; }
+.ri-undo { margin-left: 8px; padding: 0; border: 0; background: none; color: var(--sf-amber); font-size: 10px; text-decoration: underline; cursor: pointer; }
 .ri-vision { display: inline-flex; align-items: center; gap: 6px; }
 .ri-vision-tabs { display: inline-flex; padding: 2px; border: 1px solid var(--sf-line); border-radius: 8px; background: #fff; }
 .ri-vision-tabs button { padding: 2px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--sf-muted); font-size: 10px; cursor: pointer; }
@@ -53,10 +58,31 @@
 
 .ri-message { margin: 0; }
 .ri-results { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 236px)); gap: 12px; justify-content: start; }
+/* 结果区顶栏：张数 + 批量删除。结果累加不封顶，所以要有个地方能一次清一批。 */
+.ri-results-wrap { display: grid; gap: 10px; }
+.ri-results-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.ri-results-title { display: inline-flex; align-items: baseline; gap: 8px; color: var(--sf-ink); font-size: 12px; font-weight: 600; }
+.ri-results-title small { color: var(--sf-muted); font-size: 10px; font-weight: 400; }
+.ri-results-actions { display: inline-flex; align-items: center; gap: 6px; }
+.ri-results-btn { padding: 4px 10px; border: 1px solid var(--sf-line); border-radius: 999px; background: #fff; color: var(--sf-ink); font-size: 11px; cursor: pointer; }
+.ri-results-btn:hover:not(:disabled) { border-color: #c9d4ea; background: #f7f9ff; }
+.ri-results-btn:disabled { opacity: .45; cursor: not-allowed; }
+.ri-results-btn.is-danger { border-color: #edc9c4; color: #b42332; }
+.ri-results-btn.is-danger:hover:not(:disabled) { background: #fdeeee; }
+/* 勾选态：右上角角标 + 卡片描边，扫一眼就知道选了哪几张。 */
+.ri-card.is-picked .ri-open, .ri-card.is-picked .ri-placeholder { outline: 2px solid var(--sf-amber); outline-offset: -2px; }
+.ri-card { position: relative; }
+.ri-pick { position: absolute; top: 6px; right: 6px; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; background: rgba(255,255,255,.92); color: #6d7480; box-shadow: 0 1px 3px rgba(16,24,40,.18); }
+.ri-pick.is-on { background: var(--sf-amber); color: #fff; }
 .ri-card { margin: 0; display: grid; gap: 5px; }
 /* 不锁比例：参考图可能是横的、方的；锁 9/16 会把横版结果裁成竖条。 */
 .ri-card img { display: block; width: 100%; height: auto; border-radius: 9px; border: 1px solid var(--sf-line); background: #f3f4f7; }
 .ri-placeholder { aspect-ratio: 3 / 4; display: grid; place-items: center; gap: 6px; border: 1px dashed #cfd6e2; border-radius: 9px; background: #fbfcfe; color: var(--sf-muted); font-size: 11px; }
+/* 生成中：步级进度条压在「生成中」下面，窄卡片里也放得下。 */
+.ri-progress { display: grid; gap: 5px; width: 82%; }
+.ri-progress-bar { display: block; height: 4px; border-radius: 999px; background: #e4e8f0; overflow: hidden; }
+.ri-progress-bar > span { display: block; height: 100%; border-radius: 999px; background: var(--sf-amber); transition: width .3s ease; }
+.ri-progress small { color: var(--sf-muted); font-size: 10px; text-align: center; }
 .ri-card figcaption { color: var(--sf-muted); font-size: 10px; }
 .ri-card.is-failed img, .ri-card.is-failed .ri-placeholder { border-color: #e6c3bb; background: #fdf4f2; }
 

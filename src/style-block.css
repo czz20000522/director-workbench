@@ -1,0 +1,6 @@
+/* 风格锁选择器：一行放下图标 + 下拉 + 一句说明，跟提示词字段头并排。 */
+.sb { display: inline-flex; align-items: center; gap: 5px; color: var(--sf-muted); font-size: 11px; }
+.sb svg { flex: none; opacity: .75; }
+.sb select { max-width: 190px; padding: 3px 6px; border: 1px solid var(--sf-line); border-radius: 7px; background: #fff; color: var(--sf-ink); font-size: 11px; }
+.sb select:disabled { opacity: .5; }
+.sb small { color: var(--sf-muted); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }

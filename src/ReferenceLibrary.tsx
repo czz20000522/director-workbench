@@ -536,6 +536,7 @@ export function MaterialLibraryPanel({ onUseFrame }: { onUseFrame?: (path: strin
         {refreshing ? <LoaderCircle size={14} className="sf-spin" /> : <RefreshCw size={14} />}
       </button>
     </header>
+    <p className="rl-note">共享区 · 所有作品和单步工具共用，不属于任何一部作品；删作品不会带走这里的参考图。</p>
     <label className="rl-mat-search">
       <Search size={13} />
       <input value={query} onChange={event => setQuery(event.target.value)}

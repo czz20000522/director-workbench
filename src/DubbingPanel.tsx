@@ -6,6 +6,7 @@ import MaterialSelect, { type MaterialOption } from './MaterialSelect';
 import { ApiError, mediaUrl, request as apiRequest } from './api/client';
 import { parseSubtitles } from './subtitles';
 import { consumeBringIn, onBringIn } from './libraryBus';
+import { sampleSrc } from './timbreSamples';
 
 type VideoAsset = { id: string; title: string };
 type Cue = { at_seconds: number; text: string; gain?: number };
@@ -89,6 +90,8 @@ export default function DubbingPanel({ projectId, options, videos, onBrowse, onC
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [capability, setCapability] = useState<Capability | null>(null);
+  // 音色库带入时一起带来的可试听小样：只影响这块提示条，不进提交参数。
+  const [broughtSample, setBroughtSample] = useState<{ path: string; description: string } | null>(null);
   const base = `/api/projects/${encodeURIComponent(projectId)}`;
   const pendingKey = saved.pending?.idempotency_key;
   // While a submission is pending the form is locked, so the draft still holds
@@ -132,6 +135,9 @@ export default function DubbingPanel({ projectId, options, videos, onBrowse, onC
         timbre: description ? 'design' as const : 'reference' as const,
         voice_description: description || current.current.draft.voice_description,
         voice_reference: reference || current.current.draft.voice_reference } });
+      const rawSample = params.sample_path ?? params.sample_url;
+      setBroughtSample(typeof rawSample === 'string' && rawSample.trim()
+        ? { path: rawSample.trim(), description: description || '音色库带来的样本' } : null);
       setMessage('已从音色库带入音色；生成前请确认台词、时间点和参考音频。');
     };
     const queued = consumeBringIn('timbre');
@@ -246,6 +252,13 @@ export default function DubbingPanel({ projectId, options, videos, onBrowse, onC
       <div className="sf-post-section-head"><h2 className="sf-post-title">锚点配音</h2><p className="sf-post-status">{task ? (labels[task.status] || task.status) : '视频生成后配音'}</p></div>
       <p className="sf-post-hint">选一个已生成的视频，为每句台词填写开始时间。视频画面原样保留；原片音轨可保留（可调音量）或静音。输出配音视频和完整音轨两个候选，不会自动拆分或采用。</p>
       <CreativeSettingsBar kind="dubbing" values={voiceValues} onApply={applyVoiceSetting} />
+      {broughtSample && <div className="sf-post-subblock lib-sample-bar">
+        <div className="sf-post-section-head"><h3 className="sf-post-subtitle">音色库带来的小样</h3>
+          <p className="sf-post-meta">直接试听，不用重新生成</p></div>
+        <p className="sf-post-hint">{broughtSample.description}</p>
+        <audio controls preload="none" src={sampleSrc(broughtSample.path)} aria-label="音色库带来的音色小样" />
+        <div className="sf-post-actions"><button className="button secondary compact" type="button" onClick={() => setBroughtSample(null)}>收起小样</button></div>
+      </div>}
       <div className="sf-post-fields">
         <div className="sf-post-field"><label htmlFor={`${prefix}-video`}>视频</label><select id={`${prefix}-video`} value={draft.source_asset_id} disabled={locked} onChange={event => change('source_asset_id', event.target.value)}>
           <option value="">选择视频</option>{videos.map(video => <option key={video.id} value={video.id}>{video.title}</option>)}</select></div>

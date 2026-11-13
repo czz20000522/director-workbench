@@ -52,6 +52,78 @@ def test_quick_tasks_are_titled_by_the_prompt_that_made_them(quick_client):
     assert excerpt.endswith('…') and len(excerpt) <= 47 and excerpt.startswith('我想生成一张雨夜里的城市街角')
 
 
+def test_quick_outputs_can_be_adopted_into_a_work_without_duplicates(quick_client):
+    """草稿箱的产物要能归入正式作品：复制一份登记成该作品的资产，重复归入不复制第二份。"""
+    client, _ = quick_client
+    task = _submit(client, '西湖边的人像', seed=31)
+    draft_root = backend.resolve_registered_path(
+        str(backend.load_project_manifest(backend.QUICK_PROJECT_ID)['workspace_root']))
+    draft = draft_root / 'assets' / 'draft.png'
+    draft.parent.mkdir(parents=True, exist_ok=True)
+    draft.write_bytes(b'draft image bytes')
+    backend.set_task(task['id'], status='succeeded', result=json.dumps({'output': str(draft)}))
+
+    created = client.post('/api/projects/create', json={
+        'series': '测试', 'title': '归入测试', 'project_id': 'adopt-test', 'creation_mode': 'advanced'})
+    assert created.status_code == 200, created.text
+    pid = created.json()['project']['id']
+    url = f"/api/quick-tasks/{task['id']}/adopt"
+
+    first = client.post(url, json={'project_id': pid})
+    assert first.status_code == 200, first.text
+    body = first.json()
+    assert body['adopted'] == 1 and body['already_adopted'] == 0
+    asset = body['assets'][0]
+    assert asset['kind'] == 'image' and asset['image_path'].endswith('.png')
+    assert asset['adopted_from']['task_id'] == task['id']
+    copied = backend.resolve_registered_path(asset['image_path'])
+    assert copied.is_file() and copied.read_bytes() == b'draft image bytes'
+    assert copied.is_relative_to(backend.resolve_registered_path(
+        str(backend.load_project_manifest(pid)['workspace_root'])))
+
+    again = client.post(url, json={'project_id': pid}).json()
+    assert again['adopted'] == 0 and again['already_adopted'] == 1
+    adopted = [item for item in backend.load_project_manifest(pid)['assets']
+               if isinstance(item, dict) and str(item.get('id', '')).startswith('adopt-')]
+    assert len(adopted) == 1
+    # 草稿箱自己不能作为归入目标。
+    assert client.post(url, json={'project_id': backend.QUICK_PROJECT_ID}).status_code == 422
+
+
+def test_draft_video_with_adopt_into_is_adopted_after_success(quick_client, monkeypatch, tmp_path):
+    """「生成到作品」的视频任务：仍落草稿箱，成功后由执行器自动复制归入该作品。"""
+    import time
+    import uuid
+    client, _ = quick_client
+    graph = tmp_path / 'video.json'
+    graph.write_text('{}', encoding='utf-8')
+    task_id = str(uuid.uuid4())
+    payload = {'kind': 'workflow', 'workflow': str(graph), 'project_id': backend.QUICK_PROJECT_ID,
+               'asset_id': 'S01', 'adopt_into': 'some-work',
+               'pipeline_stage_id': 'motion-text-native-landscape-generation',
+               'plan_path': str(tmp_path / 'plan.json'), 'request': {'output_prefix': 'draft'}}
+    now = time.time()
+    with backend.DB_LOCK, backend.db() as connection:
+        connection.execute(
+            "INSERT INTO tasks (id, asset_id, status, created_at, updated_at, payload, project_id) VALUES (?,?,?,?,?,?,?)",
+            (task_id, 'S01', 'preparing', now, now, json.dumps(payload), backend.QUICK_PROJECT_ID))
+        connection.commit()
+    adopted: list[tuple[str, str]] = []
+    monkeypatch.setattr(backend.comfy_engine, 'ensure_online', lambda: {'started': False})
+    monkeypatch.setattr(backend.prompt_writer, 'release_quietly', lambda: None)
+    monkeypatch.setattr(backend, 'sample_resources', lambda _: None)
+    monkeypatch.setattr(backend, 'request_json',
+                        lambda path, body=None: {'prompt_id': task_id} if path == '/prompt' else {})
+    monkeypatch.setattr(backend, 'history_done', lambda *args, **kwargs: {'status': 'success', 'outputs': ['draft.mp4']})
+    monkeypatch.setattr(backend, 'publish_task_outputs', lambda task, done: done)
+    monkeypatch.setattr(backend, 'record_segment_result', lambda *args, **kwargs: None)
+    monkeypatch.setattr(backend, 'adopt_task_outputs',
+                        lambda task, project: adopted.append((str(task['id']), project)) or {'adopted': 1})
+    backend.run_workflow_submission(task_id, payload)
+    assert backend.get_task(task_id)['status'] == 'succeeded'
+    assert adopted == [(task_id, 'some-work')]
+
+
 def test_speech_tasks_are_named_by_the_line_or_the_designed_timbre(quick_client, monkeypatch):
     client, _ = quick_client
     monkeypatch.setattr(backend.speech, 'capability', lambda *args, **kwargs: {'available': True, 'missing': []})
@@ -203,12 +275,103 @@ def test_timbre_and_music_cards_reuse_their_frozen_parameters(quick_client, monk
     assert reuse['values']['music']['tags'] == 'lofi, rain'
 
 
+def test_pipeline_video_reuses_prompt_duration_and_its_own_preset(quick_client, monkeypatch):
+    """文生视频/图生视频走作品管线，payload 没有 kind，也要能「编辑重生成」。
+
+    视频工具必须显式选制作方案，所以方案 id 必须一起带回去；否则表单看着像上次，
+    实际按另一条路线（画幅/步数/LoRA 都不同）重跑。
+    """
+    reuse = backend.quick_task_reuse({
+        'pipeline_stage_id': 'motion-text-native-landscape-generation',
+        'segment_snapshot': {
+            'prompt': '西湖边自拍散步', 'duration_seconds': 4,
+            'generation': {'aspect_ratio': '16:9', 'output_resolution': '2k', 'seed': 99,
+                           'sound_mode': 'performance_reference'},
+            'keyframes': {'first': None, 'last': None},
+        },
+    })
+    assert reuse and reuse['tool'] == 'text-video'
+    assert reuse['values'] == {'prompt': '西湖边自拍散步', 'duration': 4, 'aspect': '16:9',
+                               'quality': '2k', 'preset': 'h3-text-native-landscape'}
+    # 有首帧就是图生视频，方案同样跟着走。首帧能否回填取决于它是否还在登记目录里，
+    # 这里只验工具分流与方案映射，路径解析单独由 _portable 的契约保证。
+    monkeypatch.setattr(backend, '_portable', lambda value: value)
+    framed = backend.quick_task_reuse({
+        'pipeline_stage_id': 'motion-first-native-portrait-generation',
+        'segment_snapshot': {'prompt': '她在窗边回头', 'duration_seconds': 5,
+                             'generation': {'aspect_ratio': '9:16', 'output_resolution': 'native'},
+                             'keyframes': {'first': 'workspaces/x/assets/全身.png'}},
+    })
+    assert framed and framed['tool'] == 'image-video'
+    assert framed['values']['preset'] == 'h3-first-native-portrait'
+    assert framed['values']['frame'].endswith('全身.png')
+
+
 def test_reuse_stays_absent_when_the_inputs_cannot_be_reproduced(quick_client):
-    # 克隆音色与参考图生成的起点是一段音频或一张图，不能只凭提示词还原，就不给这个入口。
+    # 克隆音色的起点是一段音频，不能凭提示词还原，就不给这个入口。
     assert backend.quick_task_reuse({'kind': 'speech', 'request': {'mode': 'reference', 'voice_reference': 'a.wav'}}) is None
+    # 参考图任务没留下任何槽位时同理：带回去是个空表单，比没有入口更糟。
     assert backend.quick_task_reuse({'kind': 'keyframe', 'request': {'mode': 'reference', 'prompt': '猫'}}) is None
     assert backend.quick_task_reuse({'kind': 'workflow'}) is None
     assert backend.quick_task_reuse({'kind': 'audio_swap'}) is None
+
+
+def test_reference_keyframe_reuses_back_into_the_first_frame_studio(quick_client):
+    """参考图任务要能「编辑重生成」，并把当时的槽位一起带回首帧工作台。"""
+    reuse = backend.quick_task_reuse({
+        'kind': 'keyframe',
+        'request': {'mode': 'reference', 'prompt': '猫', 'width': 768, 'height': 1344,
+                    'seed': 7, 'creative_profile': 'general',
+                    'references': [{'role': '脸型', 'material_id': 'mat-abc123456789', 'label': '正面脸图'}]},
+    })
+    assert reuse and reuse['tool'] == 'image-video'
+    assert reuse['values']['prompt'] == '猫'
+    assert reuse['values']['aspect'] == '9:16'
+    assert reuse['values']['seed'] == 7
+    assert reuse['values']['references'][0]['material_id'] == 'mat-abc123456789'
+
+
+def test_reference_keyframe_reads_material_slots_from_the_submission_receipt(quick_client):
+    """冻结后的槽只留副本路径，material_id 得从提交回执里取回来，否则会误判成单图。"""
+    reuse = backend.quick_task_reuse({
+        'kind': 'keyframe',
+        'request': {'mode': 'reference', 'prompt': '猫', 'width': 768, 'height': 1344,
+                    'creative_profile': 'general',
+                    'references': [{'role': '脸型', 'label': '正面脸图',
+                                    'path': 'workspaces/x/keyframe-tasks/a/reference-1.png'}]},
+        'submission_receipt': {'request': {'references': [
+            {'role': '脸型', 'material_id': 'mat-abc123456789'}]}},
+    })
+    assert reuse and reuse['tool'] == 'image-video'
+    assert reuse['values']['references'] == [
+        {'role': '脸型', 'material_id': 'mat-abc123456789', 'label': '正面脸图'}]
+
+
+def test_single_reference_image_reuses_back_into_the_reference_generator(quick_client):
+    """参考图生成工具产出的任务只有一张底图：编辑要回「参考图生成」，不是图生视频。"""
+    reuse = backend.quick_task_reuse({
+        'kind': 'keyframe',
+        'request': {'mode': 'reference', 'prompt': '猫', 'width': 1024, 'height': 1024,
+                    'refine': False, 'references': [
+                        {'role': '底图', 'label': '',
+                         'path': 'workspaces/quick/keyframe-tasks/abc/reference-1.png'}]},
+    })
+    assert reuse and reuse['tool'] == 'reference-image'
+    assert reuse['values']['prompt'] == '猫'
+    assert reuse['values']['aspect'] == '1:1'
+    assert reuse['values']['refine'] is False
+    assert str(reuse['values']['image']).endswith('reference-1.png')
+
+
+def test_reference_image_falls_back_to_the_submitted_path(quick_client):
+    """老任务没冻结底图槽时，用提交时的 reference_image 顶上，别把入口丢掉。"""
+    reuse = backend.quick_task_reuse({
+        'kind': 'keyframe',
+        'request': {'mode': 'reference', 'prompt': '猫',
+                    'reference_image': 'workspaces/quick/assets/a.png'},
+    })
+    assert reuse and reuse['tool'] == 'reference-image'
+    assert str(reuse['values']['image']).endswith('assets/a.png')
 
 
 
@@ -318,3 +481,101 @@ def test_card_duration_is_live_while_running(monkeypatch):
         'created_at': 150.0, 'started_at': 180.0, 'updated_at': 181.0,
     })
     assert card['duration_ms'] == 20000
+
+
+def test_card_outputs_keep_media_object_paths():
+    """媒体/剪辑任务的 outputs 是 {path} 对象，不能再拼 output/ 前缀。
+
+    之前统一按 ComfyUI 的字符串产物处理，拼出 `output/{'path': ...}`，
+    首页「查看结果」就变成一个打不开的黑框。
+    """
+    card = backend.quick_task_card({
+        'id': 't4', 'status': 'succeeded', 'payload': {'kind': 'video_edit'},
+        'result': {'output': 'D:/x/edit.mp4', 'outputs': [{'kind': 'video', 'path': 'D:/x/edit.mp4'}]},
+        'created_at': 1.0, 'updated_at': 2.0,
+    })
+    assert card['outputs'] == ['D:/x/edit.mp4']
+    assert card['output'] == 'D:/x/edit.mp4'
+
+
+def test_card_outputs_prefix_comfy_relative_strings():
+    card = backend.quick_task_card({
+        'id': 't5', 'status': 'succeeded', 'payload': {'kind': 'workflow'},
+        'result': {'outputs': ['导演工作台工作目录/quick-tasks/video/a.mp4']},
+        'created_at': 1.0, 'updated_at': 2.0,
+    })
+    assert card['outputs'] == ['output/导演工作台工作目录/quick-tasks/video/a.mp4']
+
+
+def test_edit_card_title_counts_clips_and_seconds():
+    card = backend.quick_task_card({
+        'id': 't6', 'status': 'succeeded', 'payload': {
+            'kind': 'video_edit',
+            'request': {'clips': [
+                {'start_seconds': 0.5, 'end_seconds': 2.0},
+                {'start_seconds': 1.0, 'end_seconds': 2.5},
+            ]},
+        },
+        'result': {'output': 'D:/x/edit.mp4', 'outputs': [{'path': 'D:/x/edit.mp4'}]},
+        'created_at': 1.0, 'updated_at': 2.0,
+    })
+    assert card['title'] == '剪辑 · 2 段 · 3.0 秒'
+
+
+def test_reuse_carries_the_linked_voice_and_music(monkeypatch):
+    """编辑重生成不该把「关联声音」丢回不关联：配音和配乐都要带回表单。"""
+    monkeypatch.setattr(backend, '_portable', lambda value: value)
+    reuse = backend.quick_task_reuse({
+        'pipeline_stage_id': 'motion-first-locked-audio-generation',
+        'music_overlay': 'workspaces/quick-tasks/assets/music.wav',
+        'segment_snapshot': {
+            'prompt': '她坐在窗边说话', 'duration_seconds': 6,
+            'generation': {'aspect_ratio': '9:16', 'output_resolution': 'native'},
+            'keyframes': {'first': 'workspaces/quick-tasks/assets/frame.png'},
+            'audio': {'guide': 'workspaces/quick-tasks/assets/voice.wav'},
+        },
+    })
+    assert reuse['tool'] == 'image-video'
+    assert reuse['values']['preset'] == 'h3-first-locked-audio'
+    assert reuse['values']['voice'].endswith('voice.wav')
+    assert reuse['values']['music_track'].endswith('music.wav')
+
+
+def test_result_stays_unread_until_the_user_opens_it(quick_client):
+    client, _ = quick_client
+    task = _submit(client, '雨夜街角的一盏灯')
+    backend.set_task(task['id'], status='succeeded', result=json.dumps({'output': 'out/x.png'}))
+
+    card = next(item for item in client.get('/api/quick-tasks').json()['tasks'] if item['id'] == task['id'])
+    assert card['unread'] is True and card['read_at'] is None
+
+    first = client.post(f"/api/tasks/{task['id']}/read")
+    assert first.status_code == 200, first.text
+    card = next(item for item in client.get('/api/quick-tasks').json()['tasks'] if item['id'] == task['id'])
+    assert card['unread'] is False and card['read_at']
+
+    # 重复打开是幂等的：保留第一次阅读时间，不会每次刷新都往后跳。
+    again = client.post(f"/api/tasks/{task['id']}/read").json()
+    assert again['read_at'] == first.json()['read_at']
+
+
+def test_unfinished_tasks_are_not_marked_read(quick_client):
+    client, _ = quick_client
+    task = _submit(client, '还没跑完的镜头')
+    response = client.post(f"/api/tasks/{task['id']}/read")
+    assert response.status_code == 409
+    card = next(item for item in client.get('/api/quick-tasks').json()['tasks'] if item['id'] == task['id'])
+    assert card['unread'] is False
+
+
+def test_bulk_read_only_touches_finished_tasks(quick_client):
+    client, _ = quick_client
+    done = _submit(client, '已经出图的镜头', seed=21)
+    pending = _submit(client, '还在排队的镜头', seed=22)
+    backend.set_task(done['id'], status='succeeded', result=json.dumps({'output': 'out/y.png'}))
+    body = client.post('/api/tasks/read', json={'task_ids': [done['id'], pending['id']]})
+    assert body.status_code == 200, body.text
+    assert body.json()['marked'] == 1
+    cards = {item['id']: item for item in client.get('/api/quick-tasks').json()['tasks']}
+    assert cards[done['id']]['unread'] is False
+    assert cards[pending['id']]['read_at'] is None

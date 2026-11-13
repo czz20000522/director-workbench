@@ -334,6 +334,9 @@
 .pw-embed.is-library-only { grid-template-rows: minmax(0, 1fr); padding-top: 12px; }
 .pw-embed.is-library-only .pw-embed-lib { border-left: 0; padding-left: 0; }
 
+/* 音色库侧栏卡片里的小样播放器：压到 30px，不挤掉卡片列表。 */
+.sf-root .pl-mini-audio { width: 100%; height: 30px; margin: 2px 0 0; }
+
 /* 资料库里第一张卡片：润色提示词。和作品卡片区分开——它不是一本资料，是收藏。 */
 .rl-work-fav { border-color: #cdd9f2; background: #f7f9fe; }
 .rl-work-fav .rl-work-title { display: inline-flex; align-items: center; gap: 6px; color: var(--sf-amber); }

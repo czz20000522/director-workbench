@@ -18,10 +18,10 @@ export default function ResolutionPicker({ label, aspect, resolution = 'native',
         <option value="16:9">横屏 · 16:9</option><option value="9:16">竖屏 · 9:16</option><option value="1:1">方形 · 1:1</option>
       </select></label>
       <label>2 · 输出分辨率<select aria-label={`${label}输出分辨率`} disabled={disabled} value={resolution} onChange={event => onChange(aspect, event.target.value as OutputResolution)}>
-        {(['native', '2k', '4k', '8k'] as OutputResolution[]).map(value => <option key={value} value={value}>{value === 'native' ? '1K · 原生生成' : `${value.toUpperCase()} · 尺寸放大`} · {size(value)}</option>)}
+        {(['native', '2k', '4k', '8k'] as OutputResolution[]).map(value => <option key={value} value={value}>{value === 'native' ? '原生 · 模型直出' : `${value.toUpperCase()} · 上采样`} · {size(value)}</option>)}
       </select></label>
     </div>
-    <p>先选比例，再选像素。2K / 4K / 8K 在生成后放大输出，保留原始文件；不增加模型原生细节。比例有细微差异时居中裁切。</p>
+    <p>先选比例，再选像素。2K / 4K / 8K 属于上采样路线：生成后放大输出，保留原始文件；不增加模型原生细节。比例有细微差异时居中裁切。</p>
     {resolution === '8k' && <p>8K 输出文件更大，处理与下载更慢。</p>}
   </details>;
 }

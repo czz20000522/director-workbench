@@ -4,6 +4,7 @@ import {
   Settings2, Sparkles, Trash2, Wand2, X,
 } from 'lucide-react';
 import { request } from './api/client';
+import TranslateButton from './TranslateButton';
 
 /** 提示词助手：自己写的能润色，没写的能代写。
  *
@@ -134,6 +135,8 @@ export default function PromptWriter({ disabled, prompt, context, onUse, label, 
   const [configOpen, setConfigOpen] = useState(false);
   const [form, setForm] = useState({ base_url: '', model: '', api_key: '' });
   const [withMaterials, setWithMaterials] = useState(true);
+  // 默认关：识图要多调一次视觉模型，只在用户明确想看的时候才走。
+  const [useVision, setUseVision] = useState(false);
   const [withParams, setWithParams] = useState(false);
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -276,6 +279,7 @@ export default function PromptWriter({ disabled, prompt, context, onUse, label, 
           provider,
           mode,
           ...(withMaterials && materials.length ? { context: { materials: materials.slice(0, 8) } } : {}),
+          ...(withMaterials && useVision && materials.length ? { use_reference_vision: true } : {}),
         },
         // 首次加载要读权重；服务没起时后端还要先拉起它，30 秒不够。
         timeoutMs: 300_000,
@@ -402,6 +406,11 @@ export default function PromptWriter({ disabled, prompt, context, onUse, label, 
         onChange={event => setWithMaterials(event.target.checked)} />
       把已选的 {materials.length} 张素材一起告诉它
     </label>}
+    {materials.length > 0 && withMaterials && <label className="ffs-write-check">
+      <input type="checkbox" checked={useVision} disabled={busy}
+        onChange={event => setUseVision(event.target.checked)} />
+      先让识图看一眼参考图（服装版型、发型走向更准，会多花几秒到几十秒）
+    </label>}
     <p className={ready ? 'ffs-write-hint is-ready' : 'ffs-write-hint'}>
       {hint}
       {provider === 'online' && !ready && <button type="button" className="pw-hint-link" onClick={openConfig}>填接口</button>}
@@ -429,7 +438,10 @@ export default function PromptWriter({ disabled, prompt, context, onUse, label, 
   const resultPane = (large: boolean) => draft ? <div className="ffs-write-result">
     <div className="ffs-write-result-head">
       <span>{lastMode === 'polish' ? '润色结果' : '写出来的描述'}{large ? '（可以直接改）' : ''}</span>
-      <small>{draft.length} 字</small>
+      <span className="tb-row">
+        <TranslateButton text={draft} disabled={busy} onTranslated={setDraft} />
+        <small>{draft.length} 字</small>
+      </span>
     </div>
     <textarea rows={large ? 7 : 3} value={draft} className="pw-result"
       onChange={event => setDraft(event.target.value)} />

@@ -3,17 +3,21 @@ import TaskQueueStatus, { type QueueReceipt } from './TaskQueueStatus';
 import ProgressBar, { type TaskProgress } from './TaskProgress';
 import ResolutionPicker, { type AspectRatio, type OutputResolution } from './ResolutionPicker';
 import { detectQualityIntent } from './qualityIntent';
-import { BookOpen } from 'lucide-react';
+import { BookOpen, Scaling, Wand2 } from 'lucide-react';
 import { mediaUrl } from './api/client';
 import { PromptLibraryDialog } from './ReferenceLibrary';
 import type { MaterialOption } from './MaterialSelect';
 import ReferenceSlotField, { type SlotValue, type ReferenceRole } from './ReferenceSlotField';
 import PromptWriter from './PromptWriter';
+import TranslateButton from './TranslateButton';
+import StyleBlockPicker, { readStyleBlock } from './StyleBlockPicker';
+import LiquifyDialog from './LiquifyDialog';
+import InpaintDialog from './InpaintDialog';
 import { ApiError, request as apiRequest } from './api/client';
 
 type Mode = 'text' | 'reference';
 type CreativeProfile = 'general' | 'adult-realism' | 'adult-anime';
-type Submission = { mode?: Mode; creative_profile?: CreativeProfile; width?: number; height?: number; output_resolution?: OutputResolution; ai_upscale?: boolean; steps?: number; refine?: boolean; prompt: string; reference_image?: string; references?: { role: string; material_id: string }[]; seed: number; idempotency_key: string };
+type Submission = { mode?: Mode; creative_profile?: CreativeProfile; width?: number; height?: number; output_resolution?: OutputResolution; ai_upscale?: boolean; steps?: number; refine?: boolean; prompt: string; reference_image?: string; references?: { role: string; material_id: string }[]; seed: number; style_block?: string; idempotency_key: string };
 type Task = { id: string; status: string; queue?: QueueReceipt['queue']; progress?: TaskProgress; error?: string; result?: { output?: string; native_output?: string; published_native_output?: string; width?: number; height?: number; output_size?: { resolution?: OutputResolution; width?: number; height?: number; method?: string; note?: string } }; payload?: { request?: Submission; output_size?: { resolution?: OutputResolution; width?: number; height?: number; method?: string } } };
 type Saved = { mode: Mode; creative_profile: CreativeProfile; prompt: string; reference_image: string; slots?: SlotValue[]; seed: number; autoSeed?: boolean; refine?: boolean; width?: number; height?: number; output_resolution?: OutputResolution; ai_upscale?: boolean; steps?: number; pending?: Submission };
 const orderedSlots = (slots?: SlotValue[]) =>
@@ -25,7 +29,8 @@ const SLOT_HINTS: Record<ReferenceRole, string> = {
   '脸型': '只决定长相：默认只列「脸型·发型」里的正面脸图',
   '造型': '只决定发型：默认只列「造型参考·」那批；也可以直接写「丸子头」',
   '服装': '只决定穿什么：默认只列「服饰·写实」；点「不穿衣服」或自己写一句也行',
-  '姿势': '只决定站/坐/动作：默认只列「姿势·线稿」',
+  '姿势': '只决定站/坐/动作；走 ControlNet 结构控制，深度图更准，线稿可作备选',
+  '自有素材': '一整张图：任意分类都能选，也能上传（首帧台里用）',
 };
 // 11-07 之前存的草稿里只有一个笼统的「人像」槽，读回来一律落到「脸型」。
 const LEGACY_ROLES: Record<string, ReferenceRole> = { '人像': '脸型' };
@@ -59,12 +64,12 @@ const resolutionLabel = (value?: OutputResolution) => value && value !== 'native
 const methodLabel = (value?: string) => value === 'lanczos_resize' ? '尺寸放大（Lanczos）' : value === 'ai_upscale' ? 'AI 超分（RealESRGAN）+ 尺寸缩放' : '原生生成';
 // 随机编号写死会让每次新生成都高度雷同：默认每次随机，要复现同一张图时在更多设置里钉住。
 const randomSeed = () => crypto.getRandomValues(new Uint32Array(1))[0];
-// 1K is the native model output; the larger tiers are Lanczos resizes of it.
+// 原生直出才是模型真正画的尺寸；更大的档位都是采样后的放大路线。
 const clarityOptions: { value: OutputResolution; label: string; note: string }[] = [
-  { value: 'native', label: '1K', note: '原生' },
-  { value: '2k', label: '2K', note: '放大' },
-  { value: '4k', label: '4K', note: '放大' },
-  { value: '8k', label: '8K', note: '放大' },
+  { value: 'native', label: '原生', note: '模型直出' },
+  { value: '2k', label: '2K', note: '上采样' },
+  { value: '4k', label: '4K', note: '上采样' },
+  { value: '8k', label: '8K', note: '上采样' },
 ];
 
 export default function KeyframePanel({ projectId, options, onBrowse, onComplete, simple = false, initialMode = 'reference', candidateTaskId, creativeProfile, defaultOpen = false, fresh = false, initialPrompt, initialSeed, initialAspect, initialResolution, initialSteps, promptTicket }: {
@@ -107,6 +112,8 @@ export default function KeyframePanel({ projectId, options, onBrowse, onComplete
   const [task, setTask] = useState<Task | null>(null);
   const pendingKey = useRef(saved.pending?.idempotency_key);
   const [message, setMessage] = useState('');
+  // 风格锁：只拼进 prompt_for_model，saved.prompt 保持用户原文。
+  const [styleBlock, setStyleBlock] = useState(readStyleBlock);
   // 人物三要素只是拼草稿的辅助输入，不进提交请求，也不改生成链路。
   const [cast, setCast] = useState({ portrait: '', pose: '', costume: '' });
   const [busy, setBusy] = useState(false);
@@ -115,6 +122,11 @@ export default function KeyframePanel({ projectId, options, onBrowse, onComplete
   const [batchOpen, setBatchOpen] = useState(false);
   const [batchText, setBatchText] = useState('');
   const [batchReport, setBatchReport] = useState('');
+  // 结果图的两个后续动作：液化塑形（定形）与低强度精修（补质感）。
+  const [liquifySource, setLiquifySource] = useState('');
+  const [refineSource, setRefineSource] = useState('');
+  // 液化/精修都会产出新文件：原图不动，这里只记最新一张用于继续加工。
+  const [derived, setDerived] = useState('');
   const mounted = useRef(true);
   const working = useRef(false);
   const completed = useRef('');
@@ -150,6 +162,8 @@ export default function KeyframePanel({ projectId, options, onBrowse, onComplete
 
   function accept(next: Task, expectedKey: string | undefined) {    if (!mounted.current || !expectedKey || pendingKey.current !== expectedKey) return;
     setTask(next); setMessage('');
+    // 换了一条任务，上一张的液化/精修结果就不再属于当前画面，收起避免误认。
+    if (completed.current !== next.id) setDerived('');
     if (next.status === 'succeeded' && completed.current !== next.id) {
       completed.current = next.id; completion.current(next.id);
     }
@@ -235,7 +249,7 @@ export default function KeyframePanel({ projectId, options, onBrowse, onComplete
         // 自动换种子：相似描述再生成时，至少换一版构图。retry 是「上次提交还没落到
         // 终态」的重放，必须沿用原种子，否则同一凭据换了参数会被服务端拒。
         const submitSeed = saved.autoSeed === false ? saved.seed : randomSeed();
-        const pending: Submission = retry || { mode: submitMode, creative_profile: saved.creative_profile, prompt: promptText, refine: saved.refine === true, ...(submitMode === 'text' ? size : { ...size, ...reference }), seed: submitSeed, idempotency_key: `keyframe-${crypto.randomUUID()}` };
+        const pending: Submission = retry || { mode: submitMode, creative_profile: saved.creative_profile, prompt: promptText, refine: saved.refine === true, ...(submitMode === 'text' ? size : { ...size, ...reference }), seed: submitSeed, ...(styleBlock ? { style_block: styleBlock } : {}), idempotency_key: `keyframe-${crypto.randomUUID()}` };
         if (!retry && task) setTask(null);
         if (!persist({ ...saved, seed: retry ? saved.seed : submitSeed, pending })) return;
         operationKey = pending.idempotency_key;
@@ -323,7 +337,16 @@ export default function KeyframePanel({ projectId, options, onBrowse, onComplete
       <div className="sf-post-section-head"><h2 className="sf-post-title">{simple ? '生成图片' : '生成关键帧'}</h2><p className="sf-post-status">{task ? (labels[task.status] || task.status) : '显式提交'}</p></div>
       <div className="sf-post-fields">
         <div className="sf-post-field sf-post-field--wide">
-          <div className="sf-post-field-head"><label htmlFor={promptId}>{simple ? '图片提示词' : '画面描述'}</label><button type="button" className="sf-inline-link" disabled={locked} onClick={() => setLibraryOpen(true)}><BookOpen size={12} /> 从提示词库带入</button></div>
+          <div className="sf-post-field-head">
+            <label htmlFor={promptId}>{simple ? '图片提示词' : '画面描述'}</label>
+            <span className="tb-row">
+              <TranslateButton text={saved.prompt} disabled={locked}
+                onTranslated={next => persist({ ...saved, prompt: next })}
+                onError={setMessage} />
+              <StyleBlockPicker value={styleBlock} onChange={setStyleBlock} disabled={locked} hint={false} />
+              <button type="button" className="sf-inline-link" disabled={locked} onClick={() => setLibraryOpen(true)}><BookOpen size={12} /> 从提示词库带入</button>
+            </span>
+          </div>
           <textarea id={promptId} rows={4} maxLength={6000} value={saved.prompt} disabled={locked} placeholder="描述角色、场景、姿态和构图" onChange={event => persist({ ...saved, prompt: event.target.value })} />
           <PromptWriter disabled={locked} prompt={saved.prompt} label="AI 润色"
             context={{
@@ -363,10 +386,10 @@ export default function KeyframePanel({ projectId, options, onBrowse, onComplete
         </fieldset>}
         {simple && saved.mode === 'text' && <div className="sf-post-field sf-post-field--wide">
           <label>清晰度</label>
-          <div className="clarity-levels" role="group" aria-label="图片清晰度">
+          <div className="clarity-levels is-compact" role="group" aria-label="图片清晰度">
             {clarityOptions.map(option => <button key={option.value} type="button" aria-pressed={(saved.output_resolution ?? 'native') === option.value} disabled={locked} onClick={() => persist({ ...saved, output_resolution: option.value })}><strong>{option.label}</strong><small>{option.note}</small></button>)}
           </div>
-          <p className="sf-post-hint">原生 {saved.width ?? 768} × {saved.height ?? 1344} = {Math.round((saved.width ?? 768) * (saved.height ?? 1344) / 10000)} 万像素，这才是模型真正画出来的尺寸。2K、4K、8K 默认只把这张图放大到目标尺寸，本身不会变清晰；想加细节要勾下面的 AI 超分。</p>
+          <p className="sf-post-hint">原生 {saved.width ?? 768} × {saved.height ?? 1344} = {Math.round((saved.width ?? 768) * (saved.height ?? 1344) / 10000)} 万像素，这才是模型真正画出来的尺寸。2K、4K、8K 属于上采样路线：只把这张图放大到目标尺寸，本身不会变清晰；想加细节要勾下面的 AI 超分。</p>
           {(saved.output_resolution ?? 'native') !== 'native' && <>
             <label className="sf-post-check"><input type="checkbox" checked={saved.ai_upscale === true} disabled={locked} onChange={event => persist({ ...saved, ai_upscale: event.target.checked })} />AI 超分后再放大（RealESRGAN 2×）</label>
             <p className="sf-post-hint">11-08 本机对照：对 AI 生成的人像，超分会磨平皮肤颗粒、眉眼略糊，多数情况不如直接放大；只建议用在原生画面本身偏软时。2K 约多 3 秒，4K 约多 10 秒。</p>
@@ -415,8 +438,20 @@ export default function KeyframePanel({ projectId, options, onBrowse, onComplete
         <div className="sf-post-actions">
           <a className="button primary compact" href={mediaUrl(outputPath)} download={`关键帧-${task.id.slice(0, 8)}.${fileSuffix(outputPath)}`}>下载图片</a>
           {nativePath && nativePath !== outputPath && <a className="button secondary compact" href={mediaUrl(nativePath)} download={`关键帧原生-${task.id.slice(0, 8)}.${fileSuffix(nativePath)}`}>下载原生图</a>}
+          <button type="button" className="button secondary compact" onClick={() => setLiquifySource(outputPath)}><Scaling size={13} /> 液化塑形</button>
+          <button type="button" className="button secondary compact" onClick={() => setRefineSource(outputPath)}><Wand2 size={13} /> 精修</button>
         </div>
         <p className="sf-post-hint">下载的是本机文件；处理后的候选和未放大的原生文件都会保留。</p>
+      </div>}
+      {derived && <div className="sf-post-subblock" aria-label="液化/精修结果">
+        <figure className="sf-post-figure"><img src={mediaUrl(derived)} alt="液化或精修结果" /></figure>
+        <div className="sf-post-actions">
+          <a className="button secondary compact" href={mediaUrl(derived)} download={`关键帧-后续-${fileSuffix(derived)}`}>下载这张</a>
+          <button type="button" className="button secondary compact" onClick={() => setLiquifySource(derived)}><Scaling size={13} /> 继续液化</button>
+          <button type="button" className="button secondary compact" onClick={() => setRefineSource(derived)}><Wand2 size={13} /> 继续精修</button>
+          <button type="button" className="button secondary compact" onClick={() => setDerived('')}>收起</button>
+        </div>
+        <p className="sf-post-hint">这是新文件：原图没有改动，两个版本都留着。</p>
       </div>}
       {task?.status === 'succeeded' && <div className="quick-candidate-meta" aria-label="图片候选信息">
         <div className="quick-candidate-meta-heading"><strong>当前图片候选</strong><span>已生成 · 待审阅</span></div>
@@ -447,5 +482,21 @@ export default function KeyframePanel({ projectId, options, onBrowse, onComplete
       </div>
     </section>
     {libraryOpen && <PromptLibraryDialog target="image" onUse={text => persist({ ...saved, prompt: text })} onClose={() => setLibraryOpen(false)} />}
+    {liquifySource && <LiquifyDialog projectId={projectId} imagePath={liquifySource}
+      onClose={() => setLiquifySource('')}
+      onDone={(path, count, refine) => {
+        setDerived(path);
+        setLiquifySource('');
+        setMessage(`液化完成（${count} 个调整中心），正在显示新图；原图没有改动。`);
+        if (refine) setRefineSource(path);
+      }} />}
+    {refineSource && <InpaintDialog projectId={projectId} imagePath={refineSource}
+      profile={creativeProfile ?? 'general'} initialStrength={0.35}
+      onClose={() => setRefineSource('')}
+      onDone={(path) => {
+        setDerived(path);
+        setRefineSource('');
+        setMessage('精修完成：只重绘了涂过的区域，其余部分保持原样。');
+      }} />}
   </section>;
 }

@@ -24,6 +24,18 @@ class StartRequest(BaseModel):
     seed: int | None = None
     pipeline_stage_id: str | None = Field(default=None, max_length=120)
     pipeline_values: dict[str, Any] = Field(default_factory=dict)
+    # 原生采样档（百万像素）：显式覆盖方案默认的 ResolutionSelector 值。
+    # 480p≈0.4MP、768p≈0.6MP；不传则沿用方案档位。
+    native_megapixels: float | None = Field(default=None, ge=0.1, le=4.0)
+    # 风格锁：只拼进 prompt_override（送模型的文本），request.prompt 保持原样。
+    style_block: str | None = Field(default=None, max_length=64)
+    # 草稿任务生成成功后自动归入的作品（只对提交到草稿箱的单步任务有效）。
+    # 这样「项目内试拍」不必往该作品的 plan 里写 S01，也不会污染分镜表。
+    adopt_into: str | None = Field(default=None, max_length=160)
+    # 关联配乐：生成成功后把这条音轨混进成片（画面流复制，不重新出画面）。
+    # 不传就是「不关联」，成片只有模型自己的原生声音。
+    music_overlay: str | None = Field(default=None, max_length=500)
+    music_gain: float = Field(default=0.35, ge=0, le=3, strict=True, allow_inf_nan=False)
 
 
 class FinishRequest(BaseModel):
@@ -400,6 +412,8 @@ class KeyframeRequest(BaseModel):
     ai_upscale: bool = False
     # 缺省随机而不是固定值：直接调 API 时不传种子，也该每次出新图。
     seed: int = Field(default_factory=lambda: secrets.randbelow(2**32), ge=0, le=2**64 - 1)
+    # 风格锁：只拼进 prompt_for_model，request.prompt 保持用户原文。
+    style_block: str | None = Field(default=None, max_length=64)
     idempotency_key: str = Field(min_length=1, max_length=160)
 
 
@@ -421,6 +435,8 @@ class SpeechRequest(BaseModel):
     mode: Literal['reference', 'design'] = 'reference'
     voice_reference: str | None = Field(default=None, min_length=1, max_length=1000)
     voice_description: str | None = Field(default=None, min_length=1, max_length=2000)
+    # 从音色库「带入」时带的卡片名：生成成功后优先把试听小样回写到这张卡。
+    source_card: str | None = Field(default=None, min_length=1, max_length=200)
     emotion: EmotionSpec | None = None
     idempotency_key: str = Field(min_length=1, max_length=160)
     gen_seconds: float = Field(default=4.5, gt=0, le=30, allow_inf_nan=False)
@@ -485,6 +501,35 @@ class ScriptDraftRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     title: str = Field(min_length=1, max_length=80)
     content: str = Field(default='', max_length=200000)
+
+
+class ScriptBreakdownExtractRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    provider: Literal['auto', 'local', 'online'] = 'auto'
+
+
+class ScriptBreakdownItem(BaseModel):
+    model_config = ConfigDict(extra='ignore')
+    id: str | None = Field(default=None, max_length=40)
+    type: Literal['character', 'scene', 'prop', 'voice', 'music']
+    title: str = Field(min_length=1, max_length=80)
+    prompt: str = Field(default='', max_length=1200)
+    voice: str = Field(default='', max_length=600)
+    note: str = Field(default='', max_length=200)
+    enabled: bool = True
+
+
+class ScriptBreakdownSaveRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    items: list[ScriptBreakdownItem] = Field(default_factory=list, max_length=200)
+    confirmed: bool = False
+
+
+class ShotParseRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    text: str = Field(min_length=10, max_length=20000)
+    provider: Literal['auto', 'local', 'online'] = 'auto'
+    max_shots: int = Field(default=12, ge=1, le=12)
 
 
 class EnhanceArchiveRequest(BaseModel):
@@ -628,6 +673,31 @@ class MediaOperationRequest(BaseModel):
         return {field: getattr(self, field) for field in fields}
 
 
+class VideoEditClipRequest(BaseModel):
+    """时间线上的一段：源视频 + 入点/出点 + 音量。"""
+    model_config = ConfigDict(extra='forbid')
+    source: str = Field(min_length=1, max_length=1000)
+    label: str | None = Field(default=None, max_length=200)
+    start_seconds: float = Field(default=0, ge=0, le=86400, allow_inf_nan=False)
+    end_seconds: float | None = Field(default=None, gt=0, le=86400, allow_inf_nan=False)
+    volume: float = Field(default=1, ge=0, le=4, allow_inf_nan=False)
+    muted: bool = False
+
+
+class VideoEditProbeRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    sources: list[str] = Field(min_length=1, max_length=40)
+
+
+class VideoEditRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    clips: list[VideoEditClipRequest] = Field(min_length=1, max_length=40)
+    background_music: str | None = Field(default=None, min_length=1, max_length=1000)
+    background_volume: float = Field(default=0.25, ge=0, le=4, allow_inf_nan=False)
+    crf: int = Field(default=18, ge=12, le=30)
+    idempotency_key: str = Field(min_length=1, max_length=160)
+
+
 class AudioEditRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     source_asset_id: str = Field(min_length=1, max_length=160)
@@ -743,9 +813,22 @@ class TaskBatchPlanRequest(BaseModel):
     task_ids: list[str] = Field(min_length=1, max_length=50)
 
 
+class TaskReadRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    task_ids: list[str] = Field(min_length=1, max_length=200)
+
+
 class TaskBatchDeleteRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     plan_id: str
     task_ids: list[str] = Field(min_length=1, max_length=50)
     archive_asset_ids: list[str] = Field(default_factory=list, max_length=200)
     confirm: bool = False
+
+
+class QuickTaskAdoptRequest(BaseModel):
+    """把单步任务的产物归入某部作品：复制一份并登记成该作品的资产。"""
+    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
+    project_id: str = Field(min_length=1, max_length=160)
+    # 只带指定的几张；不传就是这条任务的全部产物。
+    paths: list[str] = Field(default_factory=list, max_length=20)

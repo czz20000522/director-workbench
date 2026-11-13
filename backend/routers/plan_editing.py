@@ -13,7 +13,9 @@ import time
 from typing import Any
 from fastapi import APIRouter, HTTPException
 from .. import creative_inspection, h3_duration, hardware, production_presets, shot_creation
-from ..schemas import PipelineStageCreateRequest, PlanSegmentCreateRequest, PlanSegmentOperationRequest, PlanSegmentUpdateRequest, SegmentDeleteRequest
+from .. import prompt_writer, shot_parse
+from ..schemas import (PipelineStageCreateRequest, PlanSegmentCreateRequest, PlanSegmentOperationRequest,
+                       PlanSegmentUpdateRequest, SegmentDeleteRequest, ShotParseRequest)
 from .. import app as backend
 
 
@@ -92,6 +94,32 @@ def record_segment_artifacts(project_id: str, segment: dict[str, Any], source: s
         {"title": f"{segment_id} 分镜", "content": {key: segment.get(key) for key in ("start_seconds", "end_seconds", "duration_seconds", "prompt", "workflow", "dependencies")}, "references": references, "status": "pending_review"},
         asset_id=segment_id, source=source, project_id=project_id,
     )
+
+
+@ROUTER.post("/api/projects/{project_id}/plan/parse-shots")
+def parse_plan_shots(project_id: str, request: ShotParseRequest) -> dict[str, Any]:
+    """把一段文字拆成「分镜提议」，只返回不落库。
+
+    界面拿这份提议让用户勾选、改描述、改时长，确认后才逐条走
+    POST /plan/segments。所以这里不写计划、不建任务，也不消耗显卡。
+    """
+    backend.require_project_manifest(project_id)
+    text = request.text.strip()
+    if len(text) < 10:
+        raise HTTPException(422, '内容太短，先写一段画面或剧情再拆')
+    try:
+        result = prompt_writer.json_chat(text, system=shot_parse.SHOT_PROMPT, provider=request.provider)
+        payload = shot_parse.extract_json(str(result.get('text') or ''))
+        shots = shot_parse.shots_from_payload(payload, limit=request.max_shots)
+    except prompt_writer.WriterUnavailable as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except (prompt_writer.WriterFailed, ValueError) as exc:
+        raise HTTPException(502, f'{exc}；可以再试一次，或改用另一条通道') from exc
+    if not shots:
+        raise HTTPException(422, '这段文字里没拆出可用的镜头')
+    return {'shots': shots, 'count': len(shots), 'provider': result.get('provider'),
+            'model': result.get('model'), 'elapsed_ms': result.get('elapsed_ms'),
+            'truncated': bool(result.get('truncated'))}
 
 
 @ROUTER.post("/api/projects/{project_id}/plan/segments")

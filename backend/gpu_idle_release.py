@@ -26,6 +26,8 @@ class IdleGPURelease:
         retry_seconds: float = 60,
         clock: Callable[[], float] = time.monotonic,
         activity_token: Callable[[], str] | None = None,
+        is_batch: Callable[[], bool] | None = None,
+        batch_grace_seconds: float | None = None,
     ) -> None:
         self.admission_lock = admission_lock
         self.inspect = inspect
@@ -36,6 +38,10 @@ class IdleGPURelease:
         self.retry_seconds = retry_seconds
         self.clock = clock
         self.activity_token = activity_token
+        # 单步任务做完就不再回来了，早点让出显存；批量制作时频繁 free 会反复
+        # 重新加载十几 GB 权重，反而更慢，所以批量用更长的宽限。
+        self.is_batch = is_batch
+        self.batch_grace_seconds = batch_grace_seconds
         self.last_activity_token: str | None = None
         self.idle_since = clock()
         self.retry_after = 0.0
@@ -116,7 +122,7 @@ class IdleGPURelease:
             if self.released:
                 self.state = "released"
                 return
-            if now - self.idle_since < self.grace_seconds or now < self.retry_after:
+            if now - self.idle_since < self._grace() or now < self.retry_after:
                 self.state = "waiting"
                 return
             try:
@@ -134,6 +140,17 @@ class IdleGPURelease:
                                 "gpu_free_mib_after_request": after, "comfy_receipt": receipt}
             log.info("GPU idle /free accepted after %.0fs idle; free MiB before=%s after_request=%s receipt=%s",
                      now - self.idle_since, before, after, receipt)
+
+    def _grace(self) -> float:
+        """批量制作时用长宽限，单步任务用短宽限。判定失败就退回单步。"""
+        if self.batch_grace_seconds is None or self.is_batch is None:
+            return self.grace_seconds
+        try:
+            if self.is_batch():
+                return self.batch_grace_seconds
+        except Exception as exc:
+            log.warning("GPU batch probe failed; using single-step grace: %s", exc)
+        return self.grace_seconds
 
     def _sample(self) -> int | None:
         try:

@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -164,6 +164,24 @@ def reference_library_stage_material(material_id: str, request: "StageMaterialRe
     except OSError as exc:
         raise HTTPException(500, f'素材复制失败：{exc}') from exc
     return {'path': registered, 'material': reference_library.public_material(material)}
+
+
+@ROUTER.post('/api/reference-library/materials/{material_id}/variants')
+async def reference_library_material_variant(material_id: str, file: UploadFile = File(...),
+                                            title: str = Form('')) -> dict[str, Any]:
+    """把液化/精修后的 PNG 存回这张素材所在的子库，作为一张新素材。
+
+    原图不动：库里那张通常是挑过的，覆盖掉就再也找不回来。新文件名带时间戳，
+    子库分类沿用原素材，所以保存后在同一个小库里就能看到。
+    """
+    payload = await file.read(reference_library.VARIANT_MAX_BYTES + 1)
+    try:
+        material = reference_library.save_material_variant(backend.ROOT, material_id, payload, title)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(500, f'素材保存失败：{exc}') from exc
+    return {'material': material, 'path': material['path']}
 
 
 @ROUTER.post('/api/reference-library/first-frames')

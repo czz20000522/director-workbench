@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import math
 import threading
 import time
 from pathlib import Path
@@ -114,7 +115,8 @@ def _text(value: Any, name: str, limit: int, required: bool) -> str:
 
 
 def _validate_timbre(params: dict[str, Any]) -> dict[str, Any]:
-    if set(params) - {'engine', 'voice_description', 'voice_reference', 'text', 'generated_by'}:
+    if set(params) - {'engine', 'voice_description', 'voice_reference', 'text', 'generated_by',
+                      'sample_path', 'sample_duration_seconds', 'sample_text'}:
         raise ValueError('音色卡片包含未知参数')
     engine = params.get('engine') or 'voxcpm-2'
     if engine not in TIMBRE_ENGINES:
@@ -140,6 +142,18 @@ def _validate_timbre(params: dict[str, Any]) -> dict[str, Any]:
     # 生成它的引擎和「带入时用哪个引擎」是两件事）。
     if generated_by:
         frozen['generated_by'] = generated_by
+    # 试听小样：由语音任务成功后回写，也可以在面板里「存入音色库」时带上。
+    sample_path = _text(params.get('sample_path'), '小样路径', 1000, False)
+    if sample_path:
+        frozen['sample_path'] = sample_path
+    if params.get('sample_duration_seconds') is not None:
+        duration = params.get('sample_duration_seconds')
+        if type(duration) not in (int, float) or not math.isfinite(float(duration)) or float(duration) <= 0:
+            raise ValueError('小样时长必须是大于 0 的数字')
+        frozen['sample_duration_seconds'] = round(float(duration), 3)
+    sample_text = _text(params.get('sample_text'), '小样台词', 2000, False)
+    if sample_text:
+        frozen['sample_text'] = sample_text
     return frozen
 
 
@@ -192,6 +206,43 @@ def save(kind: str, name: str, params: dict[str, Any], *, now: float | None = No
         document[kind] = others + [entry]
         _write(document, path)
     return entry
+
+
+def attach_sample(description: str, *, source_card: str | None, sample_path: str,
+                  sample_duration_seconds: float, sample_text: str = '',
+                  path: Path | None = None) -> str | None:
+    """把一次成功生成的小样写回匹配的音色卡。
+
+    - 带 ``source_card`` 时优先认那张卡；卡不在了才退回按描述精确匹配。
+    - 描述相对卡片改过 → 不写回任何卡（那是另一条音色）。
+    - 描述没改 → 覆盖该卡的 sample_*；内置卡会存一份同名覆盖，和手动改卡同一套机制。
+    """
+    wanted = str(description or '').strip()
+    file_path = str(sample_path or '').strip()
+    if not wanted or not file_path:
+        return None
+    existing = cards('timbre', path)
+    target = None
+    label = str(source_card or '').strip()
+    if label:
+        found = next((item for item in existing if item['name'] == label), None)
+        if found is not None:
+            if str(found['params'].get('voice_description') or '').strip() != wanted:
+                return None
+            target = found
+    if target is None:
+        target = next((item for item in existing
+                       if str(item['params'].get('voice_description') or '').strip() == wanted), None)
+    if target is None:
+        return None
+    params = dict(target['params'])
+    params['sample_path'] = file_path
+    if sample_duration_seconds and float(sample_duration_seconds) > 0:
+        params['sample_duration_seconds'] = round(float(sample_duration_seconds), 3)
+    if str(sample_text or '').strip():
+        params['sample_text'] = str(sample_text).strip()
+    save('timbre', target['name'], params, path=path)
+    return target['name']
 
 
 def rename(kind: str, name: str, new_name: str, path: Path | None = None) -> dict[str, Any]:

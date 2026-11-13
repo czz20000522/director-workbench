@@ -8,6 +8,7 @@ monkeypatch（setattr(backend, "X", ...)）语义完全不变。
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 from fastapi import APIRouter
 import logging
@@ -62,6 +63,21 @@ def comfy_history_token() -> str:
 
 def request_comfy_free() -> dict[str, Any]:
     return backend.request_json('/free', {'unload_models': True, 'free_memory': True})
+
+
+def gpu_batch_active() -> bool:
+    """最近一小段时间里提交过多次任务，就当作批量制作。
+
+    批量时频繁 `--free` 会反复加载十几 GB 权重，反而更慢；单步任务做完就没人再来，
+    早点让出显存才划算。判定只看提交频率，不看界面状态，所以从任何入口连点都算。
+    """
+    window = backend.gpu_idle_setting('DIRECTOR_GPU_BATCH_WINDOW_SECONDS', 600)
+    threshold = max(2, int(backend.gpu_idle_setting('DIRECTOR_GPU_BATCH_MIN_TASKS', 3)))
+    since = time.time() - window
+    with backend.DB_LOCK, backend.db() as connection:
+        row = connection.execute(
+            "SELECT COUNT(*) AS n FROM tasks WHERE created_at >= ?", (since,)).fetchone()
+    return bool(row and int(row['n']) >= threshold)
 
 
 def gpu_idle_setting(name: str, default: float) -> float:

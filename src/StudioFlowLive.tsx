@@ -2,8 +2,8 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   ArrowRight, AudioLines, BookOpen, Check, CheckSquare, ChevronLeft, ChevronRight, Clapperboard, FolderOpen, ListTodo, ScanEye,
-  Square, Trash2, Wand2,
-  Film, HardDrive, Image, ImagePlus, Layers3, Library, LoaderCircle, Music, Play, Plus, Upload, Volume2, X,
+  Sparkles, Square, Trash2, Wand2,
+  Film, HardDrive, Image, ImagePlus, Layers3, Library, LoaderCircle, Music, Play, Plus, Scissors, Upload, Volume2, X,
 } from 'lucide-react';
 const ScriptWorkbench = lazy(() => import('./ScriptWorkbench'));
 const ReverseWorkbench = lazy(() => import('./ReverseWorkbench'));
@@ -62,6 +62,10 @@ type DeletionEntry = {
 type DeletionPlan = { plan_id: string; expires_at: number; entries: DeletionEntry[]; preserved: string };
 type QuickTask = {
   id: string; kind?: string; tool: string; title: string; status: string; created_at?: number; output?: string | null;
+  /** 生成成功但还没被打开过 → true；打开结果后后端记 read_at。 */
+  unread?: boolean; read_at?: number | null;
+  /** 完整提示词（不截断）。列表标题是 46 字摘要，结果弹窗要用这一份。 */
+  prompt?: string;
   /** 真正开始执行的时间（排队不算）；旧任务可能没有。 */
   started_at?: number | null;
   /** 后端算好的耗时：终态是总耗时，运行中是已用时长。 */
@@ -81,38 +85,65 @@ type OrphanReport = { count: number; total_bytes: number; by_reason: Record<stri
 // 首页把单步任务按工具分块；视频再看有没有首帧，分开图生与文生。
 const quickGroups: { key: string; title: string; test: (task: QuickTask) => boolean }[] = [
   { key: 'image', title: '文生图', test: task => task.tool === '图片' },
+  { key: 'image-reference', title: '参考图生图', test: task => task.tool === '参考图生图' },
   { key: 'inpaint', title: '局部重绘', test: task => task.tool === '局部重绘' },
   { key: 'image-video', title: '图生视频', test: task => task.tool === '视频' && task.video_mode === 'image-video' },
   { key: 'text-video', title: '文生视频', test: task => task.tool === '视频' && task.video_mode !== 'image-video' },
   { key: 'timbre', title: '音色', test: task => task.tool === '音色设计' },
   { key: 'music', title: '配乐', test: task => task.tool === '配乐' },
   { key: 'enhance', title: '清晰化', test: task => task.tool === '清晰化' },
+  { key: 'video-edit', title: '剪辑', test: task => task.tool === '剪辑' },
   { key: 'other', title: '其他', test: () => true },
 ];
 
 const MEDIA_VIDEO = /\.(mp4|webm|mov|mkv)$/i;
+// 音色设计、配乐产的是音频。以前除视频外一律按 <img> 渲染，结果就是一张破图、点不开也听不了。
+const MEDIA_AUDIO = /\.(wav|mp3|flac|ogg|oga|m4a|aac|opus|aiff?|wma)$/i;
+const MEDIA_IMAGE = /\.(png|jpe?g|webp|gif|bmp|avif|heic|svg)$/i;
 
-/** 单步任务的结果预览：同一处看视频、看图，不用跳新标签页。 */
+function resultIcon(path: string) {
+  if (MEDIA_VIDEO.test(path)) return <Film size={14} />;
+  if (MEDIA_AUDIO.test(path)) return <Volume2 size={14} />;
+  if (MEDIA_IMAGE.test(path)) return <Image size={14} />;
+  return <HardDrive size={14} />;
+}
+
+/** 单步任务的结果预览：同一处看视频、看图、听音色，不用跳新标签页。 */
 function ResultPreview({ title, paths, onClose }: { title: string; paths: string[]; onClose: () => void }) {
   const [index, setIndex] = useState(0);
   const current = paths[Math.min(index, paths.length - 1)];
+  const fileName = String(current || '').split(/[\\/]/).pop() || '结果文件';
+  const isAudio = MEDIA_AUDIO.test(current || '');
+  const isVideo = MEDIA_VIDEO.test(current || '');
+  const isImage = MEDIA_IMAGE.test(current || '');
+  const isFile = !isAudio && !isVideo && !isImage;
   return <div className="sf-modal-backdrop" role="dialog" aria-modal="true" aria-label="任务结果预览" onClick={onClose}>
     <div className="sf-modal sf-result-modal" onClick={event => event.stopPropagation()}>
       <button className="sf-modal-close" onClick={onClose} aria-label="关闭"><X size={18} /></button>
       <p className="sf-step-label">任务结果</p>
       <h2>{title}</h2>
-      <div className="sf-result-stage">
-        {MEDIA_VIDEO.test(current || '')
+      <div className={`sf-result-stage${isAudio || isFile ? ' is-audio' : ''}`}>
+        {isVideo
           ? <video src={mediaFile(current)} controls autoPlay preload="metadata" />
-          : <img src={mediaFile(current)} alt={title} />}
+          : isImage
+            ? <img src={mediaFile(current)} alt={title} />
+            : <div className="sf-result-audio">
+                <span className="sf-result-audio-icon">{isAudio ? <Volume2 size={24} /> : <HardDrive size={24} />}</span>
+                <div className="sf-result-audio-meta">
+                  <strong>{isAudio ? '音频结果 · 可直接试听' : '文件结果'}</strong><span>{fileName}</span>
+                </div>
+                {isAudio
+                  ? <audio controls preload="metadata" src={mediaFile(current)} aria-label={title} />
+                  : <p className="sf-result-audio-hint">这类文件没有内嵌预览，用下面的「在新窗口打开」或「下载」查看。</p>}
+              </div>}
       </div>
       {paths.length > 1 && <div className="sf-result-thumbs">
         {paths.map((path, item) => <button key={path} type="button" className={item === index ? 'selected' : ''} onClick={() => setIndex(item)}>
-          {MEDIA_VIDEO.test(path) ? <Film size={14} /> : <Image size={14} />}<span>{path.split(/[\\/]/).pop()}</span>
+          {resultIcon(path)}<span>{path.split(/[\\/]/).pop()}</span>
         </button>)}
       </div>}
       <div className="sf-result-actions">
-        <a className="sf-secondary" href={mediaFile(current)} download={String(current).split(/[\\/]/).pop()}>下载</a>
+        <a className="sf-secondary" href={mediaFile(current)} download={fileName}>下载</a>
         <a className="sf-secondary" href={mediaFile(current)} target="_blank" rel="noreferrer">在新窗口打开</a>
       </div>
     </div>
@@ -165,7 +196,7 @@ function Home({ projects, seriesNames, continueProject, loading, error, onStart,
   onStart: () => void; onOpen: (id: string) => void; onSeries: (series: string) => void; onRetry: () => void;
   onQuick: (tool: QuickTool) => void; onDeleted: () => void;
   onUsePrompt: (text: string, target: PromptTarget) => void; onUseFrame: (path: string, title: string) => void;
-  onUseTimbre: (description: string) => void; onUseMusic: (card: Record<string, unknown>) => void;
+  onUseTimbre: (params: Record<string, unknown>, name: string) => void; onUseMusic: (card: Record<string, unknown>) => void;
   onReuseTask: (reuse: { tool: QuickTool; values: Record<string, unknown> }, title: string) => void;
 }) {
   const [batchMode, setBatchMode] = useState(false);
@@ -176,6 +207,7 @@ function Home({ projects, seriesNames, continueProject, loading, error, onStart,
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [dialogError, setDialogError] = useState('');
+  const [adopt, setAdopt] = useState<{ id: string; title: string; outputs: string[] } | null>(null);
 
   const toggle = (id: string) => setSelected(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id]);
   const requestDelete = async (ids: string[]) => {
@@ -220,6 +252,25 @@ function Home({ projects, seriesNames, continueProject, loading, error, onStart,
     try { setQuick((await api<{ tasks: QuickTask[] }>('/api/quick-tasks')).tasks || []); setQuickError(''); }
     catch (reason) { setQuickError(reason instanceof Error ? reason.message : '无法读取单步任务'); }
   };
+
+  // 未读：先本地翻成已读（点开就消失），再写回后端；列表每 2 秒轮询，
+  // 服务端成功后自然一致，写失败也只是下次刷新时把标记带回来。
+  const unreadCount = quick.filter(item => item.unread).length;
+  const markQuickRead = (id: string) => {
+    setQuick(current => current.map(item => item.id === id
+      ? { ...item, unread: false, read_at: item.read_at || Date.now() / 1000 } : item));
+    void api(`/api/tasks/${encodeURIComponent(id)}/read`, { method: 'POST' }).catch(() => { /* 下次轮询纠正 */ });
+  };
+  const markAllQuickRead = () => {
+    const ids = quick.filter(item => item.unread).map(item => item.id);
+    if (!ids.length) return;
+    setQuick(current => current.map(item => item.unread
+      ? { ...item, unread: false, read_at: item.read_at || Date.now() / 1000 } : item));
+    void api('/api/tasks/read', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_ids: ids }),
+    }).catch(() => { /* 下次轮询纠正 */ });
+  };
   useEffect(() => {
     void loadQuick();
     const timer = setInterval(() => void loadQuick(), 2000);
@@ -232,6 +283,19 @@ function Home({ projects, seriesNames, continueProject, loading, error, onStart,
     finally { setOrphanBusy(false); }
   };
   const quickToggle = (id: string) => setQuickSelected(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id]);
+  // 全选只认「可删」的任务：在途或被占用的不选进来，免得点删除又被后端拒。
+  const quickPickable = (tasks: QuickTask[]) => tasks.filter(task => task.deletable).map(task => task.id);
+  const quickAllIds = quickPickable(quick);
+  const quickAllPicked = quickAllIds.length > 0 && quickAllIds.every(id => quickSelected.includes(id));
+  const quickPickAll = () => setQuickSelected(quickAllPicked ? [] : quickAllIds);
+  const quickPickGroup = (tasks: QuickTask[]) => {
+    const ids = quickPickable(tasks);
+    if (!ids.length) return;
+    const all = ids.every(id => quickSelected.includes(id));
+    setQuickSelected(current => all
+      ? current.filter(id => !ids.includes(id))
+      : Array.from(new Set([...current, ...ids])));
+  };
   const requestQuickDelete = async (ids: string[]) => {
     if (!ids.length) return;
     setBusy(true); setDialogError(''); setQuickNotice(null); setQuickConfirmed(false); setQuickArchivePick([]);
@@ -270,7 +334,7 @@ function Home({ projects, seriesNames, continueProject, loading, error, onStart,
     <div className="sf-home-shell">
       <div className="sf-rail-col sf-rail-col--left">
         <PromptLibraryPanel onUsePrompt={onUsePrompt} />
-        <PresetLibraryPanel kind="timbre" onUse={params => onUseTimbre(String(params.voice_description || ''))} />
+        <PresetLibraryPanel kind="timbre" onUse={(params, name) => onUseTimbre(params, name)} />
         <ScriptLibraryEntry onOpen={() => setScriptOpen(true)} />
       </div>
       <main className="sf-page sf-home">
@@ -279,10 +343,10 @@ function Home({ projects, seriesNames, continueProject, loading, error, onStart,
         <div className="sf-home-actions">
           {batchMode
             ? <>
-              <button className="sf-ghost" onClick={() => { setBatchMode(false); setSelected([]); }}>退出批量</button>
+              <button className="sf-ghost" onClick={() => { setBatchMode(false); setSelected([]); }}>退出作品批量</button>
               <button className="sf-secondary" disabled={!selected.length || busy} onClick={() => void requestDelete(selected)}>删除所选（{selected.length}） <Trash2 size={15} /></button>
             </>
-            : <button className="sf-ghost" onClick={() => setBatchMode(true)}>批量管理</button>}
+            : <button className="sf-ghost" onClick={() => setBatchMode(true)}>批量管理作品</button>}
           <button className="sf-ghost" disabled={orphanBusy} onClick={() => void loadOrphans()}><ScanEye size={15} /> {orphanBusy ? '扫描中…' : '孤儿产物清单'}</button>
           <button className="sf-secondary" onClick={onStart}><Plus size={16} /> 新建项目</button>
         </div>
@@ -293,6 +357,7 @@ function Home({ projects, seriesNames, continueProject, loading, error, onStart,
         <button onClick={() => onQuick('image-video')}><Upload size={24} /><strong>图生视频</strong><span>上传一张图，生成一个镜头</span></button>
         <button onClick={() => onQuick('reference-image')}><ImagePlus size={24} /><strong>参考图生成</strong><span>识别一张图，再批量生成相似画面</span></button>
         <button onClick={() => onQuick('enhance')}><Wand2 size={24} /><strong>清晰化</strong><span>提高图片或视频分辨率</span></button>
+        <button onClick={() => onQuick('video-edit')}><Scissors size={24} /><strong>剪辑</strong><span>剪切、排序、拼接，铺音乐导出成片</span></button>
         <button onClick={() => onQuick('music')}><Music size={24} /><strong>配乐</strong><span>按标签与时长生成音乐候选</span></button>
         <button onClick={() => onQuick('timbre')}><AudioLines size={24} /><strong>音色设计</strong><span>文字造音色或克隆参考，出可复用样本</span></button>
       </section>
@@ -337,7 +402,11 @@ function Home({ projects, seriesNames, continueProject, loading, error, onStart,
       {quick.length > 0 && <section className="sf-section">
         <div className="sf-section-head">
           <h2>单步任务</h2><span>{quick.length} 条 · 不属于任何作品</span>
-          <button className="sf-ghost sf-section-action" onClick={() => { setQuickBatch(value => !value); setQuickSelected([]); }}>{quickBatch ? '退出批量' : '批量管理'}</button>
+          {unreadCount > 0 && <button className="sf-ghost sf-section-action" onClick={markAllQuickRead}>全部已读（{unreadCount}）</button>}
+          <button className="sf-ghost sf-section-action" onClick={() => { setQuickBatch(value => !value); setQuickSelected([]); }}>{quickBatch ? '退出任务批量' : '批量管理任务'}</button>
+          {quickBatch && <button className="sf-ghost sf-section-action" disabled={!quickAllIds.length}
+            title={quickAllIds.length ? `可选 ${quickAllIds.length} 条（在途或占用的不选）` : '没有可删的任务'}
+            onClick={quickPickAll}>{quickAllPicked ? '取消全选' : `全选（${quickAllIds.length}）`}</button>}
           {quickBatch && <button className="sf-secondary sf-section-action" disabled={!quickSelected.length || busy} onClick={() => void requestQuickDelete(quickSelected)}>删除所选（{quickSelected.length}） <Trash2 size={15} /></button>}
         </div>
         {quickError && <p className="sf-error" role="alert">{quickError}</p>}
@@ -351,8 +420,18 @@ function Home({ projects, seriesNames, continueProject, loading, error, onStart,
               return true;
             });
             if (!tasks.length) return null;
+            const groupIds = tasks.filter(task => task.deletable).map(task => task.id);
+            const groupAll = groupIds.length > 0 && groupIds.every(id => quickSelected.includes(id));
             return <section className="sf-quick-group" key={group.key} aria-label={`单步任务 · ${group.title}`}>
-              <div className="sf-quick-group-head"><h3>{group.title}</h3><span>{tasks.length} 条</span></div>
+              <div className="sf-quick-group-head">
+                <h3>{group.title}</h3><span>{tasks.length} 条</span>
+                {quickBatch && <button type="button" className="sf-quick-pick" disabled={!groupIds.length}
+                  aria-pressed={groupAll}
+                  title={groupIds.length ? `${groupAll ? '取消' : ''}选中本组 ${groupIds.length} 条可删任务` : '本组没有可删的任务'}
+                  onClick={() => quickPickGroup(tasks)}>
+                  {groupAll ? <CheckSquare size={13} /> : <Square size={13} />} {groupAll ? '取消本组' : '全选本组'}
+                </button>}
+              </div>
               <div className="sf-work-list">
                 {tasks.map(task => (
                   <div className="sf-work-row" key={task.id}>
@@ -363,14 +442,20 @@ function Home({ projects, seriesNames, continueProject, loading, error, onStart,
                     )}
                     <span className="sf-work-open">
                       <span className="sf-work-mark">{group.title.slice(0, 1)}</span>
-                      <span className="sf-work-main"><strong>{task.title}</strong><small>{task.tool} · {taskStates[task.status] || task.status}{typeof task.duration_ms === 'number' ? ` · ${TERMINAL.has(task.status) ? '耗时' : '已用'} ${formatTaskDuration(task.duration_ms)}` : ''}{task.created_at ? ` · ${new Date(task.created_at * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}` : ''}{task.revision ? ` · 改第 ${task.revision} 版` : ''}</small>{task.error && <small className="sf-task-error">{task.error}</small>}<TaskProgress progress={task.progress} label={task.tool} /></span>
+                      <span className="sf-work-main"><strong>{task.title}</strong>{task.unread && <em className="sf-unread">未读</em>}<small>{task.tool} · {taskStates[task.status] || task.status}{typeof task.duration_ms === 'number' ? ` · ${TERMINAL.has(task.status) ? '耗时' : '已用'} ${formatTaskDuration(task.duration_ms)}` : ''}{task.created_at ? ` · ${new Date(task.created_at * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}` : ''}{task.revision ? ` · 改第 ${task.revision} 版` : ''}</small>{task.error && <small className="sf-task-error">{task.error}</small>}<TaskProgress progress={task.progress} label={task.tool} /></span>
                       {(() => {
                         const paths = task.outputs?.length ? task.outputs : task.output ? [task.output] : [];
                         if (!paths.length) return null;
-                        return <button type="button" className="sf-secondary" onClick={() => setPreview({ title: task.title, paths })}>
+                        return <button type="button" className="sf-secondary" onClick={() => { markQuickRead(task.id); setPreview({ title: task.prompt || task.title, paths }); }}>
                           查看结果{paths.length > 1 ? `（${paths.length}）` : ''}
                         </button>;
                       })()}                      {task.reuse && <button className="sf-secondary" type="button" aria-label={`编辑重生成 · ${task.title}`} onClick={() => onReuseTask(task.reuse as { tool: QuickTool; values: Record<string, unknown> }, task.title)}>编辑重生成</button>}
+                      {task.status === 'succeeded' && (task.outputs?.length || task.output) && projects.length > 0 && (
+                        <button className="sf-secondary" type="button" aria-label={`归入作品 · ${task.title}`}
+                          title="把这份产物复制一份，登记到你选的作品里；草稿箱原件保留"
+                          onClick={() => setAdopt({ id: task.id, title: task.title,
+                            outputs: task.outputs?.length ? task.outputs : [task.output as string] })}>归入项目</button>
+                      )}
                     </span>
                     {task.deletable
                       ? <button className="sf-work-delete" aria-label="删除单步任务" onClick={() => void requestQuickDelete([task.id])}><Trash2 size={15} /></button>
@@ -383,6 +468,7 @@ function Home({ projects, seriesNames, continueProject, loading, error, onStart,
         })()}
       </section>}
       {preview && <ResultPreview title={preview.title} paths={preview.paths} onClose={() => setPreview(null)} />}
+      {adopt && <AdoptDialog task={adopt} projects={projects} onClose={() => setAdopt(null)} />}
       {plan && (
         <div className="sf-modal-mask" role="dialog" aria-modal="true">
           <div className="sf-modal">
@@ -533,13 +619,100 @@ function StepTwo({ presets, selected, setSelected, onNext, busy, error }: { pres
   </div>;
 }
 
-function StepThree({ segments, planRevision, prompt, setPrompt, duration, setDuration, onAdd, busy, error, onNext }: {
+type ShotProposal = { prompt: string; duration_seconds: number; shot_size: string; camera: string; location: string; performance: string; wardrobe: string };
+
+function StepThree({ projectId, segments, planRevision, prompt, setPrompt, duration, setDuration, onAdd, onAddMany, busy, error, onNext }: {
+  projectId: string;
   segments: Segment[]; planRevision: number; prompt: string; setPrompt: (value: string) => void;
   duration: number; setDuration: (value: number) => void; onAdd: () => void; busy: boolean; error: string; onNext: () => void;
+  onAddMany: (items: { prompt: string; duration: number }[]) => Promise<boolean>;
 }) {
-  return <div className="sf-step-panel"><p className="sf-step-label">镜头</p><h1>管理镜头</h1><p className="sf-lede">每一段独立准备。生成、查看候选和重做都在后面的候选步骤完成。</p>
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkText, setBulkText] = useState('');
+  const [parsing, setParsing] = useState(false);
+  const [bulkError, setBulkError] = useState('');
+  const [proposals, setProposals] = useState<ShotProposal[]>([]);
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+
+  const parseBulk = async () => {
+    if (!bulkText.trim() || parsing) return;
+    setParsing(true); setBulkError('');
+    try {
+      const data = await api<{ shots: ShotProposal[] }>(`/api/projects/${projectId}/plan/parse-shots`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: bulkText.trim(), provider: 'auto', max_shots: 12 }),
+      });
+      setProposals(data.shots || []);
+      setPicked(new Set((data.shots || []).map((_, index) => index)));
+    } catch (reason) {
+      setBulkError(reason instanceof Error ? reason.message : '识别失败');
+    } finally { setParsing(false); }
+  };
+
+  const addPicked = async () => {
+    const items = proposals
+      .filter((_, index) => picked.has(index))
+      .map(shot => ({ prompt: shot.prompt, duration: shot.duration_seconds || duration }));
+    if (!items.length) return;
+    if (await onAddMany(items)) {
+      setProposals([]); setBulkText(''); setPicked(new Set()); setBulkError('');
+    }
+  };
+
+  return <div className="sf-step-panel"><p className="sf-step-label">镜头</p><h1>管理镜头</h1><p className="sf-lede">每一段独立准备。可以直接写一条，也可以粘一段文字让 AI 拆成多条再逐条改。</p>
     <div className="sf-shot-list">{segments.map((segment, index) => <article className="sf-shot" key={segment.id}><div className="sf-shot-number">{String(index + 1).padStart(2, '0')}</div><Thumb tone={index % 2 ? 'sage' : 'amber'} label={segment.id} /><div className="sf-shot-copy"><div className="sf-shot-head"><strong>{segment.id}</strong><span className="sf-chip">{segment.duration_seconds ?? '—'}s</span></div><p>{segment.prompt || '尚未填写提示词'}</p></div><div className="sf-shot-side"><span className={`sf-state ${segment.video?.path ? 'ok' : ''}`}>{segment.video?.path ? '已有候选' : '待生成'}</span></div></article>)}</div>
     <div className="sf-inline-form"><label className="sf-field"><span>新镜头提示词</span><textarea rows={2} value={prompt} onChange={event => setPrompt(event.target.value)} placeholder="描述这个镜头…" /></label><label className="sf-field sf-duration"><span>时长（秒）</span><input type="number" min={1} max={15} value={duration} onChange={event => setDuration(Number(event.target.value))} /></label><button className="sf-secondary" disabled={busy || !prompt.trim()} onClick={onAdd}>{busy ? '添加中…' : <><Plus size={15} /> 添加镜头</>}</button></div>
+
+    <div className="sf-bulk">
+      <button type="button" className="sf-secondary" onClick={() => setBulkOpen(value => !value)}>
+        <Sparkles size={14} /> {bulkOpen ? '收起批量识别' : '粘一段文字，自动拆镜头'}
+      </button>
+      {bulkOpen && <div className="sf-bulk-body">
+        <p className="sf-fine">剧情、分镜描述、整段提示词都可以。AI 只做拆分和整理：不改剧情、不补人物；景别/机位/地点没写就留空，不猜。</p>
+        <textarea rows={5} value={bulkText} maxLength={20000} disabled={parsing}
+          placeholder="例：雨夜，便利店门口，林夏握着保温杯站在灯下；切到出租屋，台灯昏黄，她把杯子放在膝盖上…"
+          onChange={event => setBulkText(event.target.value)} />
+        <div className="sf-post-actions">
+          <button type="button" className="sf-secondary" disabled={parsing || bulkText.trim().length < 10} onClick={() => void parseBulk()}>
+            {parsing ? <><LoaderCircle size={13} className="sf-spin" /> 识别中…</> : '识别并拆分'}
+          </button>
+          <span className="sf-fine">最多 12 条 · 拆完可以逐条改</span>
+        </div>
+        {bulkError && <p className="sf-error" role="alert">{bulkError}</p>}
+        {proposals.length > 0 && <>
+          <div className="sf-bulk-list">
+            {proposals.map((shot, index) => <article key={index} className={`sf-bulk-shot${picked.has(index) ? '' : ' is-off'}`}>
+              <input type="checkbox" checked={picked.has(index)} aria-label={`是否加入镜头 ${index + 1}`}
+                onChange={event => setPicked(current => {
+                  const next = new Set(current);
+                  if (event.target.checked) next.add(index); else next.delete(index);
+                  return next;
+                })} />
+              <div className="sf-bulk-main">
+                <div className="sf-bulk-meta">
+                  <strong>镜头 {index + 1}</strong>
+                  <small>{[shot.shot_size, shot.camera, shot.location].filter(Boolean).join(' · ') || '原文未写景别/机位'}</small>
+                </div>
+                <textarea rows={2} value={shot.prompt} onChange={event => setProposals(current =>
+                  current.map((item, at) => at === index ? { ...item, prompt: event.target.value } : item))} />
+                {(shot.performance || shot.wardrobe) && <small className="sf-fine">
+                  {[shot.performance && `表演：${shot.performance}`, shot.wardrobe && `服装：${shot.wardrobe}`].filter(Boolean).join(' · ')}
+                </small>}
+              </div>
+              <label className="sf-bulk-duration">时长
+                <input type="number" min={1} max={15} value={shot.duration_seconds || duration}
+                  onChange={event => setProposals(current => current.map((item, at) => at === index
+                    ? { ...item, duration_seconds: Number(event.target.value) } : item))} />
+              </label>
+            </article>)}
+          </div>
+          <button type="button" className="sf-primary" disabled={busy || !picked.size} onClick={() => void addPicked()}>
+            {busy ? '添加中…' : `加入 ${picked.size} 个镜头`}
+          </button>
+        </>}
+      </div>}
+    </div>
+
     {error && <p className="sf-error" role="alert">{error}</p>}
     {!segments.length && <p className="sf-fine">还没有镜头：写好提示词后先点「添加镜头」，它才会进入计划；有了镜头才能进入候选。</p>}
     <div className="sf-step-actions"><span className="sf-fine">当前计划 revision {planRevision}</span><button className="sf-primary" disabled={!segments.length} onClick={onNext}>下一步：进入候选 <ArrowRight size={16} /></button></div>
@@ -547,6 +720,72 @@ function StepThree({ segments, planRevision, prompt, setPrompt, duration, setDur
 }
 
 function mediaFile(path: string) { return `/media-file?path=${encodeURIComponent(path)}`; }
+
+/** 把草稿箱里的产物归入某部作品：选作品、选要带走的几张，复制登记成该作品的资产。 */
+function AdoptDialog({ task, projects, onClose }: {
+  task: { id: string; title: string; outputs: string[] };
+  projects: ProjectView[]; onClose: () => void;
+}) {
+  const [projectId, setProjectId] = useState(projects[0]?.id || '');
+  const [picked, setPicked] = useState<string[]>(task.outputs);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [done, setDone] = useState('');
+  const toggle = (path: string) => setPicked(current => current.includes(path)
+    ? current.filter(item => item !== path) : [...current, path]);
+  const submit = async () => {
+    if (!projectId || !picked.length) return;
+    setBusy(true); setError('');
+    try {
+      const data = await api<{ adopted: number; already_adopted: number; project_id: string }>(
+        `/api/quick-tasks/${encodeURIComponent(task.id)}/adopt`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ project_id: projectId, paths: picked }) });
+      const title = projects.find(item => item.id === data.project_id)?.title || data.project_id;
+      setDone(`已归入《${title}》：新增 ${data.adopted} 个${data.already_adopted ? `，${data.already_adopted} 个之前已归入` : ''}。草稿箱里的原件仍然保留。`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '归入失败');
+    } finally { setBusy(false); }
+  };
+  return <div className="sf-modal-backdrop" role="dialog" aria-modal="true" aria-label="归入作品" onClick={onClose}>
+    <div className="sf-modal sf-adopt-modal" onClick={event => event.stopPropagation()}>
+      <button className="sf-modal-close" onClick={onClose} aria-label="关闭"><X size={18} /></button>
+      <p className="sf-step-label">归入作品</p>
+      <h2>{task.title}</h2>
+      <p className="sf-lede">选一部作品，产物会复制一份登记成它的资产；草稿箱里的原件不动，之后删草稿也不影响作品。</p>
+      {!projects.length
+        ? <p className="sf-error" role="alert">还没有正式作品，先去「新建作品」再回来归入。</p>
+        : <>
+          <label className="sf-adopt-field">归入到
+            <select value={projectId} disabled={busy} onChange={event => setProjectId(event.target.value)}>
+              {projects.map(item => <option key={item.id} value={item.id}>{item.title} · {item.series}</option>)}
+            </select>
+          </label>
+          <div className="sf-adopt-grid">
+            {task.outputs.map((path, index) => {
+              const isImage = MEDIA_IMAGE.test(path);
+              const isVideo = MEDIA_VIDEO.test(path);
+              const active = picked.includes(path);
+              return <button type="button" key={path} className={active ? 'is-picked' : ''} disabled={busy}
+                onClick={() => toggle(path)} title={active ? '取消这一份' : '带上这一份'}>
+                {isImage ? <img src={mediaFile(path)} alt={`产物 ${index + 1}`} />
+                  : isVideo ? <video src={mediaFile(path)} preload="metadata" muted />
+                    : <span className="sf-adopt-file"><HardDrive size={18} /></span>}
+                <small>{active ? '已选' : '不带'}</small>
+              </button>;
+            })}
+          </div>
+          {error && <p className="sf-error" role="alert">{error}</p>}
+          {done && <p className="sf-task-note" role="status">{done}</p>}
+          <div className="sf-step-actions">
+            <span className="sf-fine">已选 {picked.length} / {task.outputs.length}</span>
+            <button className="sf-ghost" disabled={busy} onClick={onClose}>{done ? '完成' : '取消'}</button>
+            {!done && <button className="sf-primary" disabled={busy || !picked.length || !projectId} onClick={() => void submit()}>{busy ? '归入中…' : '确认归入'}</button>}
+          </div>
+        </>}
+    </div>
+  </div>;
+}
 
 function StepFour({ segments, shotId, setShotId, versions, busy, error, onLoad, onAdopt, onNext, onGenerate, generating, task }: {
   segments: Segment[]; shotId: string; setShotId: (id: string) => void; versions: Version[]; busy: boolean; error: string;
@@ -881,6 +1120,34 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
     } finally { setBusy(false); }
   };
 
+  // 批量落库：每加一条都要拿最新 revision，否则第二条就会被「计划已更新」拒掉。
+  const addShots = async (items: { prompt: string; duration: number }[]): Promise<boolean> => {
+    if (!projectId || !items.length) return false;
+    setBusy(true); setError('');
+    try {
+      let latest = await api<Plan>(`/api/projects/${projectId}/plan`);
+      for (const item of items) {
+        const segmentId = `S${String((latest?.segments.length || 0) + 1).padStart(2, '0')}`;
+        await api(`/api/projects/${projectId}/plan/segments`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            segment_id: segmentId, expected_revision: latest?.revision ?? 0,
+            duration_seconds: item.duration, prompt: item.prompt,
+            preset_id: presetId || undefined, workflow: workflow || undefined,
+            generation: { aspect_ratio: '16:9', seed: 42, sound_mode: 'performance_reference', speed_profile: 'standard', output_resolution: 'native' },
+          }),
+        });
+        latest = await api<Plan>(`/api/projects/${projectId}/plan`);
+      }
+      setPlan(latest);
+      return true;
+    } catch (reason) {
+      try { setPlan(await api<Plan>(`/api/projects/${projectId}/plan`)); } catch { /* keep old plan */ }
+      setError(reason instanceof Error ? reason.message : '批量添加镜头失败');
+      return false;
+    } finally { setBusy(false); }
+  };
+
   const openOldWorkspace = async () => {
     if (!projectId) { window.location.href = '/'; return; }
     try { await api('/api/projects/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project_id: projectId }) }); } catch { /* selection is a convenience; old UI can still list projects */ }
@@ -1004,14 +1271,14 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
 
   return <div className="sf-root">
     <TopBar username={username} projectTitle={screen === 'wizard' ? projectTitle : undefined} onHome={home} onLogout={onLogout} />
-    {screen === 'home' && <Home projects={projects} seriesNames={seriesNames} continueProject={projects[0] || null} loading={loading} error={loadError} onStart={startFull} onOpen={id => void openProject(id)} onSeries={name => { setActiveSeries(name); setScreen('series'); }} onRetry={() => void loadProjects()} onQuick={tool => { setQuickSeed(null); setQuickTool(tool); setScreen('quick'); }} onDeleted={() => void loadProjects()} onUsePrompt={(text, target) => { setQuickSeed({ prompt: text }); setQuickTool(target); setScreen('quick'); }} onUseFrame={path => { setQuickSeed({ frame: path }); setQuickTool('image-video'); setScreen('quick'); }} onUseTimbre={description => { setQuickSeed({ timbre: description }); setQuickTool('timbre'); setScreen('quick'); }} onUseMusic={card => { setQuickSeed({ music: card }); setQuickTool('music'); setScreen('quick'); }} onReuseTask={(reuse, title) => { setQuickSeed({ ...reuse.values as QuickSeed, fromTask: title }); setQuickTool(reuse.tool); setScreen('quick'); }} />}
+    {screen === 'home' && <Home projects={projects} seriesNames={seriesNames} continueProject={projects[0] || null} loading={loading} error={loadError} onStart={startFull} onOpen={id => void openProject(id)} onSeries={name => { setActiveSeries(name); setScreen('series'); }} onRetry={() => void loadProjects()} onQuick={tool => { setQuickSeed(null); setQuickTool(tool); setScreen('quick'); }} onDeleted={() => void loadProjects()} onUsePrompt={(text, target) => { setQuickSeed({ prompt: text }); setQuickTool(target); setScreen('quick'); }} onUseFrame={path => { setQuickSeed({ frame: path }); setQuickTool('image-video'); setScreen('quick'); }} onUseTimbre={(params, name) => { setQuickSeed({ timbreCard: { name, params } }); setQuickTool('timbre'); setScreen('quick'); }} onUseMusic={card => { setQuickSeed({ music: card }); setQuickTool('music'); setScreen('quick'); }} onReuseTask={(reuse, title) => { setQuickSeed({ ...reuse.values as QuickSeed, fromTask: title }); setQuickTool(reuse.tool); setScreen('quick'); }} />}
     {screen === 'quick' && <Suspense fallback={<div className="sf-center"><LoaderCircle className="sf-spin" size={20} /><p>正在载入工具…</p></div>}><QuickToolPage tool={quickTool} seed={quickSeed} onBack={() => setScreen('home')} /></Suspense>}
     {newProjectOpen && <div className="sf-modal-backdrop" role="dialog" aria-modal="true" aria-label="新建项目"><div className="sf-modal"><button className="sf-modal-close" onClick={() => setNewProjectOpen(false)} aria-label="关闭"><X size={18} /></button><p className="sf-step-label">新建</p><h2>新建项目</h2><p className="sf-modal-lede">项目只是一个结果容器；创建后再选择方案、镜头和生成工具。</p><label className="sf-field"><span>项目名</span><input value={title} onChange={event => setTitle(event.target.value)} placeholder="例如：咖啡测试" /></label><label className="sf-field"><span>系列</span><input value={series} onChange={event => setSeries(event.target.value)} placeholder="例如：单步工具" /></label><ReferenceHints query={title} />{error && <p className="sf-error">{error}</p>}<div className="sf-step-actions"><button className="sf-primary" disabled={busy || !title.trim()} onClick={() => { void createProject().then(created => { if (created) { setNewProjectOpen(false); setScreen('wizard'); } }); }}>{busy ? '创建中…' : '创建项目'}</button></div></div></div>}
     {screen === 'series' && <SeriesResources series={activeSeries} episodes={projects.filter(project => project.series === activeSeries)} onBack={() => setScreen('home')} onOpen={id => void openProject(id)} />}
         {screen === 'wizard' && <Wizard step={step} tool={tool} projectReady={Boolean(projectId)} projectTitle={projectTitle} onStep={next => { setTool(null); setStep(next); }} onTool={setTool} onHome={home}>
       {tool && projectId ? <Suspense fallback={<div className="sf-center"><LoaderCircle className="sf-spin" size={20} /><p>正在载入工具…</p></div>}><ToolPage tool={tool} projectId={projectId} plan={plan} projectDetail={projectDetail} postTab={postTab} setPostTab={setPostTab} onStep={next => { setTool(null); setStep(next); }} onRefreshPlan={refreshPlan} onRefreshProject={refreshProject} onOpenShot={openShot} onBrowse={() => setTool('materials')} onDeleted={() => { void loadProjects(); setTool(null); setScreen('home'); }} /></Suspense> : <>
       {step === 2 && <StepTwo presets={presets} selected={presetId} setSelected={setPresetId} busy={busy} error={error} onNext={() => void installPreset()} />}
-      {step === 3 && <StepThree segments={plan?.segments || []} planRevision={plan?.revision ?? 0} prompt={prompt} setPrompt={setPrompt} duration={shotDuration} setDuration={setShotDuration} onAdd={() => void addShot()} busy={busy} error={error} onNext={() => setStep(4)} />}
+      {step === 3 && <StepThree projectId={projectId} segments={plan?.segments || []} planRevision={plan?.revision ?? 0} prompt={prompt} setPrompt={setPrompt} duration={shotDuration} setDuration={setShotDuration} onAdd={() => void addShot()} onAddMany={addShots} busy={busy} error={error} onNext={() => setStep(4)} />}
       {step === 4 && <StepFour segments={plan?.segments || []} shotId={versionShot} setShotId={setVersionShot} versions={versions} busy={busy} error={error} onLoad={id => void loadVersions(id)} onAdopt={version => void adoptVersion(version)} onNext={() => setStep(5)} onGenerate={segment => void generateCandidate(segment)} generating={busy} task={generationTask} />}
       {step === 5 && <StepFive assembly={assembly} task={assemblyTask} busy={busy} error={error} onSound={() => void setNativeSound()} onJoin={join => void approveJoin(join)} onSubmit={() => void submitAssembly()} onReload={() => void loadAssembly()} />}
       {step === 6 && <StepSix output={assemblyOutput} assembly={assembly} busy={busy} error={error} onFinal={() => void approveFinal()} onOld={() => void openOldWorkspace()} />}

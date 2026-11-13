@@ -140,3 +140,92 @@ def test_adult_presets_inject_the_lora_trigger_word():
         assert production_presets.trigger_prefix(preset_id) == 'r34l1sm, '
     assert production_presets.trigger_prefix(production_presets.PRESET_ID) == ''
     assert production_presets.trigger_prefix(None) == ''
+
+
+def _write_png(path: Path, size=(64, 96), color=(120, 120, 120)):
+    from PIL import Image
+    Image.new('RGB', size, color).save(path)
+    return path
+
+
+def test_pose_slot_uses_controlnet_and_leaves_semantic_images_alone(tmp_path):
+    """姿势槽必须走 ControlNet；再塞进多参考只会把它当又一张素材。"""
+    face = _write_png(tmp_path / 'face.png')
+    pose = _write_png(tmp_path / 'pose.png', (90, 120), (10, 10, 10))
+    prepared = prepare_text(
+        'posecontroltest', '她坐在墙前', tmp_path / 'tasks', 'PoseTest/control', 7,
+        768, 1344, 'general', 8,
+        [{'role': '脸型', 'path': str(face), 'label': '正面脸图'},
+         {'role': '姿势', 'path': str(pose), 'label': '坐姿・双手后撑'}],
+    )
+    graph = json.loads(Path(prepared['workflow']).read_text(encoding='utf-8'))
+    # 只有脸型留作语义参考，姿势不再进 images。
+    assert list(graph['4']['inputs']['images']) == ['image_0']
+    # GGUF 走 sd.cpp 兼容模式，model patch 不生效；控制任务必须换 int8 底模。
+    assert graph['1']['class_type'] == 'UNETLoader'
+    # GGUF 走 sd.cpp 兼容模式，model patch 不生效；控制任务必须换 int8 底模。
+    assert graph['1']['class_type'] == 'UNETLoader'
+    assert graph['30']['class_type'] == 'ModelPatchLoader'
+    assert graph['31']['class_type'] == 'LoadImage'
+    assert graph['32']['class_type'] == 'QwenImageDiffsynthControlnet'
+    assert graph['19']['inputs']['model'] == ['32', 0]
+    assert prepared['request']['control']['strength'] == 0.9
+    assert '姿势按结构控制图执行' in prepared['request']['prompt_for_model']
+    assert '参考图2' not in prepared['request']['prompt_for_model']
+
+
+def test_without_pose_slot_no_controlnet_nodes(tmp_path):
+    face = _write_png(tmp_path / 'face.png')
+    prepared = prepare_text(
+        'noposecontrol', '她坐在墙前', tmp_path / 'tasks', 'PoseTest/plain', 7,
+        768, 1344, 'general', 8,
+        [{'role': '脸型', 'path': str(face), 'label': '正面脸图'}],
+    )
+    graph = json.loads(Path(prepared['workflow']).read_text(encoding='utf-8'))
+    assert '30' not in graph and '32' not in graph
+    assert graph['1']['class_type'] == 'UnetLoaderGGUF'
+    assert graph['1']['class_type'] == 'UnetLoaderGGUF'
+    assert list(graph['4']['inputs']['images']) == ['image_0']
+    assert prepared['request']['control'] is None
+
+
+def test_pose_slot_uses_controlnet_and_leaves_semantic_images_alone(tmp_path):
+    """姿势槽必须走 ControlNet；再塞进多参考只会把它当又一张素材。"""
+    face = _write_png(tmp_path / 'face.png')
+    pose = _write_png(tmp_path / 'pose.png', (90, 120), (10, 10, 10))
+    prepared = prepare_text(
+        'posecontroltest', '她坐在墙前', tmp_path / 'tasks', 'PoseTest/control', 7,
+        768, 1344, 'general', 8,
+        [{'role': '脸型', 'path': str(face), 'label': '正面脸图'},
+         {'role': '姿势', 'path': str(pose), 'label': '坐姿・双手后撑'}],
+    )
+    graph = json.loads(Path(prepared['workflow']).read_text(encoding='utf-8'))
+    # 姿势 + 人脸走 Union 的「参考编码 + 结构控制」：GGUF 的 sd.cpp 路径
+    # 不执行 model patch，所以控制任务必须换 int8 底模。
+    assert graph['1']['class_type'] == 'UNETLoader'
+    # Union 权重改用 int8，由原生 ModelPatchLoader 读取：它会按 gate_up 是否存在
+    # 切换 fused_mlp，并用 dit_patch_operations 保留 convrot 量化。
+    assert graph['4']['class_type'] == 'ModelPatchLoader'
+    assert graph['4']['inputs']['name'] == 'qwen_image_2.1_fun_controlnet_union_int8_convrot.safetensors'
+    assert graph['6']['class_type'] == 'QwenImage21UnionReferenceEncode'
+    assert graph['7']['class_type'] == 'QwenImage21UnionApply'
+    assert graph['6']['inputs']['reference_image'] == ['ref0', 0]
+    assert graph['7']['inputs']['control_image'] == ['5', 0]
+    assert prepared['request']['control']['mode'] == 'Depth'
+    assert prepared['request']['control']['strength'] == 1.0
+    assert '姿势按结构控制图执行' in prepared['request']['prompt_for_model']
+    assert '参考图2' not in prepared['request']['prompt_for_model']
+
+
+def test_without_pose_slot_no_controlnet_nodes(tmp_path):
+    face = _write_png(tmp_path / 'face.png')
+    prepared = prepare_text(
+        'noposecontrol', '她坐在墙前', tmp_path / 'tasks', 'PoseTest/plain', 7,
+        768, 1344, 'general', 8,
+        [{'role': '脸型', 'path': str(face), 'label': '正面脸图'}],
+    )
+    graph = json.loads(Path(prepared['workflow']).read_text(encoding='utf-8'))
+    assert '30' not in graph and '32' not in graph
+    assert graph['1']['class_type'] == 'UnetLoaderGGUF'
+    assert list(graph['4']['inputs']['images']) == ['image_0']
+    assert prepared['request']['control'] is None

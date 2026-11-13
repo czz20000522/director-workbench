@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import json
 import secrets
+import shutil
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -21,9 +23,9 @@ from fastapi import APIRouter, HTTPException, Query
 
 from .. import app as backend
 from .. import generated_orphans as orphan_scan
-from .. import library_archive, trash
+from .. import library_archive, production_presets, trash
 from .. import task_scheduler
-from ..schemas import TaskBatchDeleteRequest, TaskBatchPlanRequest
+from ..schemas import QuickTaskAdoptRequest, TaskBatchDeleteRequest, TaskBatchPlanRequest
 
 
 ROUTER = APIRouter()
@@ -34,7 +36,7 @@ QUICK_TITLE = '单步任务'
 QUICK_WORKSPACE_DIRECTORY = '_单步任务'
 TASK_PLAN_TTL_SECONDS = 20 * 60
 TOOL_LABELS = {'keyframe': '图片', 'workflow': '视频', 'enhancement': '清晰化', 'media_operation': '媒体处理', 'music': '配乐',
-               'audio_edit': '音频编辑', 'audio_master': '全片母版', 'speech': '配音',
+               'video_edit': '剪辑', 'audio_edit': '音频编辑', 'audio_master': '全片母版', 'speech': '配音',
                'anchor_dubbing': '锚点配音', 'audio_swap': '换音轨', 'vlm_observation': '画面观察',
                'reference_decomposition': '参考拆解', 'reference_semantic': '参考分析'}
 
@@ -68,6 +70,10 @@ def task_tool(payload: dict[str, Any]) -> str:
     # 混在文生图堆里，昨天的重绘任务看起来就像一个没写好的出图任务。
     if payload.get('kind') == 'keyframe' and (payload.get('request') or {}).get('mode') == 'inpaint':
         return '局部重绘'
+    # 用参考图拼出来的首帧不是"文生图"：起点是素材库里的图和人脸/服装/姿势槽。
+    # 混在文生图堆里，用户会以为这些图是纯文字生成的，也找不到该去哪改。
+    if payload.get('kind') == 'keyframe' and (payload.get('request') or {}).get('mode') == 'reference':
+        return '参考图生图'
     if payload.get('kind') == 'speech' and (payload.get('request') or {}).get('mode') == 'design':
         return '音色设计'
     # 视频任务走的是作品管线，payload 里没有 kind，只有 pipeline_stage_id。
@@ -136,8 +142,8 @@ def quick_task_reuse(payload: dict[str, Any]) -> dict[str, Any] | None:
     if kind == 'keyframe':
         request = payload.get('request') or {}
         prompt = str(request.get('prompt') or '').strip()
-        if not prompt or request.get('mode') != 'text':
-            return None  # 参考图模式的起点是一张图，不在这里替你猜
+        if not prompt:
+            return None
         size = payload.get('output_size') or {}
         values: dict[str, Any] = {'prompt': prompt,
                                   'quality': str(request.get('output_resolution') or size.get('resolution') or 'native')}
@@ -148,8 +154,51 @@ def quick_task_reuse(payload: dict[str, Any]) -> dict[str, Any] | None:
         aspect = backend._aspect(request.get('width'), request.get('height'))
         if aspect:
             values['aspect'] = aspect
+        if request.get('mode') == 'reference':
+            # 参考图任务有两种来路，编辑时要回各自那一页，别串台：
+            #   1. 首帧工作台拼的槽位（人脸/造型/服装/姿势）→ 回「图生视频」的素材组合；
+            #   2. 参考图生成工具的一张底图 → 回「参考图生成」，图和词一起放回去。
+            # 判据只能看提交时的原话：冻结后的槽只留副本路径，material_id 丢了。
+            submitted = ((payload.get('submission_receipt') or {}).get('request') or {})
+            picked = [item for item in (submitted.get('references') or [])
+                      if isinstance(item, dict) and str(item.get('material_id') or '').strip()]
+            if not picked:
+                # 没有提交回执的旧记录：冻结槽里也可能还带 material_id，照样认。
+                picked = [item for item in (request.get('references') or [])
+                          if isinstance(item, dict) and str(item.get('material_id') or '').strip()]
+            if picked:
+                # 冻结槽里的中文标题还能用，按槽名贴回去，界面先显示名字。
+                labels = {str(item.get('role') or ''): str(item.get('label') or '')
+                          for item in (request.get('references') or []) if isinstance(item, dict)}
+                slots = []
+                for item in picked:
+                    role = str(item.get('role') or '').strip()
+                    if not role:
+                        continue
+                    slots.append({'role': role, 'material_id': str(item['material_id']),
+                                  'label': labels.get(role, '')})
+                if slots:
+                    values['references'] = slots
+                    if request.get('creative_profile'):
+                        values['profile'] = str(request['creative_profile'])
+                    return {'tool': 'image-video', 'values': values}
+            # 只有一张底图：参考图生成的产物，或者首帧台只选了「自有素材」。
+            # 两者都是一张图加一段词，回参考图生成页最顺手。
+            frozen = [str(item.get('path') or '') for item in (request.get('references') or [])
+                      if isinstance(item, dict)]
+            image = next((path for path in frozen if path), '') or str(request.get('reference_image') or '')
+            portable = backend._portable(image)
+            if not portable:
+                # 不知道当时用了什么图，带回去也是个空表单——比没有入口更糟。
+                return None
+            values['image'] = portable
+            if type(request.get('refine')) is bool:
+                values['refine'] = request['refine']  # 面板上叫「降噪」，保持原样
+            return {'tool': 'reference-image', 'values': values}
         return {'tool': 'image', 'values': values}
-    if kind == 'workflow':
+    if kind == 'workflow' or (not kind and isinstance(payload.get('segment_snapshot'), dict)):
+        # 视频任务走作品管线，payload 里没有 kind，只有 pipeline_stage_id；以前只认
+        # kind=='workflow'，于是文生视频、图生视频卡片一直没有「编辑重生成」。
         snapshot = payload.get('segment_snapshot') or {}
         generation = snapshot.get('generation') or {}
         prompt = str(payload.get('prompt_override') or payload.get('prompt') or snapshot.get('prompt') or '').strip()
@@ -166,6 +215,20 @@ def quick_task_reuse(payload: dict[str, Any]) -> dict[str, Any] | None:
             values['aspect'] = generation['aspect_ratio']
         if generation.get('output_resolution'):
             values['quality'] = str(generation['output_resolution'])
+        # 视频工具必须显式选制作方案：把这条任务当时的方案一起带回去，否则表单看着
+        # 像上次，实际按另一条路线重跑（画幅、步数、LoRA 都可能不同）。
+        stage = str(payload.get('pipeline_stage_id') or '')
+        preset = next((item for item in production_presets.PRESET_IDS
+                       if production_presets.stage_id(item) == stage), None)
+        if preset:
+            values['preset'] = preset
+        # 关联过的声音也一起带回去：改提示词重跑时不该把配音和配乐丢回「不关联」。
+        guide = backend._portable((snapshot.get('audio') or {}).get('guide'))
+        if guide:
+            values['voice'] = guide
+        music = backend._portable(payload.get('music_overlay'))
+        if music:
+            values['music_track'] = music
         return {'tool': 'image-video' if frame else 'text-video', 'values': values}
     if kind == 'speech':
         request = payload.get('request') or {}
@@ -194,6 +257,17 @@ def quick_task_reuse(payload: dict[str, Any]) -> dict[str, Any] | None:
 
 def quick_prompt_excerpt(task: dict[str, Any], length: int = 46) -> str:
     payload = task.get('payload') or {}
+    if payload.get('kind') == 'video_edit':
+        # 剪辑任务没有提示词；用段数和总时长当标题，列表里才分得清是哪一条。
+        request = payload.get('request') or {}
+        clips = request.get('clips') or []
+        total = 0.0
+        for clip in clips:
+            try:
+                total += max(0.0, float(clip.get('end_seconds') or 0) - float(clip.get('start_seconds') or 0))
+            except (TypeError, ValueError):
+                continue
+        return f'剪辑 · {len(clips)} 段 · {total:.1f} 秒' if clips else '剪辑'
     prompt = backend._prompt_of(task)
     if not prompt and backend.is_enhancement(payload):
         recipe = payload.get('enhancement') or {}
@@ -205,11 +279,51 @@ def quick_prompt_excerpt(task: dict[str, Any], length: int = 46) -> str:
     return collapsed if len(collapsed) <= length else collapsed[:length].rstrip() + '…'
 
 
+def quick_prompt_full(task: dict[str, Any]) -> str:
+    """完整提示词：不截断、只把连续空白压成一个空格。
+
+    ``quick_prompt_excerpt`` 是列表标题（46 字 + 省略号），结果预览要用全文。
+    """
+    payload = task.get('payload') or {}
+    if payload.get('kind') == 'video_edit':
+        return ''
+    prompt = backend._prompt_of(task)
+    if not prompt and backend.is_enhancement(payload):
+        recipe = payload.get('enhancement') or {}
+        prompt = str(recipe.get('label') or Path(str(recipe.get('source') or '')).stem)
+    return ' '.join(str(prompt).split())
+
+
+def _card_outputs(result: dict[str, Any]) -> list[str]:
+    """任务产物有两种写法，不能混：
+
+    - ComfyUI 视频任务：`outputs` 是相对 output 目录的字符串（要补 `output/`）；
+    - 媒体/剪辑/音频任务：`outputs` 是 `{kind, path, ...}` 对象，路径已经是可用的
+      绝对路径或登记路径，再拼前缀会得到 ``output/{'path': ...}`` 这种坏串。
+    """
+    published = result.get('published_outputs')
+    if published:
+        return [str(item) for item in published]
+    outputs: list[str] = []
+    for item in result.get('outputs') or []:
+        if isinstance(item, dict):
+            path = item.get('path')
+            if isinstance(path, str) and path:
+                outputs.append(path)
+        elif isinstance(item, str) and item:
+            outputs.append(f'output/{item}')
+    # 关键帧/清晰化把唯一产物放在 output（视频另有 video_path），没有 outputs 列表。
+    single = result.get('output') or result.get('video_path')
+    if isinstance(single, str) and single and single not in outputs:
+        outputs.insert(0, single)
+    return outputs
+
+
 def quick_task_card(task: dict[str, Any]) -> dict[str, Any]:
     payload = task.get('payload') or {}
     result = task.get('result') or {}
     tool = backend.task_tool(payload)
-    outputs = (result or {}).get('published_outputs') or [f"output/{item}" for item in (result or {}).get('outputs') or []]
+    outputs = _card_outputs(result or {})
     if not outputs and isinstance((result or {}).get('output'), str) and result['output']:
         # 关键帧任务把产物写在 output（绝对路径）里，不是 outputs。
         outputs = [result['output']]
@@ -219,8 +333,15 @@ def quick_task_card(task: dict[str, Any]) -> dict[str, Any]:
         # 视频任务再分文生/图生：有首帧就是图生视频，没有就是文生视频。
         # 首帧可能写在 first_frame、materials 或 pipeline_values 里，三者都要认。
         'video_mode': (('image-video' if backend._first_frame_of(payload) else 'text-video') if tool == '视频' else None),
-        'title': backend.quick_prompt_excerpt(task), 'status': task['status'],
+        'title': backend.quick_prompt_excerpt(task),
+        # 列表用 46 字摘要，但「查看结果」那张弹窗要把整段提示词显示出来，
+        # 所以单独给一份不截断的。剪辑/清晰化这类没有提示词的任务返回空串。
+        'prompt': quick_prompt_full(task),
+        'status': task['status'],
         'created_at': task.get('created_at'), 'updated_at': task.get('updated_at'),
+        # 未读/已读：生成成功但用户还没打开过结果的，标成未读；失败/在途不算。
+        'read_at': task.get('read_at'),
+        'unread': task.get('status') == 'succeeded' and not task.get('read_at'),
         # 耗时：终态是「花了多久」，运行中是「已用多久」（首页每 2 秒刷新一次）。
         'started_at': task.get('started_at'),
         'duration_ms': backend.quick_task_duration_ms(task),
@@ -242,6 +363,102 @@ def quick_task_card(task: dict[str, Any]) -> dict[str, Any]:
 def quick_workspace() -> dict[str, Any]:
     """The container id single-step tools submit against; created on first use."""
     return {'project_id': backend.ensure_quick_project()}
+
+
+def adopt_task_outputs(task: dict[str, Any], project_id: str, paths: list[str] | None = None) -> dict[str, Any]:
+    """把一条草稿任务的产物复制并登记成作品资产（核心，路由与执行器共用）。
+
+    调用方负责校验任务状态与来源；这里只管「复制 + 登记 + 幂等」，出错抛 ValueError。
+    """
+    with backend.MATERIAL_REUSE_LOCK:
+        task_id = str(task['id'])
+        manifest = backend.load_project_manifest(project_id)
+        outputs = _card_outputs(task.get('result') or {})
+        wanted = [item for item in (paths or []) if item in outputs] if paths else outputs
+        if not wanted:
+            raise ValueError('这条任务没有可归入的产物')
+        workspace = (backend.resolve_registered_path(str(manifest['workspace_root']))
+                     if manifest.get('workspace_root')
+                     else (backend.DIRECTOR_WORKSPACES_ROOT / project_id).resolve())
+        assets = list(manifest.get('assets') or [])
+        title = quick_prompt_excerpt(task, 28) or backend.task_tool(task.get('payload') or {})
+        tool = backend.task_tool(task.get('payload') or {})
+        registered: list[dict[str, Any]] = []
+        created = 0
+        skipped = 0
+        for value in wanted:
+            try:
+                source_path = backend.resolve_registered_path(value)
+                if not source_path.is_file():
+                    raise ValueError('产物文件不存在')
+            except (ValueError, OSError) as exc:
+                raise ValueError(f'产物不可读取：{exc}') from exc
+            provenance = {'task_id': task_id, 'path': str(source_path)}
+            existing = next((asset for asset in assets if isinstance(asset, dict)
+                             and (asset.get('adopted_from') or {}).get('task_id') == task_id
+                             and (asset.get('adopted_from') or {}).get('path') == str(source_path)
+                             and backend._asset_record_exists(asset)), None)
+            if existing:
+                registered.append(existing)
+                skipped += 1
+                continue
+            destination = (workspace / 'assets' / 'adopted' / uuid.uuid4().hex / source_path.name).resolve()
+            if not destination.is_relative_to(workspace.resolve()):
+                raise ValueError('目标素材目录越界')
+            try:
+                destination.parent.mkdir(parents=True, exist_ok=False)
+                before = source_path.stat()
+                shutil.copy2(source_path, destination)
+                after = source_path.stat()
+            except OSError as exc:
+                raise ValueError('产物复制失败，请确认草稿文件与目标目录仍可访问后重试') from exc
+            if (destination.stat().st_size != before.st_size
+                    or (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns)):
+                raise ValueError('产物在复制期间发生变化，请重试')
+            kind = backend.material_kind(destination)
+            relative = backend.root_relative_path(destination)
+            record = {'id': f'adopt-{uuid.uuid4().hex[:16]}', 'kind': kind, 'title': title,
+                      'ready': True, 'origin': f'单步任务·{tool} 归入',
+                      'subtitle': '待本作品审核',
+                      'adopted_from': {**provenance, 'tool': tool, 'copied_at': time.time()}}
+            if kind == 'image':
+                record['image_path'] = relative
+            else:
+                record['sources'] = {'A': relative}
+            assets.append(record)
+            registered.append(record)
+            created += 1
+        if created:
+            manifest['assets'] = assets
+            backend.save_project_manifest(manifest)
+            if project_id == backend.CURRENT_PROJECT_ID:
+                backend.apply_project_manifest(manifest)
+        return {'project_id': project_id, 'assets': registered,
+                'adopted': created, 'already_adopted': skipped}
+
+
+@ROUTER.post('/api/quick-tasks/{task_id}/adopt')
+def adopt_quick_task(task_id: str, request: QuickTaskAdoptRequest) -> dict[str, Any]:
+    """把单步任务的产物归入某部作品。
+
+    草稿箱（quick-tasks）里的任务是「没归属」的：产物还在 ComfyUI 输出目录，删任务
+    就一起进回收站。归入某部作品 = 复制一份到该作品工作区、登记成它的资产，之后
+    再删草稿也不会影响作品。同一个任务重复归入同一部作品是幂等的。
+    """
+    backend.ensure_quick_project()
+    task = backend.get_task(task_id)
+    if not task or str(task.get('project_id') or '') != QUICK_PROJECT_ID:
+        raise HTTPException(404, '单步任务不存在')
+    if task.get('status') != 'succeeded':
+        raise HTTPException(409, '任务还没成功完成，暂不能归入作品')
+    if request.project_id == QUICK_PROJECT_ID:
+        raise HTTPException(422, '请选择一部正式作品，草稿箱不能作为归入目标')
+    try:
+        return adopt_task_outputs(task, request.project_id, request.paths or None)
+    except RuntimeError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @ROUTER.get('/api/quick-tasks')

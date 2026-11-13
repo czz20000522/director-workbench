@@ -15,6 +15,8 @@ export type VideoPreset = {
   speed?: 'fast' | 'standard'; missing_models?: string[];
   /** 这套方案默认走不走 8 步 Turbo 分支；界面据此初始化「渲染档位」。 */
   turbo?: boolean; steps?: number;
+  /** 方案的原生采样档（百万像素）：0.4≈480p、0.6≈768p，界面据此初始化原生档按钮。 */
+  megapixels?: number;
   description?: string;
 };
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { AudioLines, FolderOpen, Images, LoaderCircle, Music, Sparkles } from 'lucide-react';
 import { ApiError, mediaUrl, request } from './api/client';
 import { emitBringIn } from './libraryBus';
+import { sampleFor } from './timbreSamples';
 
 type Card = { name: string; params: Record<string, unknown>; builtin?: boolean };
 type FileItem = { name: string; path: string; size: number; modified: number };
@@ -31,9 +32,12 @@ export default function ProjectLibraryTool() {
   }, []);
 
   function bring(kind: 'timbre' | 'music', card: Card) {
-    emitBringIn({ kind, params: card.params });
+    // 音色卡片带上可试听的小样：锚点配音面板会显示试听条，不必先生成一次。
+    const sample = kind === 'timbre' ? sampleFor(String(card.params.voice_description || ''), card.name) : null;
+    emitBringIn({ kind, params: { ...card.params,
+      ...(sample ? { sample_path: sample.path, sample_duration_seconds: sample.duration_seconds } : {}) } });
     setMessage(kind === 'timbre'
-      ? `已带入「${card.name}」：去 后期 → 锚点配音 查看，生成前请确认台词与时间点。`
+      ? `已带入「${card.name}」${sample ? '和小样' : ''}：去 后期 → 锚点配音 查看，生成前请确认台词与时间点。`
       : `已带入「${card.name}」：去 后期 → 配乐 查看，随机编号仍由你自己定。`);
   }
 

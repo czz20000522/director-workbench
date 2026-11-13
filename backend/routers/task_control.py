@@ -15,7 +15,7 @@ import uuid
 from fastapi import APIRouter, HTTPException
 from urllib.error import HTTPError, URLError
 from .. import audio_edit_tasks, audio_master_tasks, background_jobs, dubbing, keyframes, media_operations, music, speech, task_scheduler, vlm
-from ..schemas import MissingExecutionResolution
+from ..schemas import MissingExecutionResolution, TaskReadRequest
 from .. import app as backend
 
 
@@ -65,6 +65,39 @@ def stop(task_id: str) -> dict[str, Any]:
 @ROUTER.post("/api/projects/{project_id}/tasks/{task_id}/stop")
 def stop_project_task(project_id: str, task_id: str) -> dict[str, Any]:
     return backend.request_task_stop(backend.project_task_detail(project_id, task_id))
+
+
+@ROUTER.post("/api/tasks/{task_id}/read")
+def mark_task_read(task_id: str) -> dict[str, Any]:
+    """把一条已生成的结果标成已读。
+
+    只更新 read_at，不动 updated_at：后者参与耗时与排序，标个已读不该改变它们。
+    重复调用是幂等的，保留第一次打开的时间。
+    """
+    task = backend.get_task(task_id)
+    if not task:
+        raise HTTPException(404, "任务不存在")
+    if task.get("status") != "succeeded":
+        raise HTTPException(409, "只有已成功生成的任务才需要标记已读")
+    now = time.time()
+    with backend.DB_LOCK, backend.db() as connection:
+        connection.execute("UPDATE tasks SET read_at = COALESCE(read_at, ?) WHERE id = ?", (now, task_id))
+        connection.commit()
+    return {"id": task_id, "read_at": task.get("read_at") or now}
+
+
+@ROUTER.post("/api/tasks/read")
+def mark_tasks_read(request: TaskReadRequest) -> dict[str, Any]:
+    """批量标记已读（列表上的「全部标为已读」）。"""
+    now = time.time()
+    placeholders = ",".join("?" for _ in request.task_ids)
+    with backend.DB_LOCK, backend.db() as connection:
+        cursor = connection.execute(
+            f"UPDATE tasks SET read_at = COALESCE(read_at, ?) WHERE id IN ({placeholders}) AND status = 'succeeded'",
+            [now, *request.task_ids])
+        connection.commit()
+        changed = cursor.rowcount
+    return {"marked": changed, "read_at": now}
 
 
 def request_task_stop(task: dict[str, Any]) -> dict[str, Any]:

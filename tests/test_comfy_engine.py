@@ -62,3 +62,20 @@ def test_engine_failure_fails_task_before_submission(monkeypatch: pytest.MonkeyP
 
     assert recorded['status'] == 'failed'
     assert '引擎没起来' in recorded['error']
+
+
+def test_launch_command_exposes_the_data_root_to_loadimage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """LoadImage 只允许读取 input-directory 内的路径。
+
+    工作台把参考图冻结在数据根下（不在 ComfyUI/input），启动时必须把
+    数据根声明成输入目录，否则绝对路径会被静默拒绝、ControlNet 拿到空图。
+    """
+    home = tmp_path / 'ComfyUI_windows_portable'
+    (home / 'python_embeded').mkdir(parents=True)
+    (home / 'python_embeded' / 'python.exe').write_text('', encoding='utf-8')
+    monkeypatch.setattr(comfy_engine, 'COMFY_ROOT', str(tmp_path))
+    monkeypatch.setattr(comfy_engine.hardware, 'comfy_reserve_vram', lambda: '0.60')
+
+    _, arguments, _ = comfy_engine.launch_command()
+    index = arguments.index('--input-directory')
+    assert arguments[index + 1] == str(tmp_path)

@@ -41,6 +41,10 @@ def launch_command() -> tuple[Path, list[str], Path]:
         # --windows-standalone-build 默认会顺带在系统浏览器里打开 ComfyUI 页面；
         # 工作台自己在用 8188，不需要再弹一个网页出来。
         "--windows-standalone-build", "--disable-auto-launch", "--offline",
+        # 工作台的首帧/参考图冻结在数据根下，不在 ComfyUI/input 里。
+        # 不给 input-directory 时 LoadImage 会按「路径穿越」拒绝绝对路径，
+        # 表现是静默返回 None（ControlNet 的 control_image 于是变成空）。
+        "--input-directory", str(COMFY_ROOT),
         "--reserve-vram", hardware.comfy_reserve_vram(),
     ]
     return python, arguments, home

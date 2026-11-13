@@ -811,6 +811,10 @@
 .sf-quick-group-head { display: flex; align-items: baseline; gap: 8px; margin: 4px 0 8px; }
 .sf-quick-group-head h3 { font-size: 14px; letter-spacing: -.01em; }
 .sf-quick-group-head span { color: var(--sf-muted); font-size: 11px; }
+/* 分组级全选：批量模式下才出现，跟着标题走，不抢右侧删除按钮的位置。 */
+.sf-quick-pick { display: inline-flex; align-items: center; gap: 4px; align-self: center; padding: 2px 8px; border: 1px solid var(--sf-line); border-radius: 999px; background: #fff; color: var(--sf-muted); font-size: 11px; cursor: pointer; }
+.sf-quick-pick:hover:not(:disabled) { border-color: #c9d4ea; color: var(--sf-ink); }
+.sf-quick-pick:disabled { opacity: .45; cursor: not-allowed; }
 
 /* 删除预览里的可选归档清单 */
 .sf-del-archive { margin: 4px 0 12px; padding: 10px 12px; border: 1px dashed var(--sf-line); border-radius: 10px; background: #fbfcfe; }
@@ -874,8 +878,22 @@
 
 /* 单步任务结果预览 */
 .sf-result-modal { width: min(880px, calc(100vw - 48px)); display: grid; gap: 12px; }
+/* 提示词要整段显示：字号收小、最多五屏高，超出给滚动条，别用省略号截掉。 */
+.sf-result-modal h2 { font-size: 19px; line-height: 1.5; margin: 2px 0 6px; font-weight: 600;
+  max-height: 7.6em; overflow-y: auto; overscroll-behavior: contain; padding-right: 6px; word-break: break-word; }
+.sf-result-modal h2::-webkit-scrollbar { width: 8px; }
+.sf-result-modal h2::-webkit-scrollbar-thumb { background: rgba(32,37,34,.18); border-radius: 999px; }
 .sf-result-stage { display: grid; place-items: center; min-height: 240px; border-radius: 10px; background: #0f1218; overflow: hidden; }
 .sf-result-stage video, .sf-result-stage img { max-width: 100%; max-height: 66vh; border-radius: 10px; }
+/* 音频没有画面：给一块浅色卡片放原生播放器，别把 wav/mp3 塞进 <img>。 */
+.sf-result-stage.is-audio { min-height: 200px; padding: 24px; }
+.sf-result-audio { width: min(560px, 100%); display: grid; gap: 14px; padding: 20px 22px; border-radius: 12px; background: #fff; box-shadow: 0 8px 28px rgba(0, 0, 0, .22); }
+.sf-result-audio-icon { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 10px; background: #eef2f9; color: #405a80; }
+.sf-result-audio-meta { display: grid; gap: 3px; min-width: 0; }
+.sf-result-audio-meta strong { font-size: 13px; color: var(--sf-ink, #1c222b); }
+.sf-result-audio-meta span { font-size: 11px; color: var(--sf-muted, #7c838f); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sf-result-audio audio { width: 100%; height: 40px; }
+.sf-result-audio-hint { margin: 0; color: var(--sf-muted, #7c838f); font-size: 11.5px; line-height: 1.7; }
 .sf-result-thumbs { display: flex; flex-wrap: wrap; gap: 6px; }
 .sf-result-thumbs > button { display: inline-flex; align-items: center; gap: 5px; max-width: 260px; padding: 5px 9px; border: 1px solid var(--sf-line); border-radius: 7px; background: #fff; color: var(--sf-muted); font: inherit; font-size: 11px; cursor: pointer; }
 .sf-result-thumbs > button.selected { border-color: var(--sf-accent); color: var(--sf-accent); }
@@ -897,3 +915,53 @@
   .sf-root .qt-shell .sf-rail-col { display: none; }
   .qt-pair { grid-template-columns: 1fr; }
 }
+
+/* 归入作品：选作品 + 勾选要带走的产物 */
+.sf-adopt-modal { width: min(680px, 100%); }
+.sf-adopt-field { display: grid; gap: 6px; margin: 14px 0; color: var(--sf-muted); font-size: 12px; }
+.sf-adopt-field > select { padding: 9px 10px; border: 1px solid var(--sf-line); border-radius: 9px; background: #fff; font: inherit; font-size: 13px; color: var(--sf-ink, #202124); }
+.sf-adopt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; max-height: 320px; overflow: auto; padding: 2px; }
+.sf-adopt-grid > button { position: relative; display: grid; gap: 4px; padding: 5px; border: 1px solid var(--sf-line); border-radius: 10px; background: #fff; cursor: pointer; }
+.sf-adopt-grid > button.is-picked { border-color: #365fd6; box-shadow: inset 0 0 0 1px #365fd6; }
+.sf-adopt-grid > button img,
+.sf-adopt-grid > button video { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 6px; background: #eef0f3; }
+.sf-adopt-grid > button small { color: var(--sf-muted); font-size: 11px; }
+.sf-adopt-grid > button.is-picked small { color: #365fd6; }
+.sf-adopt-file { display: grid; place-items: center; aspect-ratio: 3 / 4; border-radius: 6px; background: #eef0f3; color: var(--sf-muted); }
+.sf-adopt-grid > button:disabled { opacity: .6; cursor: not-allowed; }
+
+/* 单步工具 · 生成到哪里 */
+.qt-target { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 0 18px; padding: 10px 12px; border: 1px solid var(--sf-line); border-radius: 10px; background: #fff; }
+.qt-target-label { color: var(--sf-muted); font-size: 12px; }
+.qt-target > select { min-width: 220px; padding: 7px 10px; border: 1px solid var(--sf-line); border-radius: 8px; background: #fff; font: inherit; font-size: 13px; color: var(--sf-ink, #202124); }
+.qt-target > small { flex: 1 1 240px; color: var(--sf-muted); font-size: 11px; line-height: 1.5; }
+
+/* 单步视频 · 关联已有声音 */
+.qt-audio-link { display: grid; gap: 8px; margin: 0 0 18px; padding: 10px 12px; border: 1px solid var(--sf-line); border-radius: 10px; background: #fff; }
+.qt-audio-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.qt-audio-head > strong { font-size: 13px; font-weight: 500; }
+.qt-audio-head > small { color: var(--sf-muted); font-size: 11px; }
+.qt-audio-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+.qt-audio-fields select { width: 100%; padding: 7px 9px; border: 1px solid var(--sf-line); border-radius: 8px; background: #fff; font: inherit; font-size: 12px; color: var(--sf-ink, #202124); }
+
+/* 第三步 · 粘一段文字自动拆镜头 */
+.sf-bulk { display: grid; gap: 8px; padding-top: 10px; border-top: 1px dashed var(--sf-line); }
+.sf-bulk > button { justify-self: start; display: inline-flex; align-items: center; gap: 5px; }
+.sf-bulk-body { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--sf-line); border-radius: 10px; background: #fbfbfc; }
+.sf-bulk-body > textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--sf-line); border-radius: 8px; background: #fff; font: inherit; font-size: 12.5px; line-height: 1.7; resize: vertical; }
+.sf-bulk-list { display: grid; gap: 6px; max-height: 46dvh; overflow: auto; }
+.sf-bulk-shot { display: grid; grid-template-columns: auto minmax(0, 1fr) 92px; align-items: start; gap: 8px; padding: 8px; border: 1px solid #e2e5ea; border-radius: 9px; background: #fff; }
+.sf-bulk-shot.is-off { opacity: .5; }
+.sf-bulk-shot > input[type="checkbox"] { margin-top: 4px; }
+.sf-bulk-main { display: grid; gap: 3px; min-width: 0; }
+.sf-bulk-meta { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.sf-bulk-meta strong { font-size: 12px; font-weight: 600; }
+.sf-bulk-meta small { color: var(--sf-muted); font-size: 10.5px; }
+.sf-bulk-main textarea { width: 100%; padding: 4px 6px; border: 1px solid transparent; border-radius: 6px; background: none; font: inherit; font-size: 12px; line-height: 1.65; color: #3c4046; resize: vertical; }
+.sf-bulk-main textarea:hover { border-color: #e2e5ea; }
+.sf-bulk-main textarea:focus { outline: none; border-color: #b9c8e8; background: #fff; }
+.sf-bulk-duration { display: grid; gap: 3px; color: var(--sf-muted); font-size: 10.5px; }
+.sf-bulk-duration input { width: 100%; padding: 4px 6px; border: 1px solid var(--sf-line); border-radius: 6px; background: #fff; font: inherit; font-size: 12px; }
+
+/* 生成结果 · 未读标记 */
+.sf-unread { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 999px; background: #e6f1fb; color: #185fa5; font-size: 10px; font-style: normal; font-weight: 500; vertical-align: 1px; }

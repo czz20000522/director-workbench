@@ -169,3 +169,36 @@ def test_execution_registers_video_and_audio_candidates(preset_client, monkeypat
     assert video['origin'] == 'FFmpeg 换音轨' and video['sources']['A'].endswith('swapped.mp4')
     assert video['source_asset']['asset_id'] == 'shot'
     assert audio['sources']['A'].endswith('swapped-audio.wav')
+
+
+@real_media
+def test_mix_music_overlay_swaps_the_output_for_the_mixed_clip(tmp_path, monkeypatch):
+    """关联配乐：成片换成混音版；原 outputs 列表不被就地改动。"""
+    monkeypatch.setattr(backend, 'OUTPUT_ROOT', tmp_path)
+    ffmpeg = str(media_operations.FFMPEG)
+    clip = tmp_path / 'clip.mp4'
+    subprocess.run([ffmpeg, '-nostdin', '-v', 'error', '-y',
+                    '-f', 'lavfi', '-i', 'testsrc=size=160x120:rate=24:duration=2',
+                    '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-shortest',
+                    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', str(clip)], check=True, timeout=120)
+    music = tmp_path / 'music.wav'
+    subprocess.run([ffmpeg, '-nostdin', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=880:duration=1',
+                    '-ac', '2', '-ar', '48000', '-c:a', 'pcm_s16le', str(music)], check=True, timeout=120)
+    done = {'status': 'success', 'outputs': ['clip.mp4']}
+    mixed = backend.mix_music_overlay('task-mix', {'music_overlay': str(music), 'music_gain': 0.3}, done)
+    assert mixed['outputs'] == ['clip-music.mp4']
+    assert (tmp_path / 'clip-music.mp4').is_file()
+    assert mixed['music_overlay']['mode'] == 'keep'
+    assert done['outputs'] == ['clip.mp4']
+
+
+@real_media
+def test_mix_music_overlay_keeps_the_original_clip_when_music_is_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(backend, 'OUTPUT_ROOT', tmp_path)
+    ffmpeg = str(media_operations.FFMPEG)
+    clip = tmp_path / 'clip.mp4'
+    subprocess.run([ffmpeg, '-nostdin', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc=size=160x120:rate=24:duration=1',
+                    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', str(clip)], check=True, timeout=120)
+    done = {'status': 'success', 'outputs': ['clip.mp4']}
+    result = backend.mix_music_overlay('task-bad', {'music_overlay': str(tmp_path / 'nope.wav')}, done)
+    assert result == done

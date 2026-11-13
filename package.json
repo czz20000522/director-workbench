@@ -2,6 +2,8 @@
   "name": "director-workbench",
   "private": true,
   "version": "0.1.0",
+  "description": "导演工作台 · 基于 ComfyUI 的本地 AIGC 影像工作台（文生图 / 文生视频 / 音色 / 配乐 / 剪辑）",
+  "keywords": ["comfyui", "aigc", "text-to-image", "video-generation", "minimax-h3", "qwen-image", "director-workbench"],
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 4173 --strictPort",

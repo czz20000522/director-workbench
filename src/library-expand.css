@@ -1,0 +1,103 @@
+/* 库面板二级页面：小面板保持首页左右栏里的紧凑卡片，展开后是居中的独立大页面。 */
+.lex-head-actions { display: flex; align-items: center; gap: 4px; flex: none; }
+.lex-icon-button { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: var(--sf-muted); border: 1px solid transparent; background: transparent; cursor: pointer; }
+.lex-icon-button:hover { background: #f1f4fa; border-color: var(--sf-line); color: var(--sf-ink); }
+.lex-backdrop { position: fixed; inset: 0; z-index: 72; background: rgba(28, 26, 23, .46); }
+
+/* 选择器要压过 .sf-root .pl-panel { height:100% } 和左右栏的 grid 行高。 */
+.sf-root .pl-panel.lex-panel.is-expanded,
+.pl-panel.lex-panel.is-expanded {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  z-index: 73;
+  width: min(1120px, calc(100vw - 56px));
+  height: min(820px, calc(100vh - 56px));
+  max-height: none;
+  min-height: 0;
+  border-radius: 14px;
+  box-shadow: 0 24px 64px rgba(20, 18, 16, .32);
+}
+.lex-panel.is-expanded .lex-head { flex: none; padding: 18px 22px 14px; border-bottom: 1px solid var(--sf-line); }
+.lex-panel.is-expanded .lex-head h2 { font-size: 18px; }
+.lex-panel.is-expanded .lex-head p { font-size: 11px; }
+.lex-split { flex: 1; min-height: 0; display: flex; }
+.lex-nav { flex: none; width: 156px; display: flex; flex-direction: column; gap: 3px; padding: 12px 9px; border-right: 1px solid var(--sf-line); background: #fbfbfc; }
+.lex-nav button { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 9px 10px; border-radius: 8px; color: var(--sf-muted); font-size: 12px; text-align: left; white-space: nowrap; }
+.lex-nav button svg { flex: none; }
+.lex-nav button:hover { color: var(--sf-ink); background: #f2f5fb; }
+.lex-nav button[aria-pressed="true"] { background: #fff; color: var(--sf-ink); font-weight: 650; box-shadow: 0 1px 4px rgba(20, 24, 32, .09); }
+.lex-main { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 18px 22px 26px; }
+
+.lex-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.lex-toolbar h3 { margin: 0; font-size: 13px; }
+.lex-toolbar > span { color: var(--sf-muted); font-size: 11px; }
+.lex-search { flex: 1; min-width: 180px; max-width: 320px; display: flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--sf-line); border-radius: 8px; background: #fff; color: var(--sf-muted); }
+.lex-search:focus-within { border-color: #b9c8e8; }
+.lex-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--sf-ink); font: inherit; font-size: 11.5px; }
+.lex-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; align-content: start; }
+.lex-card { display: grid; gap: 8px; align-content: start; padding: 14px; border: 1px solid #e2e5ea; border-radius: 12px; background: #fbfcfe; }
+.lex-card-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.lex-card-top strong { font-size: 13px; line-height: 1.4; }
+.lex-tag { flex: none; padding: 2px 7px; border-radius: 99px; background: #eef2f9; color: #566888; font-size: 9.5px; }
+.lex-card-desc { margin: 0; color: var(--sf-ink); font-size: 11.5px; line-height: 1.65; }
+.lex-card-meta { margin: 0; color: var(--sf-muted); font-size: 10.5px; line-height: 1.55; }
+.lex-card audio, .lex-sample audio { width: 100%; height: 34px; }
+.lex-sample { display: grid; gap: 5px; padding: 9px 10px; border: 1px solid #dce6f8; border-radius: 9px; background: #f5f8ff; }
+.lex-sample small { color: #66748d; font-size: 10px; }
+.lex-card-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+.lex-card-actions button, .lex-row-actions button, .lex-row-actions a { padding: 5px 10px; border: 1px solid var(--sf-line); border-radius: 7px; background: #fff; color: var(--sf-muted); font: inherit; font-size: 10.5px; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.lex-card-actions button:hover, .lex-row-actions button:hover, .lex-row-actions a:hover { border-color: #b9c8e8; color: var(--sf-ink); }
+.lex-card-actions button:disabled, .lex-row-actions button:disabled { opacity: .5; cursor: wait; }
+.lex-card-actions .lex-primary { border-color: #b9c8e8; background: #405a80; color: #fff; font-weight: 600; }
+.lex-card-actions .lex-primary:hover { background: #334b6d; color: #fff; }
+.lex-rename { display: inline-flex; align-items: center; gap: 4px; }
+.lex-rename input { width: 130px; padding: 4px 7px; border: 1px solid #b9c8e8; border-radius: 7px; background: #fff; color: var(--sf-ink); font: inherit; font-size: 10.5px; }
+
+.lex-row { display: grid; gap: 8px; padding: 13px 14px; border: 1px solid #e2e5ea; border-radius: 11px; background: #fbfcfe; }
+.lex-rows { display: grid; gap: 10px; align-content: start; }
+.lex-row-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.lex-row-head strong { font-size: 12px; line-height: 1.5; }
+.lex-row-head span { flex: none; color: var(--sf-muted); font-size: 10px; }
+
+.lex-note { max-width: 720px; display: grid; gap: 10px; }
+.lex-note h3 { margin: 0 0 2px; font-size: 14px; }
+.lex-note p { margin: 0; color: var(--sf-muted); font-size: 12px; line-height: 1.8; }
+.lex-note ul { margin: 0; padding-left: 18px; color: var(--sf-muted); font-size: 12px; line-height: 1.9; }
+.lex-note code { padding: 1px 5px; border-radius: 5px; background: #f0f2f6; font-size: 11px; }
+.lex-empty { display: flex; align-items: center; gap: 8px; padding: 24px 4px; color: var(--sf-muted); font-size: 12px; }
+.lex-error { margin: 10px 0 0; color: #b3261e; font-size: 11px; }
+
+/* 清晰化库展开页：大图网格 + 点开看原图 */
+.lex-thumb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; align-content: start; }
+.lex-thumb-card { display: grid; gap: 8px; padding: 9px; border: 1px solid #e2e5ea; border-radius: 11px; background: #fbfcfe; text-align: left; cursor: pointer; }
+.lex-thumb-card:hover { border-color: #b9c8e8; }
+.lex-thumb-media { width: 100%; aspect-ratio: 16 / 10; display: grid; place-items: center; overflow: hidden; border-radius: 8px; background: #eef0f3; color: #8b929c; }
+.lex-thumb-media img { width: 100%; height: 100%; object-fit: cover; }
+.lex-thumb-card strong { font-size: 11px; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lex-thumb-card span { color: var(--sf-muted); font-size: 10px; }
+.lex-viewer { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 18px; align-items: start; }
+.lex-viewer img { width: 100%; max-height: 62vh; object-fit: contain; border-radius: 10px; background: #0f1218; }
+.lex-viewer-side { display: grid; gap: 10px; }
+.lex-viewer-side h3 { margin: 0; font-size: 13px; line-height: 1.5; word-break: break-all; }
+.lex-viewer-side p { margin: 0; color: var(--sf-muted); font-size: 11px; line-height: 1.7; }
+
+/* 图生视频内嵌「音色设计」的存库条 */
+.qt-companion-save { display: grid; gap: 7px; padding: 10px 12px; border: 1px solid #dce6f8; border-radius: 9px; background: #f5f8ff; }
+.qt-companion-save-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.qt-companion-save-head label { font-size: 11.5px; font-weight: 600; }
+.qt-companion-save-head input { flex: 1; min-width: 140px; padding: 5px 9px; border: 1px solid var(--sf-line); border-radius: 7px; background: #fff; color: var(--sf-ink); font: inherit; font-size: 11.5px; }
+.qt-companion-save-head .button { flex: none; }
+.qt-companion-save small { color: #66748d; font-size: 10.5px; line-height: 1.6; }
+
+/* 音色库带入到锚点配音后的小样条（挂在 post-tools 面板里）。 */
+.lib-sample-bar { display: grid; gap: 8px; }
+.lib-sample-bar audio { width: 100%; height: 36px; }
+.lib-sample-bar .sf-post-actions { justify-content: flex-start; }
+
+@media (max-width: 900px) {
+  .sf-root .pl-panel.lex-panel.is-expanded,
+  .pl-panel.lex-panel.is-expanded { width: 100%; height: 100%; border-radius: 0; }
+  .lex-nav { width: 118px; }
+  .lex-viewer { grid-template-columns: 1fr; }
+}

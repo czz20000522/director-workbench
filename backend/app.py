@@ -37,7 +37,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictInt, field_validator, model_validator
 from . import hardware
-from . import production_presets, background_jobs, speech, dubbing, vlm, music, creative_settings, keyframes, audio_edit_tasks, audio_master_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, assembly_continuity, assembly_continuity_check, guide, readiness, task_scheduler, creative_inspection, prompt_writer
+from . import production_presets, background_jobs, speech, dubbing, vlm, music, creative_settings, keyframes, audio_edit_tasks, audio_master_tasks, private_deletion, media_operations, gpu_idle_release, h3_duration, assembly_edit, assembly_continuity, assembly_continuity_check, guide, readiness, task_scheduler, creative_inspection, prompt_writer, audio_swap
 from . import output_resolution, enhancement, task_store, media_refs, comfy_progress, comfy_engine, quality_intent, image_superres, image_formats
 import av
 import paths
@@ -63,6 +63,7 @@ from .workbench_config import (
     ASSETS_ROOT,
     WORKS_ARCHIVE_ROOT,
     INPUT_ROOT,
+    COMFY_INPUT_ROOT,
     OUTPUT_ROOT,
     FINISH_BUILDER,
     DIST,
@@ -283,7 +284,7 @@ def ensure_no_release_blocking_tasks(action: str, *, gpu_only: bool = False,
 
     def blocks(row) -> bool:
         payload = json.loads(row['payload'])
-        if gpu_only and payload.get('kind') in {'audio_edit', 'audio_master', 'media_operation'}:
+        if gpu_only and payload.get('kind') in {'audio_edit', 'audio_master', 'media_operation', 'video_edit'}:
             return False
         if owner is None:
             return True
@@ -394,7 +395,7 @@ def resolve_registered_path(value: str | Path) -> Path:
     if PRIVATE_WORKSPACES is not None and current_principal.get() is not None:
         return PRIVATE_WORKSPACES.file(candidate)
     resolved = candidate.resolve()
-    allowed = [INPUT_ROOT.resolve(), OUTPUT_ROOT.resolve(), PROJECT.resolve(), DIRECTOR_WORKSPACES_ROOT.resolve(), ASSETS_ROOT.resolve()]
+    allowed = [INPUT_ROOT.resolve(), COMFY_INPUT_ROOT.resolve(), OUTPUT_ROOT.resolve(), PROJECT.resolve(), DIRECTOR_WORKSPACES_ROOT.resolve(), ASSETS_ROOT.resolve()]
     allowed.extend(destination for _, destination in legacy_mappings(ROOT))
     if PRIVATE_WORKSPACES is not None:
         allowed.append(PRIVATE_WORKSPACES.layout.root)
@@ -489,7 +490,7 @@ def root_relative_path(path: Path) -> str:
     try:
         return resolved.relative_to(ROOT.resolve()).as_posix()
     except ValueError as exc:
-        allowed = [INPUT_ROOT.resolve(), OUTPUT_ROOT.resolve(), PROJECT.resolve(),
+        allowed = [INPUT_ROOT.resolve(), COMFY_INPUT_ROOT.resolve(), OUTPUT_ROOT.resolve(), PROJECT.resolve(),
                    PROJECTS_ROOT.resolve(), DIRECTOR_WORKSPACES_ROOT.resolve()]
         allowed.extend(destination for _, destination in legacy_mappings(ROOT))
         if PRIVATE_WORKSPACES is not None:
@@ -666,6 +667,13 @@ async def lifespan(app: FastAPI):
     are entered and exited, so the order lives in one readable spot.
     """
     start_workbench()
+    # ComfyUI 的节点注册表有 30 MB、冷读 25 秒。后台先取一次，用户第一次点生成
+    # 就不用等；ComfyUI 没起时它会立刻失败，不影响启动。
+    try:
+        from .routers.task_media import warm_object_info
+        warm_object_info()
+    except Exception:
+        logging.getLogger('uvicorn.error').exception('capability warmup scheduling failed')
     try:
         # Release only pre-submission ownerless rows; submitted/unknown work is untouched.
         queue_recovery.startup_sweep(sys.modules[__name__])
@@ -720,7 +728,16 @@ def db() -> sqlite3.Connection:
     return task_store.configure(sqlite3.connect(DB_PATH, check_same_thread=False), DB_PATH)
 
 
-def request_json(path: str, payload: dict[str, Any] | None = None, timeout: float = 8) -> dict[str, Any]:
+COMFY_READ_TIMEOUT_SECONDS = 8
+# ComfyUI 在收尾（2K PNG 编码 + 落盘 + 预览）和提交校验时会把 /history、/prompt
+# 拖住几十秒；这两个端点按长超时读，其余状态接口保持快失败。
+COMFY_SLOW_TIMEOUT_SECONDS = 60
+
+
+def request_json(path: str, payload: dict[str, Any] | None = None, timeout: float | None = None) -> dict[str, Any]:
+    if timeout is None:
+        slow = path == '/prompt' or path.startswith('/history/')
+        timeout = COMFY_SLOW_TIMEOUT_SECONDS if slow else COMFY_READ_TIMEOUT_SECONDS
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
     request = Request(COMFY_URL + path, data=data, method="POST" if data else "GET", headers={"Content-Type": "application/json"} if data else {})
     with urlopen(request, timeout=timeout) as response:
@@ -795,10 +812,15 @@ TERMINAL_TASK_STATUSES = {'succeeded', 'failed', 'stopped', 'cancelled'}
 def quick_task_duration_ms(task: dict[str, Any]) -> int | None:
     """单步任务的耗时（毫秒）。
 
-    从 `started_at`（真正轮到 GPU 开始跑）算到 `updated_at`；还在跑就给「已用」。
-    旧任务没有 started_at（这一列是 11-09 加的），退回 created_at——会把排队时间
-    算进去，但总比不显示好。
+    优先用 ComfyUI 回执里的真实执行时长（`comfy_timing.comfy_execution_seconds`）：
+    排队等 GPU、以及事后人工核对回执的时间都不属于「生成耗时」，拿 updated_at 减
+    started_at 会在这些情况下给出完全不对的数字（实测 21 秒的图显示成 9 分 32 秒）。
+    老任务没有回执时间戳时退回 started_at → updated_at；还在跑就给「已用」。
     """
+    timing = (task.get('result') or {}).get('comfy_timing')
+    engine = timing.get('comfy_execution_seconds') if isinstance(timing, dict) else None
+    if isinstance(engine, (int, float)) and engine >= 0:
+        return int(round(float(engine) * 1000))
     start = task.get('started_at') or task.get('created_at')
     if not isinstance(start, (int, float)):
         return None
@@ -849,6 +871,45 @@ def get_task(task_id: str) -> dict[str, Any] | None:
 def task_snapshot_root(project_id: str) -> Path:
     private = PRIVATE_WORKSPACES.snapshots(project_id) if PRIVATE_WORKSPACES is not None else None
     return private or SNAPSHOT_ROOT
+
+
+def mix_music_overlay(task_id: str, payload: dict[str, Any], done: dict[str, Any]) -> dict[str, Any]:
+    """把关联配乐混进刚生成的视频：画面流直接复制，不重新出图、不占显卡。
+
+    配乐是锦上添花：任何一步失败都退回原生音轨，绝不因此把已经出好的画面判成失败。
+    源片有音轨就保留（压到 0.9），没有就静音后只铺配乐。
+    """
+    music = payload.get('music_overlay')
+    if not music or not done.get('outputs'):
+        return done
+    try:
+        overlay = resolve_registered_path(str(music))
+        if not overlay.is_file() or overlay.suffix.lower() not in audio_swap.AUDIO_SUFFIXES:
+            raise ValueError('配乐文件不可读取')
+        source = (OUTPUT_ROOT / str(done['outputs'][0])).resolve()
+        if not source.is_file():
+            raise ValueError('待混音的成片不存在')
+        facts = creative_inspection.probe(source)
+        keep = bool(facts.get('audio_streams'))
+        request = audio_swap.prepare(
+            f'{task_id}-music', source, overlay,
+            OUTPUT_ROOT / '导演工作台工作目录' / '配乐混入',
+            {'original_audio': 'keep' if keep else 'mute',
+             'original_gain': 0.9 if keep else 0.0,
+             'overlay_gain': float(payload.get('music_gain') or 0.35),
+             'start_seconds': 0.0, 'overlay_loop': True,
+             'fade_in_seconds': 0.4, 'fade_out_seconds': 0.6})
+        receipt = audio_swap.execute(request)
+        mixed = source.with_name(f'{source.stem}-music{source.suffix}')
+        shutil.copy2(receipt['output'], mixed)
+        outputs = list(done['outputs'])
+        outputs[0] = str(mixed.relative_to(OUTPUT_ROOT.resolve()))
+        return {**done, 'outputs': outputs,
+                'music_overlay': {'music': str(overlay), 'mixed': str(mixed),
+                                  'mode': 'keep' if keep else 'mute'}}
+    except Exception as exc:
+        LOGGER.warning('配乐混入失败，保留原生音轨: %s', exc)
+        return done
 
 
 def publish_task_outputs(task: dict[str, Any], done: dict[str, Any]) -> dict[str, Any]:
@@ -1084,6 +1145,37 @@ def resolve_pipeline_material(value: Any, kind: str, manifest: dict[str, Any] | 
     return str(resolved)
 
 
+def _heal_missing_workflow(project: dict[str, Any], stage: dict[str, Any], stage_id: str,
+                           missing: str) -> str | None:
+    """已安装方案的 JSON 被清掉时，按当前 recipe 重建一份并写回引用。
+
+    任务删除、手工清理目录都会带走 `workflows/api` 里的快照，而 pipeline 的引用还在。
+    这种情况下预检不该把用户挡在「重新配置制作方案」上——配方本身没变，重建即可。
+    """
+    preset_id = next((key for key in production_presets.PRESET_IDS
+                      if stage_id == production_presets.stage_id(key)), None)
+    if not preset_id:
+        return None
+    try:
+        healed = _rebuild_preset_workflow(project, preset_id, stage, missing)
+    except HTTPException:
+        raise
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        LOGGER.warning('重建方案工作流失败 preset=%s: %s', preset_id, exc)
+        return None
+    preset = project.get('production_preset')
+    if isinstance(preset, dict) and preset.get('id') == preset_id:
+        preset['workflow'] = healed
+    try:
+        save_project_manifest(project)
+    except (OSError, ValueError) as exc:
+        LOGGER.warning('重建方案工作流后保存 manifest 失败: %s', exc)
+    if str(project.get('id')) == CURRENT_PROJECT_ID:
+        apply_project_manifest(project)
+    LOGGER.warning('方案 %s 的工作流快照缺失，已按 recipe 重建: %s', preset_id, healed)
+    return healed
+
+
 def prepare_pipeline_payload(payload: dict[str, Any], stage_id: str, values: dict[str, Any], manifest: dict[str, Any] | None = None,
                              *, plan_document: dict[str, Any] | None = None) -> dict[str, Any]:
     """Resolve, validate and bind one stage's operator inputs before freezing."""
@@ -1102,7 +1194,15 @@ def prepare_pipeline_payload(payload: dict[str, Any], stage_id: str, values: dic
         source = resolve_workflow_path(str(payload["workflow"]))
         graph = json.loads(source.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError, json.JSONDecodeError) as exc:
-        raise HTTPException(422, f"无法读取待绑定的 ComfyUI API 图: {exc}") from exc
+        healed = _heal_missing_workflow(project, stage, stage_id, str(payload.get("workflow") or ""))
+        if not healed:
+            raise HTTPException(422, f"无法读取待绑定的 ComfyUI API 图: {exc}") from exc
+        payload['workflow'] = healed
+        try:
+            source = resolve_workflow_path(healed)
+            graph = json.loads(source.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError, json.JSONDecodeError) as retry_exc:
+            raise HTTPException(422, f"无法读取待绑定的 ComfyUI API 图: {retry_exc}") from retry_exc
     if not isinstance(graph, dict):
         raise HTTPException(422, "ComfyUI API 工作流必须是 JSON 对象")
 
@@ -1112,7 +1212,7 @@ def prepare_pipeline_payload(payload: dict[str, Any], stage_id: str, values: dic
     h3_preset_id = next((key for key in production_presets.PRESET_IDS
                          if stage_id == production_presets.stage_id(key)
                          and (graph_preset_id == key or str(stage.get('recipe', '')).startswith('H3 '))), None)
-    if h3_preset_id:
+    if h3_preset_id and h3_preset_id not in production_presets.PIKA_PRESET_IDS:
         expected = production_presets.load_recipe(h3_preset_id)
         if h3_preset_id in production_presets.TEXT_PRESET_IDS and (
             any(node.get('class_type') in {'LoadImage', 'LoadAudio'} for node in graph.values() if isinstance(node, dict))
@@ -1124,13 +1224,44 @@ def prepare_pipeline_payload(payload: dict[str, Any], stage_id: str, values: dic
                         '105:104': ('width', 'height', 'length', 'first_frame', 'clip', 'vae'),
                         '105:111': (), '105:11': ('vae_name',),
                         '105:91': ('fps',)}
-        if graph_preset_id != h3_preset_id or any(
-            not isinstance(graph.get(node_id), dict) or
-            graph[node_id].get('class_type') != expected[node_id]['class_type'] or
-            any(graph[node_id].get('inputs', {}).get(name) != expected[node_id]['inputs'].get(name) for name in names)
-            for node_id, names in fixed_inputs.items()
-        ):
-            raise HTTPException(422, 'H3 工作流的帧网格、画幅或帧率已改变，请重新配置制作方案')
+        def _fixed_names(node_id: str, names: tuple[str, ...]) -> tuple[str, ...]:
+            # 原生采样档由请求显式覆盖（480p/768p），不参与「工作流被改坏」的比对。
+            if node_id == '115' and payload.get('native_megapixels'):
+                return tuple(name for name in names if name != 'megapixels')
+            return names
+
+        def _graph_mismatch(obj: dict[str, Any], *, ignore_megapixels: bool = False) -> bool:
+            meta_preset = ((obj.get("92", {}) or {}).get("_meta") or {}).get("director_preset")
+            def names_for(node_id: str, names: tuple[str, ...]) -> tuple[str, ...]:
+                picked = _fixed_names(node_id, names)
+                if ignore_megapixels and node_id == '115':
+                    picked = tuple(name for name in picked if name != 'megapixels')
+                return picked
+            return meta_preset != h3_preset_id or any(
+                not isinstance(obj.get(node_id), dict) or
+                obj[node_id].get('class_type') != expected[node_id]['class_type'] or
+                any(obj[node_id].get('inputs', {}).get(name) != expected[node_id]['inputs'].get(name)
+                    for name in names_for(node_id, names))
+                for node_id, names in fixed_inputs.items()
+            )
+
+        if _graph_mismatch(graph):
+            # 只有「原生采样档漂移」（旧版把 0.4MP 写进 115）可以静默重建；
+            # 画幅、帧网格、帧率被改过说明内容真的变了，重建会覆盖用户的改动，
+            # 这种情况仍然要挡下来，让他重新配置方案。
+            if _graph_mismatch(graph, ignore_megapixels=True):
+                raise HTTPException(422, 'H3 工作流的帧网格、画幅或帧率已改变，请重新配置制作方案')
+            healed = _rebuild_preset_workflow(project, h3_preset_id, stage, str(payload.get('workflow') or ''))
+            payload['workflow'] = healed
+            if isinstance(project.get('production_preset'), dict) and project['production_preset'].get('id') == h3_preset_id:
+                project['production_preset']['workflow'] = healed
+            graph = json.loads(resolve_workflow_path(healed).read_text(encoding='utf-8-sig'))
+            try:
+                save_project_manifest(project)
+            except (OSError, ValueError) as exc:
+                LOGGER.warning('重建方案工作流后保存 manifest 失败: %s', exc)
+            if _graph_mismatch(graph):
+                raise HTTPException(422, 'H3 工作流的帧网格、画幅或帧率已改变，请重新配置制作方案')
     if preset.get("workflow") == payload.get("workflow") or graph_preset_id in production_presets.PRESET_IDS:
         if plan_document is None:
             document, _ = load_project_plan(str(project['id']) if manifest is not None else CURRENT_PROJECT_ID)
@@ -1185,7 +1316,10 @@ def prepare_pipeline_payload(payload: dict[str, Any], stage_id: str, values: dic
         raise HTTPException(422, {'code': code, 'message': '请补齐或修正制作输入与素材', 'blockers': input_blockers + material_blockers})
     if h3_preset_id:
         aspect = production_presets.aspect_ratio(h3_preset_id)
-        duration_profile = h3_duration.plan(normalized.get('duration'), aspect, production_presets.megapixels(h3_preset_id))
+        # 显式原生采样档优先于方案默认档；480p=0.4MP、768p=0.6MP。
+        native_mp = float(payload.get('native_megapixels') or production_presets.megapixels(h3_preset_id))
+        duration_profile = h3_duration.plan(normalized.get('duration'), aspect, native_mp)
+        prepared_native_megapixels = native_mp
     bindings: list[dict[str, Any]] = []
     parameters: dict[str, Any] = {}
     materials: dict[str, Any] = {}
@@ -1243,17 +1377,24 @@ def prepare_pipeline_payload(payload: dict[str, Any], stage_id: str, values: dic
     prepared["_graph_bindings"] = bindings
     if h3_preset_id:
         prepared['h3_duration'] = {
-            **duration_profile, 'generation_mode': 'text_to_video' if h3_preset_id in production_presets.TEXT_PRESET_IDS else 'image_to_video',
+            **duration_profile, 'generation_mode': 'text_to_video' if h3_preset_id in (*production_presets.TEXT_PRESET_IDS, *production_presets.PIKA_PRESET_IDS) else 'image_to_video',
             'first_frame': materials.get('first-frame'), 'first_frame_node_id': '114' if 'first-frame' in materials else None,
             'prompt': executed_prompt, 'prompt_node_id': '105:104', 'duration_node_id': '105:111',
         }
+        prepared['native_megapixels'] = prepared_native_megapixels
     if 'segment' in locals() and isinstance(segment, dict):
         prepared['creative_inspection'] = inspect_shot(project, document, segment, prepared.get('h3_duration'))
     return prepared
 
 
 def stage_comfy_input_files(graph: dict[str, Any], project_id: str) -> list[dict[str, Any]]:
-    """Freeze input media under ComfyUI's input root and bind relative names."""
+    """Freeze input media under ComfyUI's input root and bind relative names.
+
+    ComfyUI 由 `--input-directory COMFY_ROOT` 拉起，只认这个根下的相对路径。以前写进
+    配置的 INPUT_ROOT，LoadImage 找不到就静默返回空图——参考图和清晰化会「看起来跑了、
+    其实没吃到素材」。
+    """
+    input_root = Path(COMFY_INPUT_ROOT).resolve()
     project_folder = "".join(char if char.isalnum() or char in "-_" else "-" for char in project_id)
     attempt = uuid.uuid4().hex
     staged: list[dict[str, Any]] = []
@@ -1266,7 +1407,7 @@ def stage_comfy_input_files(graph: dict[str, Any], project_id: str) -> list[dict
         if Path(value).is_absolute() or normalized.startswith(("ComfyUI-", "input/", "output/")):
             source = resolve_registered_path(value)
         else:
-            base = OUTPUT_ROOT if normalized.endswith(" [output]") else INPUT_ROOT
+            base = OUTPUT_ROOT if normalized.endswith(" [output]") else input_root
             relative = normalized.removesuffix(" [input]").removesuffix(" [output]")
             source = (base / relative).resolve()
             if not source.is_relative_to(base.resolve()):
@@ -1275,14 +1416,14 @@ def stage_comfy_input_files(graph: dict[str, Any], project_id: str) -> list[dict
                 source = PRIVATE_WORKSPACES.file(source)
         if not source.is_file():
             raise ValueError(f"ComfyUI 输入素材不存在: {source}")
-        destination = INPUT_ROOT / "导演工作台工作目录" / project_folder / "任务素材" / attempt / f"{len(staged) + 1:02d}{source.suffix.lower()}"
+        destination = input_root / "导演工作台工作目录" / project_folder / "任务素材" / attempt / f"{len(staged) + 1:02d}{source.suffix.lower()}"
         destination.parent.mkdir(parents=True, exist_ok=True)
         before = source.stat()
         shutil.copy2(source, destination)
         after = source.stat()
         if destination.stat().st_size != before.st_size or after.st_size != before.st_size or after.st_mtime_ns != before.st_mtime_ns:
             raise ValueError("素材复制时发生变化，请重新提交")
-        reference = destination.relative_to(INPUT_ROOT).as_posix()
+        reference = destination.relative_to(input_root).as_posix()
         node["inputs"][field] = reference
         staged.append({"node_id": node_id, "input": field, "source": str(source), "path": str(destination), "reference": reference, "size_bytes": before.st_size})
     return staged
@@ -1315,6 +1456,11 @@ def freeze_task_payload(payload: dict[str, Any], *, project_id: str) -> dict[str
             prompt_override = text
             prompt_nodes = apply_prompt_override(graph, text, frozen.get("prompt_node_ids"))
         applied_bindings = apply_graph_bindings(graph, graph_bindings) if graph_bindings else []
+        # 原生采样档：请求显式给了 480p/768p 就覆盖 ResolutionSelector 的 megapixels，
+        # 并同步写进 h3_duration，避免帧网格与实际尺寸不一致。
+        native_mp = frozen.get('native_megapixels')
+        if native_mp and isinstance(graph.get('115'), dict):
+            graph['115']['inputs']['megapixels'] = float(native_mp)
         staged_materials = stage_comfy_input_files(graph, project_id)
         for binding in applied_bindings:
             staged = next((item for item in staged_materials if item["node_id"] == binding["node_id"] and item["input"] == binding["input"]), None)
@@ -1364,11 +1510,26 @@ def freeze_task_payload(payload: dict[str, Any], *, project_id: str) -> dict[str
     return frozen
 
 
-def history_done(prompt_id: str, *, include_images: bool = False, audio: bool = False) -> dict[str, Any] | None:
+# 收尾阶段 ComfyUI 会把 /history 拖住十几秒（2K PNG 编码 + 落盘 + 预览）。
+# 读不到不等于任务失败：连续这么多次读不动，才判定「回执需要人工核对」。
+HISTORY_READ_MAX_FAILURES = 5
+
+
+def read_history(prompt_id: str) -> dict[str, Any] | None:
+    """读一次 ComfyUI 历史；网络抖动/超时返回 None，交给监控循环重试。"""
     try:
-        history = request_json(f"/history/{prompt_id}")
+        return request_json(f'/history/{prompt_id}')
     except (OSError, ValueError, HTTPError, URLError):
         return None
+
+
+def history_done(prompt_id: str, *, include_images: bool = False, audio: bool = False,
+                 history: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    if history is None:
+        try:
+            history = request_json(f"/history/{prompt_id}")
+        except (OSError, ValueError, HTTPError, URLError):
+            return None
     entry = history.get(prompt_id)
     if not entry:
         return None
@@ -1857,7 +2018,8 @@ def update_comfy_execution_state(task_id: str, prompt_id: str) -> None:
 
 
 def comfy_execution_error(payload: dict[str, Any], done: dict[str, Any]) -> str:
-    label = ('关键帧生成' if payload.get('kind') == 'keyframe' else
+    label = ('清晰化' if payload.get('pipeline_stage_id') == 'media-enhancement' else
+             '关键帧生成' if payload.get('kind') == 'keyframe' else
              '成片装配' if payload.get('assembly_asset_id') and payload.get('asset_id') == payload['assembly_asset_id'] else
              '视频生成')
     prefix = f'ComfyUI {label}失败'
@@ -2194,6 +2356,7 @@ def run_workflow_submission(task_id: str, payload: dict[str, Any]) -> None:
             raise RuntimeError(f"ComfyUI 未返回 prompt_id: {submitted}")
         submission_acknowledged = True
         set_task(task_id, status="queued", prompt_id=prompt_id, result=json.dumps({"submission": submitted, "workflow": str(workflow_path)}, ensure_ascii=False))
+        misses = 0
         while True:
             _check_task_timeout(task_id, payload, started)
             current = get_task(task_id)
@@ -2205,16 +2368,30 @@ def run_workflow_submission(task_id: str, payload: dict[str, Any]) -> None:
                 time.sleep(TASK_MONITOR_POLL_SECONDS)
                 continue
             sample_resources(task_id)
-            done = (keyframes.read_result(request_json(f'/history/{prompt_id}'), str(prompt_id), payload, OUTPUT_ROOT)
+            history = read_history(prompt_id)
+            if history is None:
+                # 一次读不到只说明 ComfyUI 正忙（收尾落盘时 /history 会卡几十秒），
+                # 绝不据此判定任务失败：出图往往已经成功，判错就白白丢掉一张。
+                misses += 1
+                if misses >= HISTORY_READ_MAX_FAILURES:
+                    raise RuntimeError('ComfyUI 历史接口连续无响应，请核对处理回执')
+                time.sleep(TASK_MONITOR_POLL_SECONDS)
+                continue
+            misses = 0
+            done = (keyframes.read_result(history, str(prompt_id), payload, OUTPUT_ROOT)
                      if payload.get('kind') == 'keyframe' else
-                     history_done(prompt_id, audio=True) if payload.get('kind') == 'music' else
-                     history_done(prompt_id, include_images=True) if payload.get('pipeline_stage_id') == 'media-enhancement' else history_done(prompt_id))
+                     history_done(prompt_id, audio=True, history=history) if payload.get('kind') == 'music' else
+                     history_done(prompt_id, include_images=True, history=history) if payload.get('pipeline_stage_id') == 'media-enhancement' else history_done(prompt_id, history=history))
             if done:
                 done = attach_h3_duration_result(done, payload)
                 if done["status"] == "success":
                     if payload.get('kind') == 'keyframe':
                         complete_keyframe_task(current, done)
                         return
+                    # 关联配乐只对视频成片有意义：在发布/登记之前替换成混音后的文件，
+                    # 后面的分镜候选、版本历史拿到的就是带配乐的那一版。
+                    if payload.get('music_overlay'):
+                        done = mix_music_overlay(task_id, payload, done)
                     done = publish_task_outputs(current, done)
                     if payload.get('kind') == 'music':
                         music.complete_music_task(current, done)
@@ -2240,6 +2417,15 @@ def run_workflow_submission(task_id: str, payload: dict[str, Any]) -> None:
                         )
                     set_task(task_id, status="succeeded", result=json.dumps(done, ensure_ascii=False))
                     _task_log(task_id, payload, "succeeded", started)
+                    # 「生成到哪里 = 某部作品」的草稿任务：成功后把产物复制登记进作品。
+                    # 归入失败只记警告，不改任务状态——生成本身成功了，归入可以重试。
+                    target = str(payload.get('adopt_into') or '')
+                    if target:
+                        try:
+                            adopted = adopt_task_outputs(get_task(task_id) or current, target)
+                            LOGGER.info('task %s adopted %s outputs into %s', task_id, adopted.get('adopted'), target)
+                        except Exception as exc:  # noqa: BLE001 - 归入失败不能影响已成功的生成
+                            LOGGER.warning('task %s adopt into %s failed: %s', task_id, target, exc)
                 else:
                     set_task(task_id, status="failed", result=json.dumps(done, ensure_ascii=False), error=comfy_execution_error(payload, done))
                     _task_log(task_id, payload, "failed", started, error_class="ComfyExecutionError")
@@ -2924,7 +3110,7 @@ from .routers.quick_tasks import ROUTER as _quick_tasks_router
 app.include_router(_quick_tasks_router)
 from .routers.quick_tasks import (
     QUICK_PROJECT_ID, QUICK_SERIES, QUICK_TITLE, QUICK_WORKSPACE_DIRECTORY, TASK_PLAN_TTL_SECONDS,
-    TOOL_LABELS, _aspect, _batch_rows, _first_frame_of, _load_task_plan, _portable, ensure_quick_project,
+    TOOL_LABELS, _aspect, _batch_rows, _first_frame_of, _load_task_plan, _portable, adopt_task_outputs, ensure_quick_project,
     generated_orphans,
     is_enhancement,
     quick_prompt_excerpt, quick_task_card, quick_task_list, quick_task_reuse, quick_workspace,
@@ -3826,6 +4012,39 @@ def update_project_asset_label(project_id: str, asset_id: str, request: AssetLab
         return {'project': public_project(manifest), 'asset': asset}
 
 
+@app.delete('/api/projects/{project_id}/assets/{asset_id}')
+def delete_project_asset(project_id: str, asset_id: str) -> dict[str, Any]:
+    """删除一条作品素材：摘掉登记，文件移入回收站；仍被引用时拒绝。"""
+    from . import library_archive
+    with MATERIAL_REUSE_LOCK:
+        manifest = require_project_manifest(project_id)
+        assets = [item for item in manifest.get('assets', []) if isinstance(item, dict)]
+        asset = next((item for item in assets if item.get('id') == asset_id), None)
+        if asset is None:
+            raise HTTPException(404, '素材不存在')
+        blockers = library_archive.asset_reference_blockers(manifest, asset)
+        if blockers:
+            raise HTTPException(409, f'这条素材还在用：{"；".join(blockers)}。先解除引用再删')
+        sources = [str(value) for value in (asset.get('sources') or {}).values() if value]
+        resolved: list[str] = []
+        for value in sources:
+            try:
+                resolved.append(str(resolve_registered_path(value)))
+            except (ValueError, OSError):
+                continue
+        removed, failed = library_archive.recycle_files(resolved)
+        manifest['assets'] = [item for item in assets if item.get('id') != asset_id]
+        media = manifest.get('media')
+        if isinstance(media, dict):
+            # 只摘掉指向这条素材的映射；同名文件在别的目录还有一份时不能误删。
+            manifest['media'] = {key: value for key, value in media.items() if str(value) not in set(sources)}
+        save_project_manifest(manifest)
+        if project_id == CURRENT_PROJECT_ID:
+            apply_project_manifest(manifest)
+        return {'removed': removed, 'failed': failed, 'asset_id': asset_id,
+                'project': public_project(manifest)}
+
+
 def material_kind(path: Path) -> str:
     suffix = path.suffix.lower()
     return next((kind for kind, extensions in MATERIAL_EXTENSIONS.items() if suffix in extensions), "other")
@@ -4119,6 +4338,17 @@ from .routers.task_media import (
     validate_creative_prompt,
 )
 
+# 剪辑台：时间线拼接导出（CPU / ffmpeg）。放在 task_media 之后，
+# 保证 backend.require_project_manifest 等对象已可用。
+from .routers.video_edit import ROUTER as _video_edit_router
+app.include_router(_video_edit_router)
+from .routers.video_edit import (
+    complete_video_edit_task,
+    run_video_edit_task,
+    start_video_edit_task,
+    video_edit_capability,
+)
+
 
 # 画面观察（本机 Ollama + Qwen2.5-VL，只读）已拆到 backend/routers/vlm_tasks.py。
 from .routers.vlm_tasks import ROUTER as _vlm_tasks_router
@@ -4225,6 +4455,7 @@ app.include_router(_gpu_idle_router)
 # app.py、private_mode.py 与既有测试都以 backend.<名称> 取用它们。
 from .routers.gpu_idle import (
     comfy_history_token,
+    gpu_batch_active,
     gpu_free_mib,
     gpu_idle_reason,
     gpu_idle_setting,
@@ -4234,10 +4465,14 @@ from .routers.gpu_idle import (
 
 GPU_IDLE_RELEASER = gpu_idle_release.IdleGPURelease(
     GPU_ADMISSION_LOCK, gpu_idle_reason, request_comfy_free, gpu_free_mib,
-    grace_seconds=gpu_idle_setting('DIRECTOR_GPU_IDLE_GRACE_SECONDS', 120),
-    poll_seconds=gpu_idle_setting('DIRECTOR_GPU_IDLE_POLL_SECONDS', 15),
+    # 单步任务做完就不回来了，30 秒就让出显存；批量制作（最近 10 分钟提交过
+    # 3 单以上）用 120 秒宽限，避免两张之间反复重新加载十几 GB 权重。
+    grace_seconds=gpu_idle_setting('DIRECTOR_GPU_IDLE_GRACE_SECONDS', 30),
+    poll_seconds=gpu_idle_setting('DIRECTOR_GPU_IDLE_POLL_SECONDS', 10),
     retry_seconds=gpu_idle_setting('DIRECTOR_GPU_IDLE_RETRY_SECONDS', 60),
     activity_token=comfy_history_token,
+    is_batch=gpu_batch_active,
+    batch_grace_seconds=gpu_idle_setting('DIRECTOR_GPU_BATCH_GRACE_SECONDS', 120),
 )
 
 

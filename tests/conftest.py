@@ -36,6 +36,8 @@ def preset_client_factory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             'SHARED_ROOT': tmp_path / 'ComfyUI-Shared',
             'PROJECT_CATALOG_PATH': projects / 'catalog.json', 'DIRECTOR_WORKSPACES_ROOT': project / 'workspaces',
             'DB_PATH': tmp_path / 'state.sqlite3', 'SNAPSHOT_ROOT': project / 'snapshots', 'INPUT_ROOT': tmp_path / 'input',
+            # 真实环境里 ComfyUI 用 --input-directory 换了根；测试跟着 INPUT_ROOT 走。
+            'COMFY_INPUT_ROOT': tmp_path / 'input',
         }.items():
             monkeypatch.setattr(backend, name, value)
         for name in ('CURRENT_PROJECT', 'CURRENT_PROJECT_ID', 'PLAN_PATH', 'MEDIA', 'TASK_TEMPLATES', 'PIPELINE_STAGES'):

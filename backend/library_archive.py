@@ -220,7 +220,10 @@ def retained_outputs(rows: list[dict[str, Any]]) -> list[str]:
 def _owned_outputs_detail(rows: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
     """返回 (可清除, 因被引用而保留)。两个列表互斥。"""
     from . import app as backend
-    roots = [backend.OUTPUT_ROOT.resolve(), backend.INPUT_ROOT.resolve()]
+    # 工作区也算：剪辑/配音/媒体任务的产物写在 <workspace>/…-tasks/<task_id>/，
+    # 只认 output/input 根会把它们全部漏掉，删任务时留下一地 mp4/wav。
+    roots = [backend.OUTPUT_ROOT.resolve(), backend.INPUT_ROOT.resolve(),
+             backend.DIRECTOR_WORKSPACES_ROOT.resolve()]
     wanted = {str(row.get('id')) for row in rows if row.get('id')}
     if not wanted:
         return [], []
@@ -243,7 +246,9 @@ def _owned_outputs_detail(rows: list[dict[str, Any]]) -> tuple[list[str], list[s
         for resolved in _output_candidates(payload, result):
             if not any(resolved.is_relative_to(root) for root in roots):
                 continue
-            if not any(task in resolved.name for task in wanted):
+            # 任务 ID 可能只出现在目录名里（video-edits/<task_id>/edit.mp4），
+            # 只看文件名会把这类产物判成“不是它的”，删任务后文件留在磁盘。
+            if not any(task in part for part in resolved.parts for task in wanted):
                 continue
             if str(resolved) in elsewhere:
                 if resolved.is_file() and str(resolved) not in retained:
@@ -300,7 +305,8 @@ def deletable_paths(paths: list[str]) -> list[Path]:
     素材库与作品归档根是归档区：即便有人把指向它们的路径塞进来，也一律跳过。
     """
     from . import app as backend
-    roots = [backend.OUTPUT_ROOT.resolve(), backend.INPUT_ROOT.resolve()]
+    roots = [backend.OUTPUT_ROOT.resolve(), backend.INPUT_ROOT.resolve(),
+             backend.DIRECTOR_WORKSPACES_ROOT.resolve()]
     protected = [assets_root().resolve(), works_archive_root().resolve()]
     accepted: list[Path] = []
     for value in paths:
@@ -314,6 +320,39 @@ def deletable_paths(paths: list[str]) -> list[Path]:
             continue
         accepted.append(resolved)
     return accepted
+
+
+def asset_reference_blockers(manifest: dict[str, Any], asset: dict[str, Any]) -> list[str]:
+    """删素材前的引用检查：装配音轨、分镜计划、别的素材共用同一个文件。"""
+    from . import app as backend
+    asset_id = str(asset.get('id') or '')
+    sources = [str(value) for value in (asset.get('sources') or {}).values() if value]
+    blockers: list[str] = []
+    for other in manifest.get('assets') or []:
+        if not isinstance(other, dict) or other.get('id') == asset_id:
+            continue
+        shared = set(str(value) for value in (other.get('sources') or {}).values()) & set(sources)
+        if shared:
+            blockers.append(f"素材「{other.get('title') or other.get('id')}」也在用这个文件")
+    legacy = (manifest.get('assembly') or {}).get('audio')
+    if legacy and str(legacy) in sources:
+        blockers.append('作品登记了它当全片音轨')
+    document = None
+    plan_value = manifest.get('plan_path')
+    if plan_value:
+        try:
+            plan_path = backend.resolve_registered_path(str(plan_value))
+            if plan_path.is_file():
+                document = json.loads(plan_path.read_text(encoding='utf-8-sig'))
+        except (ValueError, OSError):
+            document = None
+    if isinstance(document, dict):
+        sound = (document.get('assembly_edit') or {}).get('sound') or {}
+        if str(sound.get('audio_asset_id') or '') == asset_id:
+            blockers.append('作品装配选了它当全片音轨')
+        if asset_id and asset_id in json.dumps(document, ensure_ascii=False):
+            blockers.append('分镜计划里点名了这条素材')
+    return list(dict.fromkeys(blockers))
 
 
 def recycle_files(paths: list[str]) -> tuple[list[str], list[str]]:

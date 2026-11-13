@@ -338,7 +338,8 @@ def test_production_square_duration_rejects_out_of_range_or_invalid_values_befor
     assert client.get('/api/projects/preset-test/tasks').json()['tasks'] == []
 
 
-@pytest.mark.parametrize('preset_id', production_presets.PRESET_IDS)
+@pytest.mark.parametrize('preset_id', [item for item in production_presets.PRESET_IDS
+                                        if item not in production_presets.PIKA_PRESET_IDS])
 def test_existing_h3_production_presets_accept_story_driven_fractional_duration(preset_client, preset_id):
     client, project = preset_client
     add_shot(client, project, 'S01')
@@ -495,3 +496,65 @@ def test_duration_timing_missing_history_fields_is_explicitly_unavailable():
     assert timing['queue_wait_seconds'] is None
     assert timing['comfy_execution_seconds'] is None
     assert set(timing) == {'source', 'queued_at_ms', 'execution_started_at_ms', 'execution_ended_at_ms', 'queue_wait_seconds', 'comfy_execution_seconds'}
+
+
+def test_pika_preset_keeps_its_fixed_five_second_delivery(preset_client):
+    """Pika 走官方 6 步基线：124 帧生成、120 帧交付，时长不接受剧情自定义。
+
+    H3 那套「按剧情时长吸附帧网格」不适用于 Pika；这里把边界钉住，
+    免得以后又把它并进 H3 的时长逻辑里。
+    """
+    client, project = preset_client
+    preset_id = 'h3-pika-text-landscape'
+    installed = client.post(f'/api/projects/preset-test/production-presets/{preset_id}')
+    assert installed.status_code == 200, installed.text
+    stage_id = production_presets.stage_id(preset_id)
+    manifest = installed.json()['project']
+    stage = next(item for item in manifest['pipeline'] if item['id'] == stage_id)
+    duration = next(item for item in backend.pipeline_contract(stage, manifest)['input_specs']
+                    if item['id'] == 'duration')
+    assert duration['min'] == duration['max'] == 5.0
+
+    add_shot(client, project, 'S01', with_audio=False)
+    checked = client.post(f'/api/projects/preset-test/pipeline/{stage_id}/validate',
+                          json={'asset_id': 'S01', 'values': {'duration': 5.0}})
+    assert checked.status_code == 200, checked.text
+    assert checked.json()['h3_duration']['requested_seconds'] == 5.0
+
+    # 分镜本身允许 1–15 秒（剧情计划），但 Pika 方案不接受 5 秒以外的交付口径。
+    assert client.patch('/api/projects/preset-test/plan/segments/S01',
+                        json={'duration_seconds': 8.5}).status_code == 200
+    too_long = client.post(f'/api/projects/preset-test/pipeline/{stage_id}/validate',
+                           json={'asset_id': 'S01', 'values': {'duration': 8.5}})
+    assert too_long.status_code == 422, too_long.text
+
+
+def test_pika_preset_keeps_its_fixed_five_second_delivery(preset_client):
+    """Pika 走官方 6 步基线：124 帧生成、120 帧交付，时长不接受剧情自定义。
+
+    H3 那套「按剧情时长吸附帧网格」不适用于 Pika；这里把边界钉住，
+    免得以后又把它并进 H3 的时长逻辑里。
+    """
+    client, project = preset_client
+    preset_id = 'h3-pika-text-landscape'
+    installed = client.post(f'/api/projects/preset-test/production-presets/{preset_id}')
+    assert installed.status_code == 200, installed.text
+    stage_id = production_presets.stage_id(preset_id)
+    manifest = installed.json()['project']
+    stage = next(item for item in manifest['pipeline'] if item['id'] == stage_id)
+    duration = next(item for item in backend.pipeline_contract(stage, manifest)['input_specs']
+                    if item['id'] == 'duration')
+    assert duration['min'] == duration['max'] == 5.0
+
+    add_shot(client, project, 'S01', with_audio=False)
+    checked = client.post(f'/api/projects/preset-test/pipeline/{stage_id}/validate',
+                          json={'asset_id': 'S01', 'values': {'duration': 5.0}})
+    assert checked.status_code == 200, checked.text
+    assert checked.json()['h3_duration']['requested_seconds'] == 5.0
+
+    # 分镜本身允许 1–15 秒（剧情计划），但 Pika 方案不接受 5 秒以外的交付口径。
+    assert client.patch('/api/projects/preset-test/plan/segments/S01',
+                        json={'duration_seconds': 8.5}).status_code == 200
+    too_long = client.post(f'/api/projects/preset-test/pipeline/{stage_id}/validate',
+                           json={'asset_id': 'S01', 'values': {'duration': 8.5}})
+    assert too_long.status_code == 422, too_long.text

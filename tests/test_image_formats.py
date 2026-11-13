@@ -36,14 +36,25 @@ def test_read_for_vision_converts_heic_and_reports_jpeg(tmp_path):
     assert payload.startswith(b'\xff\xd8\xff')
 
 
-def test_read_for_vision_keeps_png_as_is(tmp_path):
+def test_read_for_vision_returns_jpeg(tmp_path):
+    """识图统一出 JPEG：原图直发会把请求顶到 4000+ token，超 Ollama 的 4096 上下文。"""
     target = tmp_path / 'frame.png'
     buffer = io.BytesIO()
     Image.new('RGB', (8, 8), (10, 20, 30)).save(buffer, format='PNG')
-    original = buffer.getvalue()
-    target.write_bytes(original)
+    target.write_bytes(buffer.getvalue())
     payload, mime = image_formats.read_for_vision(target)
-    assert payload == original and mime == 'image/png'
+    assert mime == 'image/jpeg'
+    assert payload.startswith(b'\xff\xd8\xff')
+
+
+def test_read_for_vision_caps_the_long_edge(tmp_path):
+    target = tmp_path / 'big.png'
+    buffer = io.BytesIO()
+    Image.new('RGB', (2400, 3200), (30, 40, 50)).save(buffer, format='PNG')
+    target.write_bytes(buffer.getvalue())
+    payload, _ = image_formats.read_for_vision(target)
+    with Image.open(io.BytesIO(payload)) as image:
+        assert max(image.size) == image_formats.VISION_MAX_EDGE
 
 
 def test_convert_upload_swaps_heic_for_jpg(tmp_path):

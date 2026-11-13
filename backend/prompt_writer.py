@@ -41,6 +41,9 @@ DEFAULT_KEEP_ALIVE = os.environ.get('DIRECTOR_PROMPT_KEEP_ALIVE', '30s')
 TIMEOUT = float(os.environ.get('DIRECTOR_PROMPT_TIMEOUT', '300'))
 ONLINE_TIMEOUT = float(os.environ.get('DIRECTOR_PROMPT_ONLINE_TIMEOUT', '120'))
 MAX_IDEA = 1200
+# 识图请求的上下文窗口。Ollama 默认 4096，装不下「缩到 1024 长边的图 + 指令」，
+# 会直接 400 报 exceeds the available context size。
+VISION_NUM_CTX = int(os.environ.get('DIRECTOR_PROMPT_VISION_CTX', '8192'))
 MAX_OUTPUT = 900
 # 识图：单张图太大时 base64 会把请求撑爆，也给本地模型添无谓的编码开销。
 MAX_IMAGE_BYTES = 16 * 1024**2
@@ -56,6 +59,17 @@ DESCRIBE_INSTRUCTION = """看这张图，写一段能用来重新生成类似画
 3. 不要用「这张图」「画面中」开头，直接写内容。
 4. 不写品牌、真实人名、真实地名。
 5. 只输出提示词本身，不加引号、不加「提示词：」前缀。"""
+# 识图有两个用途，要求正好相反：
+# * 描述成片 → 要连光线、材质一起写，才能复现；
+# * 给参考图补信息 → 只该说人物和构图，因为参考图常是深度图/线稿/3D 人偶，
+#   把它们的「磨砂质感、灰阶」写进提示词会污染生成结果（实测会真的生成人偶）。
+REFERENCE_DESCRIBE_INSTRUCTION = """看这张参考图，只提取和「人物与构图」有关的事实，写成一段中文。
+按这个顺序写：画面里有几个人 → 每个人的外观（发型、服装的款式/颜色/材质）→ 各自的姿态与相互位置 → 景别与机位。
+要求：
+1. 一段话，中文，60 到 120 字，不分点、不加标题。
+2. 只写人物和构图。不要写光线、色调、质感、渲染风格、背景美术——参考图可能只是线稿或深度图，那些不是真实内容。
+3. 看不清就略过，不要编造。
+4. 直接写内容，不要用「这张图」开头，只输出这段文字本身。"""
 STARTUP_TIMEOUT = float(os.environ.get('DIRECTOR_PROMPT_STARTUP_TIMEOUT', '45'))
 _START_LOCK = threading.Lock()
 # 出片前会被连续调用好几次（批量提交），这个时间戳用来去重。
@@ -88,8 +102,9 @@ POLISH_PROMPT = """你是中文影像提示词的润色编辑。用户会给你�
 规则：
 
 1. 用户写的人物长相、服装、动作、场景、镜头、光线、道具——一个都不能丢，也不能换成别的。
-2. 补上原文缺的、但画面必须有的：景别与机位、镜头运动、光的方向与色温、材质与纹理、
-   环境里可见的细节。
+2. 补上原文缺的、但画面必须有的：景别与机位、镜头运动、光的方向与色温、材质与纹理
+   （只限衣物、家具、墙面这类看得见的东西）、环境里可见的细节。
+   不要给人物新增原文没有的皮肤状态、身体特征或表情。
 3. 删掉"电影感""高级感""大片""氛围感拉满"这类空词，换成能拍出来的具体描述。
 4. 理顺语序：主体与外观 → 动作与姿态 → 镜头 → 光线 → 材质 → 环境。
 5. 一段话，中文，90 到 200 字。不分点、不加标题、不解释你改了什么、不输出修改说明。
@@ -97,6 +112,24 @@ POLISH_PROMPT = """你是中文影像提示词的润色编辑。用户会给你�
 7. 只输出润色后的描述本身：不加引号，不加"提示词："之类的前缀。
 
 如果原文涉及未成年人，直接输出：无法处理。"""
+
+TRANSLATE_PROMPT = """你是影像提示词的中译英译者。用户会给你一段中文提示词，请译成英文。
+
+规则：
+
+1. 逐项对应：人物长相、服装、动作、姿态、场景、道具、镜头、光线、材质、氛围，一个都不能漏，
+   也不要合并成概括。
+2. 不添加原文没有的内容，不解释、不扩写、不评价、不加标题。
+3. 沿用原文的顺序：主体与外观 → 动作与姿态 → 镜头 → 光线 → 材质 → 环境。
+4. 专业词用影像行业常见说法：全身 → full-body shot；中景 → medium shot；特写 → close-up；
+   浅景深 → shallow depth of field；侧逆光 → side backlight；柔光 → soft light；
+   低角度仰拍 → low-angle shot；俯拍 → high-angle shot。
+5. 数字、比例、尺寸（如 16:9、768×1344）和专有名词原样保留。
+6. 只输出英文译文本身：不加引号，不加「Translation:」之类前缀，不要保留中文原句，
+   不要输出任何说明。
+7. 原文允许的成年人身体、裸露程度与情欲氛围照实翻译，不要替用户净化或改成更保守的说法。
+
+如果原文涉及未成年人的性内容，直接输出：无法处理。"""
 
 _LABEL = re.compile(r'^\s*(?:提示词|画面描述|描述|prompt)\s*[:：]\s*', re.IGNORECASE)
 # qwen3 是思考模型：即便请求里关了 think，也可能漏出思考段，这里两种闭合符都认。
@@ -574,6 +607,16 @@ def _image_roots() -> list[Path]:
     comfy = os.environ.get('DIRECTOR_COMFY_ROOT')
     if comfy:
         roots.append(Path(comfy) / 'ComfyUI_windows_portable' / 'ComfyUI' / 'output')
+    # 素材库：识图最常吃的就是这些图（大多在 AI 参考图库）。不登记进来的话，
+    # 写词里一勾「先让识图看一眼参考图」就会被「图片必须在作品目录内」挡掉。
+    try:
+        from . import reference_library
+        config, _ = reference_library.load_config(Path(backend.ROOT))
+        for item in (config.get('image_directories') or []):
+            if isinstance(item, dict) and item.get('path'):
+                roots.append(Path(str(item['path'])))
+    except Exception:
+        pass
     return roots
 
 
@@ -609,7 +652,7 @@ def _image_mime(path: Path) -> str:
             '.webp': 'image/webp'}.get(path.suffix.lower(), 'image/png')
 
 
-def _describe_online(target: Path) -> dict[str, Any]:
+def _describe_online(target: Path, instruction: str | None = None) -> dict[str, Any]:
     """在线识图：OpenAI 兼容的 vision 消息格式（image_url + data URL）。"""
     settings = load_config()['online']
     key = online_key()
@@ -626,7 +669,7 @@ def _describe_online(target: Path) -> dict[str, Any]:
         'messages': [{
             'role': 'user',
             'content': [
-                {'type': 'text', 'text': DESCRIBE_INSTRUCTION},
+                {'type': 'text', 'text': instruction or DESCRIBE_INSTRUCTION},
                 {'type': 'image_url',
                  'image_url': {'url': f'data:{vision_mime};base64,{encoded}'}},
             ],
@@ -665,11 +708,16 @@ def _describe_online(target: Path) -> dict[str, Any]:
             'started_service': False, 'startup_ms': 0}
 
 
-def describe_image(path: str, *, provider: str = 'local') -> dict[str, Any]:
-    """图片 → 提示词。本地走 Ollama 多模态，在线走 OpenAI 兼容的 vision。"""
+def describe_image(path: str, *, provider: str = 'local',
+                   instruction: str | None = None) -> dict[str, Any]:
+    """图片 → 提示词。本地走 Ollama 多模态，在线走 OpenAI 兼容的 vision。
+
+    ``instruction`` 留空时用「复现这张图」那套；只想要人物和构图（参考图补信息）
+    时传 ``REFERENCE_DESCRIBE_INSTRUCTION``。
+    """
     target = resolve_image(path)
     if provider == 'online':
-        return _describe_online(target)
+        return _describe_online(target, instruction=instruction)
     if provider != 'local':
         raise ValueError('未知的识图通道')
     boot = ensure_service()
@@ -682,8 +730,13 @@ def describe_image(path: str, *, provider: str = 'local') -> dict[str, Any]:
         'stream': False,
         'think': False,
         'keep_alive': keep_alive_value(),
-        'messages': [{'role': 'user', 'content': DESCRIBE_INSTRUCTION, 'images': [encoded]}],
-        'options': {'temperature': 0.4, 'top_p': 0.9, 'num_predict': 400},
+        'messages': [{'role': 'user',
+                      'content': instruction or DESCRIBE_INSTRUCTION,
+                      'images': [encoded]}],
+        # Ollama 默认上下文只有 4096，一张没缩过的图就能顶爆（实测 4262 > 4096）。
+        # 图已经缩到长边 1024，这里再把窗口抬到 8192 兜住素材标题较多的情况。
+        'options': {'temperature': 0.4, 'top_p': 0.9, 'num_predict': 400,
+                    'num_ctx': VISION_NUM_CTX},
     }
     started_at = time.monotonic()
     try:
@@ -693,7 +746,13 @@ def describe_image(path: str, *, provider: str = 'local') -> dict[str, Any]:
     except httpx.TimeoutException as exc:
         raise WriterFailed(f'本机模型 {TIMEOUT:.0f} 秒没有回应') from exc
     if response.status_code == 400:
-        raise WriterFailed(f'模型 {model} 不接受图片输入，换一个带 vision 的模型：{response.text[:200]}')
+        detail = response.text[:300]
+        # 400 不等于「不支持图片」：上下文溢出也是 400。分开报，别把人引到换模型的错路上。
+        if 'context size' in detail or 'exceeds the available context' in detail:
+            raise WriterFailed(
+                f'图片太大，超出 {model} 的上下文窗口（已缩到长边 '
+                f'{image_formats.VISION_MAX_EDGE} 仍不够）：{detail}')
+        raise WriterFailed(f'模型 {model} 不接受图片输入，换一个带 vision 的模型：{detail}')
     if response.status_code == 404:
         raise WriterUnavailable(f'本机没有 {model}，执行：ollama pull {model}')
     if response.status_code >= 400:
@@ -734,6 +793,21 @@ def context_lines(context: Any) -> list[str]:
         if picked:
             lines.append('已选定的参考素材（写成和它们一致的样子，不要另编长相和服装）：'
                          + '；'.join(picked) + '。')
+    # 用户勾了「先看参考图」时，前端会先用识图把每张图变成一段文字，
+    # 这里把它排在标题后面：标题只有商品名，描述才是画面里真正有什么。
+    descriptions = context.get('reference_descriptions')
+    if isinstance(descriptions, list):
+        seen: list[str] = []
+        for entry in descriptions[:3]:
+            if not isinstance(entry, dict):
+                continue
+            role = str(entry.get('role') or '').strip()[:16]
+            text = str(entry.get('text') or '').strip()[:400]
+            if text:
+                seen.append(f'{role}：{text}' if role else text)
+        if seen:
+            lines.append('参考图里实际是什么（以这段为准，标题只是索引）：'
+                         + '｜'.join(seen) + '。')
     aspect = str(context.get('aspect') or '').strip()[:16]
     if aspect:
         lines.append(f'画幅：{aspect}，取景要和它相称。')
@@ -744,6 +818,10 @@ def context_lines(context: Any) -> list[str]:
 
 
 def _messages(text: str, context: Any, mode: str = 'compose') -> list[dict[str, str]]:
+    # 翻译是逐句对应，不带工作台上下文：说清"这段是待翻译的"就够了。
+    if mode == 'translate':
+        return [{'role': 'system', 'content': TRANSLATE_PROMPT},
+                {'role': 'user', 'content': f'待翻译：{text}'}]
     extra = context_lines(context)
     label = '原文' if mode == 'polish' else '想法'
     user_message = text if not extra else '\n'.join([*extra, '', f'{label}：{text}'])
@@ -842,13 +920,145 @@ def draft(idea: str, *, provider: str = 'auto', temperature: float = 0.9,
           mode: str = 'compose') -> dict[str, Any]:
     text = str(idea or '').strip()
     if not text:
-        raise ValueError('先写一句想法' if mode == 'compose' else '先写一段要润色的提示词')
+        raise ValueError({'compose': '先写一句想法', 'polish': '先写一段要润色的提示词',
+                          'translate': '先写一段要翻译的提示词'}.get(mode, '先写一句想法'))
     if len(text) > MAX_IDEA:
         raise ValueError(f'内容太长，控制在 {MAX_IDEA} 字以内')
 
     chosen = provider if provider in ('local', 'online') else load_config()['provider']
-    shape = mode if mode in ('compose', 'polish') else 'compose'
+    shape = mode if mode in ('compose', 'polish', 'translate') else 'compose'
+    # 翻译基本是 1:1 长度，长提示词按写词的 420 token 会被截断，给足量。
+    budget = max(num_predict, 1200) if shape == 'translate' else num_predict
     if chosen == 'online':
         return _draft_online(text, temperature=temperature, context=context, mode=shape)
-    return _draft_local(text, temperature=temperature, num_predict=num_predict,
+    return _draft_local(text, temperature=temperature, num_predict=budget,
                         context=context, mode=shape)
+
+
+BREAKDOWN_MAX_CHARS = int(os.environ.get('DIRECTOR_PROMPT_BREAKDOWN_CHARS', '16000'))
+BREAKDOWN_NUM_CTX = int(os.environ.get('DIRECTOR_PROMPT_BREAKDOWN_CTX', '16384'))
+
+BREAKDOWN_PROMPT = """你是影视剧的制片统筹。读一段中文剧本，抽出真正需要单独准备的素材。
+只输出一个 JSON 对象，不要解释、不要 Markdown 代码块。
+
+格式：
+{"characters":[{"name":"角色名","look":"外观：年龄、性别、脸型、发型、体型、常穿服装","voice":"声线：年龄感、音色、语速、口音；没有就写空字符串"}],
+ "scenes":[{"name":"地点","look":"时间、光线、环境细节、氛围"}],
+ "props":[{"name":"道具","look":"外观、材质、状态"}],
+ "music":[{"name":"段落名","style":"风格标签：乐器、节奏、情绪，无人声","seconds":30}]}
+
+规则：
+- 只收剧本里真的出现、且需要单独生成的；泛泛而谈的不要。
+- 同一角色/场景/道具只出现一次，用剧本里的叫法。
+- look 要具体可画；不要写景别、机位、运镜这类镜头语言。
+- voice 只写声音本身，不要写台词内容。
+- music 按情绪或段落给，最多 6 条；seconds 是建议时长（整数秒）。
+- 没有的类别返回空数组。"""
+
+
+def _breakdown_messages(text: str, system: str = BREAKDOWN_PROMPT) -> list[dict[str, str]]:
+    return [{'role': 'system', 'content': system},
+            {'role': 'user', 'content': f'待处理的内容：\n{text}'}]
+
+
+def _breakdown_local(text: str, *, temperature: float, num_predict: int,
+                     system: str = BREAKDOWN_PROMPT) -> dict[str, Any]:
+    boot = ensure_service()
+    model = active_model()
+    payload = {
+        'model': model, 'stream': False, 'think': False,
+        'keep_alive': keep_alive_value(),
+        'messages': _breakdown_messages(text, system),
+        # 剧本比一句想法长得多：默认 4096 上下文会直接截断，必须显式抬高。
+        'options': {'temperature': temperature, 'top_p': 0.9,
+                    'num_predict': num_predict, 'num_ctx': BREAKDOWN_NUM_CTX},
+    }
+    started_at = time.monotonic()
+    try:
+        response = httpx.post(f'{SERVICE_URL}/api/chat', json=payload, timeout=TIMEOUT, trust_env=False)
+    except httpx.ConnectError as exc:
+        raise WriterUnavailable('连不上本机 Ollama（127.0.0.1:11434），先启动服务再试') from exc
+    except httpx.TimeoutException as exc:
+        raise WriterFailed(f'本机模型 {TIMEOUT:.0f} 秒没有回应，可能是首次加载卡住了') from exc
+    if response.status_code == 404:
+        raise WriterUnavailable(f'本机没有 {model}，执行：ollama pull {model}')
+    if response.status_code >= 400:
+        raise WriterFailed(f'Ollama 返回 {response.status_code}：{response.text[:200]}')
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise WriterFailed('Ollama 返回了非 JSON 响应') from exc
+    message = (body.get('message') or {}) if isinstance(body, dict) else {}
+    content = str(message.get('content') or '')
+    if not content.strip():
+        raise WriterFailed('模型返回了空内容，再试一次')
+    return {'text': content, 'provider': 'local', 'model': model,
+            'service': SERVICE_URL, 'elapsed_ms': int((time.monotonic() - started_at) * 1000),
+            'started_service': bool(boot.get('started')), 'startup_ms': int(boot.get('wait_ms') or 0)}
+
+
+def _breakdown_online(text: str, *, temperature: float,
+                      system: str = BREAKDOWN_PROMPT) -> dict[str, Any]:
+    settings = load_config()['online']
+    key = online_key()
+    if not key:
+        raise WriterUnavailable('在线模型还没填 API Key：在面板里填一次，或设 DEEPSEEK_API_KEY。')
+    base_url = (settings.get('base_url') or DEFAULT_ONLINE['base_url']).rstrip('/')
+    model = settings.get('model') or DEFAULT_ONLINE['model']
+    payload = {'model': model, 'stream': False, 'messages': _breakdown_messages(text, system),
+               'temperature': max(0.0, min(2.0, float(temperature)))}
+    started_at = time.monotonic()
+    try:
+        response = httpx.post(f'{base_url}/chat/completions', json=payload,
+                              headers=_online_headers(key), timeout=ONLINE_TIMEOUT)
+    except httpx.ConnectError as exc:
+        raise WriterUnavailable(f'连不上在线接口 {base_url}，检查地址和网络代理。') from exc
+    except httpx.TimeoutException as exc:
+        raise WriterFailed(f'在线模型 {ONLINE_TIMEOUT:.0f} 秒没有回应。') from exc
+    if response.status_code in (401, 403):
+        raise WriterUnavailable('在线模型拒绝了这把 Key（401/403），检查 Key 是否有效、有没有余额。')
+    if response.status_code == 429:
+        raise WriterFailed('在线模型限流了（429），等一会儿再试。')
+    if response.status_code >= 400:
+        raise WriterFailed(f'{base_url} 返回 {response.status_code}：{response.text[:200]}')
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise WriterFailed('在线接口返回了非 JSON 响应') from exc
+    choices = body.get('choices') if isinstance(body, dict) else None
+    message = (choices[0].get('message') if isinstance(choices, list) and choices else {}) or {}
+    content = str(message.get('content') or '')
+    if not content.strip():
+        raise WriterFailed('在线模型返回了空内容，再试一次')
+    return {'text': content, 'provider': 'online', 'model': model,
+            'service': base_url, 'elapsed_ms': int((time.monotonic() - started_at) * 1000),
+            'started_service': False, 'startup_ms': 0}
+
+
+def json_chat(text: str, *, system: str, provider: str = 'auto',
+              temperature: float = 0.2, num_predict: int = 2600) -> dict[str, Any]:
+    """带自定义 system 的一次结构化对话：所有「读一段文字、吐一份 JSON」都走这里。
+
+    每个调用方自己写清职责边界（见 contracts/prompt-reading-roles.md），
+    这里只负责通道选择、长度截断和错误归因。
+    """
+    body = str(text or '').strip()
+    if not body:
+        raise ValueError('内容还是空的')
+    truncated = len(body) > BREAKDOWN_MAX_CHARS
+    if truncated:
+        body = body[:BREAKDOWN_MAX_CHARS]
+    chosen = provider if provider in ('local', 'online') else load_config()['provider']
+    if chosen == 'online':
+        result = _breakdown_online(body, temperature=temperature, system=system)
+    else:
+        result = _breakdown_local(body, temperature=temperature, num_predict=num_predict, system=system)
+    result.update(truncated=truncated, source_chars=len(body))
+    return result
+
+
+def breakdown(text: str, *, provider: str = 'auto', temperature: float = 0.2,
+              num_predict: int = 2600) -> dict[str, Any]:
+    """把剧本正文拆成素材清单（结构化 JSON 文本，解析在 script_library 里做）。"""
+    return json_chat(text, system=BREAKDOWN_PROMPT, provider=provider,
+                     temperature=temperature, num_predict=num_predict)

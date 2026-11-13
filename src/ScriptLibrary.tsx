@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Download, FilePlus2, FolderOpen, LoaderCircle, Save, Trash2, Upload } from 'lucide-react';
 import { ApiError, mediaUrl, request } from './api/client';
+import ScriptBreakdown from './ScriptBreakdown';
 
 // 剧本库：草稿只在本机；归档才写进 素材库\剧本。导出由浏览器直接下载正文。
-type Draft = { id: string; title: string; content?: string; updated_at?: number };
+type Draft = { id: string; title: string; content?: string; updated_at?: number; items?: number; confirmed?: boolean };
 type Archived = { name: string; path: string; size: number; modified: number };
 type Listing = { drafts: Draft[]; archived: Archived[] };
 
@@ -27,7 +28,7 @@ export function ScriptLibraryEntry({ onOpen }: { onOpen: () => void }) {
 
 export default function ScriptLibraryDialog({ onClose, onChanged }: { onClose: () => void; onChanged?: () => void }) {
   const [listing, setListing] = useState<Listing | null>(null);
-  const [tab, setTab] = useState<'drafts' | 'archived'>('drafts');
+  const [tab, setTab] = useState<'drafts' | 'breakdown' | 'archived'>('drafts');
   const [activeId, setActiveId] = useState('');
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
@@ -35,6 +36,7 @@ export default function ScriptLibraryDialog({ onClose, onChanged }: { onClose: (
   const [message, setMessage] = useState('');
   const [confirming, setConfirming] = useState('');
   const [removing, setRemoving] = useState('');
+  const [restoring, setRestoring] = useState('');
 
   async function refresh(keep?: string): Promise<Listing | null> {
     try {
@@ -53,6 +55,15 @@ export default function ScriptLibraryDialog({ onClose, onChanged }: { onClose: (
     }
   }
   useEffect(() => { void refresh(); }, []);
+
+  // 清单保存后只刷新左侧列表与计数：不能连正文一起重载，
+  // 否则用户还没保存的正文修改会被服务端旧版本顶掉。
+  async function refreshCounts() {
+    try {
+      const data = await request<Listing>('/api/script-library');
+      setListing(data);
+    } catch { /* 列表刷新失败不影响清单本身 */ }
+  }
 
   function selectDraft(draft: Draft) {
     setActiveId(draft.id); setTitle(draft.title); setContent(draft.content || ''); setMessage('');
@@ -95,6 +106,22 @@ export default function ScriptLibraryDialog({ onClose, onChanged }: { onClose: (
     } catch (reason) { setMessage(reason instanceof ApiError ? reason.message : '删除未完成'); }
     finally { setBusy(false); }
   }
+  // 撤档：归档文件收回草稿，归档那份移进回收站，不会出现两处各一份。
+  // 手动拖进 素材库\剧本 的文件也走这条路——它本来就没有草稿底稿。
+  async function restoreArchived(name: string) {
+    if (restoring) return;
+    setRestoring(name); setMessage(''); setConfirming('');
+    try {
+      const data = await request<{ draft: Draft; name: string }>('/api/script-library/archived/restore', { json: { name } });
+      setTab('drafts');
+      await refresh(data.draft.id);
+      setMessage(`已收回草稿：${data.draft.title}（归档文件已移入回收站，可从回收站还原）`);
+      onChanged?.();
+    } catch (reason) {
+      setMessage(reason instanceof ApiError ? reason.message : '撤档未完成');
+      await refresh();
+    } finally { setRestoring(''); }
+  }
   // 已归档剧本在 素材库\剧本 里只有一份，删掉无法恢复，所以在行内先确认一次。
   async function removeArchived(name: string) {
     if (removing) return;
@@ -127,17 +154,31 @@ export default function ScriptLibraryDialog({ onClose, onChanged }: { onClose: (
     } catch (reason) { setMessage(reason instanceof ApiError ? reason.message : '导入未完成'); }
   }
 
+  const draftList = <div className="sl-list">
+    {!listing ? <p className="sf-post-hint"><LoaderCircle size={14} className="sf-spin" /> 正在读取…</p> : listing.drafts.length === 0 ? <p className="sf-post-hint">还没有草稿。</p> : listing.drafts.map(draft => <button key={draft.id} className={`sl-item${draft.id === activeId ? ' selected' : ''}`} type="button" onClick={() => selectDraft(draft)}>
+      <strong>{draft.title}</strong>
+      <small>{draft.items ? `${draft.items} 项素材${draft.confirmed ? ' · 已确认' : ' · 待确认'}` : (draft.updated_at ? new Date(draft.updated_at * 1000).toLocaleString('zh-CN') : '未拆解')}</small>
+    </button>)}
+    <button className="sf-ghost sl-new" type="button" onClick={newDraft}><FilePlus2 size={13} /> 新草稿</button>
+  </div>;
+
   return <div className="sf-modal-mask" role="dialog" aria-modal="true" aria-label="剧本库">
     <div className="sf-modal sl-modal">
       <div className="sf-post-section-head"><h2>剧本库</h2><p className="sf-post-meta">草稿只在本机 · 归档才进 素材库\剧本</p></div>
-      <div className="sl-tabs"><button className={tab === 'drafts' ? 'selected' : ''} onClick={() => setTab('drafts')}>草稿（{listing?.drafts.length ?? 0}）</button><button className={tab === 'archived' ? 'selected' : ''} onClick={() => setTab('archived')}>已归档（{listing?.archived.length ?? 0}）</button></div>
-      {tab === 'drafts' ? <div className="sl-grid">
-        <div className="sl-list">
-          {!listing ? <p className="sf-post-hint"><LoaderCircle size={14} className="sf-spin" /> 正在读取…</p> : listing.drafts.length === 0 ? <p className="sf-post-hint">还没有草稿。</p> : listing.drafts.map(draft => <button key={draft.id} className={`sl-item${draft.id === activeId ? ' selected' : ''}`} type="button" onClick={() => selectDraft(draft)}>
-            <strong>{draft.title}</strong><small>{draft.updated_at ? new Date(draft.updated_at * 1000).toLocaleString('zh-CN') : ''}</small>
-          </button>)}
-          <button className="sf-ghost sl-new" type="button" onClick={newDraft}><FilePlus2 size={13} /> 新草稿</button>
+      <div className="sl-tabs">
+        <button className={tab === 'drafts' ? 'selected' : ''} onClick={() => setTab('drafts')}>草稿（{listing?.drafts.length ?? 0}）</button>
+        <button className={tab === 'breakdown' ? 'selected' : ''} onClick={() => setTab('breakdown')}>素材清单</button>
+        <button className={tab === 'archived' ? 'selected' : ''} onClick={() => setTab('archived')}>已归档（{listing?.archived.length ?? 0}）</button>
+      </div>
+      {tab === 'breakdown' ? <div className="sl-grid">
+        {draftList}
+        <div className="sl-editor">
+          {!listing ? <p className="sf-post-hint">正在读取…</p>
+            : !activeId ? <p className="sf-post-hint">左边选一份草稿，再让 AI 拆素材。</p>
+            : <ScriptBreakdown draftId={activeId} onChanged={() => void refreshCounts()} />}
         </div>
+      </div> : tab === 'drafts' ? <div className="sl-grid">
+        {draftList}
         <div className="sl-editor">
           <label className="sf-field"><span>标题</span><input value={title} maxLength={80} onChange={event => setTitle(event.target.value)} placeholder="例如：第一场 雨夜独白" /></label>
           <label className="sf-field"><span>正文</span><textarea rows={12} value={content} onChange={event => setContent(event.target.value)} placeholder="先写下来，不用讲究格式。归档前它只在这台机器上。" /></label>
@@ -151,13 +192,14 @@ export default function ScriptLibraryDialog({ onClose, onChanged }: { onClose: (
           {message && <p className="sf-post-message" role="status" aria-live="polite">{message}</p>}
         </div>
       </div> : <div className="sl-grid single">
-        {!listing ? <p className="sf-post-hint">正在读取…</p> : listing.archived.length === 0 ? <p className="sf-post-hint">还没有归档的剧本。归档后会写进 素材库\剧本，文件名带日期。</p> : <ul className="sf-post-history sf-post-history--library">{listing.archived.map(item => <li key={item.path}>
+        {!listing ? <p className="sf-post-hint">正在读取…</p> : listing.archived.length === 0 ? <p className="sf-post-hint">还没有归档的剧本。手动放进 素材库\剧本 的 .md/.txt 也会列在这里，点「收回草稿」就能退回草稿。</p> : <ul className="sf-post-history sf-post-history--library">{listing.archived.map(item => <li key={item.path}>
           <a href={mediaUrl(item.path)} download>{item.name}</a>
           <time>{(item.size / 1024).toFixed(1)} KB · {new Date(item.modified * 1000).toLocaleString('zh-CN')}</time>
           <span className="sf-lib-actions">
+            <button type="button" disabled={!!restoring || !!removing} onClick={() => void restoreArchived(item.name)}>{restoring === item.name ? '收回中…' : '收回草稿'}</button>
             {confirming === item.name
-              ? <><button type="button" className="danger" disabled={!!removing} onClick={() => void removeArchived(item.name)}>{removing === item.name ? '删除中…' : '确认删除'}</button><button type="button" disabled={!!removing} onClick={() => setConfirming('')}>取消</button></>
-              : <button type="button" disabled={!!removing} onClick={() => setConfirming(item.name)}>删除</button>}
+              ? <><button type="button" className="danger" disabled={!!removing || !!restoring} onClick={() => void removeArchived(item.name)}>{removing === item.name ? '删除中…' : '确认删除'}</button><button type="button" disabled={!!removing} onClick={() => setConfirming('')}>取消</button></>
+              : <button type="button" disabled={!!removing || !!restoring} onClick={() => setConfirming(item.name)}>删除</button>}
           </span>
         </li>)}</ul>}
       </div>}

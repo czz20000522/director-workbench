@@ -87,6 +87,11 @@
 .clarity-levels > button[aria-pressed="true"] { border-color: var(--post-accent, #365fd6); background: rgb(54 95 214 / 8%); color: var(--post-accent, #365fd6); box-shadow: inset 0 0 0 1px var(--post-accent, #365fd6); }
 .clarity-levels > button[aria-pressed="true"] small { color: var(--post-accent, #365fd6); }
 .clarity-levels > button:disabled { opacity: .55; cursor: default; }
+/* 画质是二级选项，按钮按内容宽度排，不撑满整行；档位标签也收小一号。 */
+.clarity-levels.is-compact { gap: 4px; }
+.clarity-levels.is-compact > button { flex: 0 0 auto; min-width: 46px; padding: 4px 9px; border-radius: 7px; }
+.clarity-levels.is-compact > button strong { font-size: 12px; }
+.clarity-levels.is-compact > button small { font-size: 10px; }
 .sf-post-field > input,
 .sf-post-field > select,
 .sf-post-field > textarea,
@@ -245,7 +250,7 @@
 .sf-slot { display: grid; gap: 6px; padding: 8px 0; border-top: 1px dashed var(--post-line); }
 .sf-slot:first-of-type { border-top: 0; padding-top: 4px; }
 .sf-slot-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.sf-slot-role { flex: 0 0 44px; color: var(--post-ink, #202124); font-size: 12px; font-weight: 600; }
+.sf-slot-role { flex: 0 0 52px; color: var(--post-ink, #202124); font-size: 12px; font-weight: 600; }
 .sf-slot-empty { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border: 1px dashed var(--post-line); border-radius: 999px; background: #fff; color: var(--post-muted); font: inherit; font-size: 12px; cursor: pointer; }
 .sf-slot-empty:hover { border-color: var(--post-accent, #365fd6); color: var(--post-accent, #365fd6); }
 .sf-slot-chip { display: inline-flex; align-items: center; gap: 7px; min-width: 0; padding: 3px 10px 3px 3px; border: 1px solid var(--post-line); border-radius: 999px; background: #fff; color: var(--post-ink, #202124); font: inherit; font-size: 12px; cursor: pointer; }
@@ -254,6 +259,18 @@
 .sf-slot-clear { display: inline-flex; padding: 4px; border: 0; background: none; color: var(--post-muted); cursor: pointer; }
 .sf-slot-clear:hover { color: #c0392b; }
 .sf-slot-hint { margin: 0; color: var(--post-muted); font-size: 11px; }
+/* 「自有素材」是第五个槽：它和上面四类的语义不同，用一条实线隔开。 */
+.sf-slot.is-own { margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--post-line); }
+.sf-slot.is-own .sf-slot-role { color: var(--post-accent, #365fd6); }
+.sf-slot.is-own .sf-slot-empty { border-style: solid; border-color: var(--post-accent, #365fd6); color: var(--post-accent, #365fd6); }
+.sf-slot.is-own .sf-slot-empty:hover { background: #f4f7ff; }
+.sf-slot-upload { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.sf-slot-upload > button { padding: 4px 10px; border: 1px dashed var(--post-line); border-radius: 999px; background: #fff; color: var(--post-ink, #202124); font: inherit; font-size: 11px; cursor: pointer; }
+.sf-slot-upload > button:hover:not(:disabled) { border-color: var(--post-accent, #365fd6); color: var(--post-accent, #365fd6); }
+.sf-slot-upload > button:disabled { opacity: .55; cursor: default; }
+.sf-slot-upload > small { color: var(--post-muted); font-size: 11px; }
+/* 选了自有素材，上面四类这次不参与：压暗但不隐藏，清掉就恢复。 */
+.ffs-slots[data-own="true"] .sf-slot:not(.is-own) { opacity: .5; }
 .sf-slot-picker { display: grid; gap: 8px; padding: 8px; border: 1px solid var(--post-line); border-radius: 8px; background: #fbfbfc; }
 .sf-slot-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .sf-slot-bar > input { flex: 1 1 220px; min-height: 30px; padding: 4px 8px; border: 1px solid var(--post-line); border-radius: 6px; font: inherit; font-size: 12px; }
@@ -263,6 +280,9 @@
 .sf-slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; max-height: 320px; overflow: auto; }
 .sf-slot-grid > button { display: grid; gap: 3px; padding: 4px; border: 1px solid var(--post-line); border-radius: 7px; background: #fff; color: var(--post-muted); font: inherit; font-size: 10px; cursor: pointer; }
 .sf-slot-grid > button:hover { border-color: var(--post-accent, #365fd6); }
+/* 双人/多人素材角标：姿势库 pair60_* 那批，选之前就要看出画面里有几个人。 */
+.sf-slot-grid > button { position: relative; }
+.sf-slot-people { position: absolute; top: 5px; right: 5px; padding: 1px 5px; border-radius: 999px; background: rgba(176,74,45,.92); color: #fff; font-size: 9px; font-style: normal; letter-spacing: .02em; }
 .sf-slot-grid > button img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 4px; }
 .sf-slot-grid > button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -287,21 +307,33 @@
 .ffs-base img { width: 40px; height: 52px; border-radius: 5px; object-fit: cover; }
 .ffs-base-label { flex: 0 0 auto; padding: 2px 8px; border-radius: 999px; background: var(--post-accent, #365fd6); color: #fff; font-size: 11px; }
 .ffs-base-note { flex: 1 1 auto; color: var(--post-muted); font-size: 11px; }
+/* 只选一张素材时的「直接作首帧」入口：不必先跑一次首帧生成。 */
+.ffs-direct { display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px dashed var(--post-line, #d9dce2); border-radius: 8px; background: #fafbfd; }
+.ffs-direct .sf-secondary { align-self: flex-start; }
+.ffs-own-note { padding: 8px 10px; border-left: 2px solid var(--post-accent, #365fd6); border-radius: 0 6px 6px 0; background: #f4f7ff; }
+/* 属性归属提醒：琥珀色而不是蓝色——它是「注意」而不是「信息」。 */
+.ffs-override-note { margin: 0; padding: 8px 10px; border-left: 2px solid #c08a1e; border-radius: 0 6px 6px 0; background: #fff8ea; color: #7a5a12; font-size: 11px; line-height: 1.65; }
 
 .ffs-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .ffs-frame { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--post-line); border-radius: 10px; background: #fff; }
-.ffs-frame-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--post-muted); font-size: 12px; }
-.ffs-frame-head > span { display: inline-flex; align-items: center; gap: 5px; }
+.ffs-frame-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--post-muted); font-size: 12px; flex-wrap: wrap; }
+.ffs-frame-head > span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .ffs-frame > img { width: 100%; max-height: 460px; border-radius: 8px; object-fit: contain; background: #f2f3f5; }
 .ffs-frame > .sf-fine { margin: 0; }
 
-.ffs-history { display: grid; gap: 6px; }
-.ffs-history-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.ffs-history-title { display: inline-flex; align-items: center; gap: 5px; color: var(--post-muted); font-size: 11px; }
-.ffs-history-grid { display: flex; flex-wrap: wrap; gap: 6px; }
-.ffs-history-grid > button { padding: 0; border: 2px solid transparent; border-radius: 7px; background: none; cursor: pointer; line-height: 0; }
-.ffs-history-grid > button img { width: 52px; height: 68px; border-radius: 5px; object-fit: cover; background: var(--post-line); }
-.ffs-history-grid > button.selected { border-color: var(--post-accent, #365fd6); }
+/* 生成结果并排：同一页连续生成几版就摆几版。以前只显示最新一张、历史缩成
+   52×68 的小方块，看起来像被覆盖了。 */
+/* 固定两列：三栏布局会把中间栏挤窄，用 auto-fill 时窄到一定程度会塌成一列，
+   又变回"只有一张"的观感。两列在 200px 宽的容器里也并排。 */
+.ffs-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 2px; }
+.ffs-cell { display: grid; gap: 4px; align-content: start; padding: 5px; border: 2px solid transparent; border-radius: 9px; background: #fbfbfc; }
+.ffs-cell.is-current { border-color: var(--post-accent, #365fd6); background: #f4f7ff; }
+.ffs-cell-pick { position: relative; padding: 0; border: 0; border-radius: 7px; background: none; cursor: pointer; line-height: 0; }
+.ffs-cell-pick img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 7px; background: #f2f3f5; }
+.ffs-cell-pick:disabled { cursor: default; }
+.ffs-cell-badge { position: absolute; top: 6px; left: 6px; padding: 1px 7px; border-radius: 999px; background: var(--post-accent, #365fd6); color: #fff; font-size: 9px; font-style: normal; letter-spacing: .02em; }
+.ffs-cell-meta { color: var(--post-muted); font-size: 10px; line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.ffs-cell .sf-inline-link { font-size: 10px; }
 .ffs-tip { display: inline-flex; align-items: flex-start; gap: 5px; }
 
 /* ── 视频制作方案选择器（按「要准备什么」分组） ────────────── */
@@ -523,3 +555,69 @@
 .vpp-collapsed { display: grid; gap: 8px; }
 .vpp-switch { justify-self: start; padding: 5px 11px; border: 1px solid var(--post-line); border-radius: 7px; background: #fff; color: var(--post-accent, #365fd6); font: inherit; font-size: 11.5px; cursor: pointer; }
 .vpp-switch:hover { border-color: var(--post-accent, #365fd6); }
+
+/* 剪辑台：素材卡 + 时间线 + BGM + 成片 */
+.ve { display: grid; gap: 14px; }
+.ve-section { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--post-line); border-radius: 12px; background: #fff; }
+.ve-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.ve-head h2 { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 13px; }
+.ve-head p { margin: 2px 0 0; color: var(--post-muted); font-size: 11px; }
+.ve-upload { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; white-space: nowrap; }
+.ve-upload.is-busy { opacity: .6; pointer-events: none; }
+.ve-sources { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; }
+.ve-source { display: grid; gap: 3px; padding: 8px; border: 1px solid var(--post-line); border-radius: 8px; background: #fbfbfc; text-align: left; font: inherit; cursor: pointer; }
+.ve-source:hover { border-color: #365fd6; }
+.ve-source-top { display: flex; align-items: center; gap: 5px; color: var(--post-muted); font-size: 10px; }
+.ve-source-top em { font-style: normal; }
+.ve-source strong { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ve-source small { color: var(--post-muted); font-size: 11px; }
+.ve-source-add { display: inline-flex; align-items: center; gap: 4px; margin-top: 2px; color: #365fd6; font-size: 11px; }
+/* 登记里留着、盘上已经没有的文件：直接从时间线入口里摘出去，别让人点了才报错。 */
+.ve-source.is-dead { border-style: dashed; border-color: #e2c4bf; background: #fdf7f6; cursor: not-allowed; }
+.ve-source.is-dead:hover { border-color: #e2c4bf; }
+.ve-source.is-dead .ve-source-add { color: #a8453c; }
+.ve-source.is-dead strong { color: #8a7a78; }
+.ve-total { color: var(--post-muted); font-size: 11px; white-space: nowrap; }
+.ve-timeline { display: grid; gap: 6px; }
+.ve-clip { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--post-line); border-radius: 8px; background: #fbfbfc; }
+.ve-clip-index { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: #eef2fb; color: #365fd6; font-size: 11px; font-weight: 600; }
+.ve-clip-name { flex: 1 1 140px; min-width: 0; display: grid; }
+.ve-clip-name strong { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ve-clip-name small { color: var(--post-muted); font-size: 10px; }
+.ve-num { display: inline-flex; align-items: center; gap: 4px; color: var(--post-muted); font-size: 11px; }
+.ve-num input { width: 68px; padding: 3px 6px; border: 1px solid var(--post-line); border-radius: 6px; font: inherit; font-size: 11px; }
+.ve-vol { display: inline-flex; align-items: center; gap: 4px; color: var(--post-muted); font-size: 11px; }
+.ve-vol input[type=range] { width: 84px; }
+.ve-vol small { min-width: 32px; color: var(--post-ink); }
+.ve-mute { display: inline-flex; align-items: center; gap: 4px; color: var(--post-muted); font-size: 11px; }
+.ve-clip-actions { display: inline-flex; gap: 2px; margin-left: auto; }
+.ve-clip-actions button { padding: 4px; border: 1px solid var(--post-line); border-radius: 6px; background: #fff; color: var(--post-muted); cursor: pointer; }
+.ve-clip-actions button:disabled { opacity: .35; cursor: default; }
+.ve-audio-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.ve-music-vol { padding-bottom: 6px; }
+.ve-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ve-result { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--post-line); border-radius: 10px; background: #fff; }
+.ve-result video { width: 100%; max-height: 460px; border-radius: 8px; background: #000; }
+.ve-result p { margin: 0; }
+
+/* ── 清晰化 · 三条来源分开 ───────────────────────────────────
+   本作生成 / 素材库 / 本机上传各占一个页签：素材库按 id 选，
+   另两路按路径选，避免把库里成千上万张参考图和本作产出混在一个下拉框。 */
+.sf-post-tabs { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 2px; border: 1px solid var(--post-line); border-radius: 999px; background: #fbfbfc; justify-self: start; }
+.sf-post-tabs > button { padding: 5px 14px; border: 0; border-radius: 999px; background: none; color: var(--post-muted); font: inherit; font-size: 12px; cursor: pointer; }
+.sf-post-tabs > button:hover:not(:disabled) { color: var(--post-accent); }
+.sf-post-tabs > button.is-active { background: var(--post-accent); color: #fff; }
+.sf-post-tabs > button:disabled { opacity: .5; cursor: not-allowed; }
+.sf-post-picker { min-width: 0; }
+.sf-slot-grid > button.is-picked { border-color: var(--post-accent); box-shadow: inset 0 0 0 1px var(--post-accent); }
+.sf-post-picked-mark { position: absolute; top: 5px; left: 5px; padding: 1px 5px; border-radius: 999px; background: rgba(54,95,214,.92); color: #fff; font-size: 9px; font-style: normal; }
+.sf-post-picked { display: flex; flex-wrap: wrap; gap: 5px; }
+.sf-post-picked > button { padding: 3px 9px; border: 1px solid var(--post-line); border-radius: 999px; background: #fff; color: var(--post-ink); font: inherit; font-size: 11px; cursor: pointer; }
+.sf-post-picked > button:hover:not(:disabled) { border-color: #e3b4b4; color: #a53030; }
+.sf-post-picked > button:disabled { opacity: .5; cursor: not-allowed; }
+
+/* 剪辑台 · 按来源筛选 */
+.ve-origin-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.ve-origin-tabs button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border: 1px solid var(--post-line); border-radius: 999px; background: #fff; color: var(--post-muted); font: inherit; font-size: 11px; cursor: pointer; }
+.ve-origin-tabs button span { font-size: 10px; opacity: .7; }
+.ve-origin-tabs button[aria-pressed="true"] { background: #202124; border-color: #202124; color: #fff; }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Copy, Download, ExternalLink, ImageIcon, LoaderCircle, Search, X } from 'lucide-react';
+import { ArrowLeft, Copy, Download, ExternalLink, ImageIcon, LoaderCircle, Scaling, Search, X } from 'lucide-react';
 import { request } from './api/client';
+import LiquifyDialog from './LiquifyDialog';
 import './library-page.css';
 
 type Library = { name: string; count: number; covers: string[]; source_title: string };
@@ -23,6 +24,7 @@ export default function LibraryPage({ initialCategory = '' }: { initialCategory?
   const [error, setError] = useState('');
   const [selected, setSelected] = useState<Item | null>(null);
   const [notice, setNotice] = useState('');
+  const [liquify, setLiquify] = useState<Item | null>(null);
   const requestId = useRef(0);
 
   useEffect(() => {
@@ -147,9 +149,19 @@ export default function LibraryPage({ initialCategory = '' }: { initialCategory?
       <div className="lp-detail-actions">
         <a className="lp-action" href={selected.file_url} target="_blank" rel="noreferrer"><ExternalLink size={13} /> 打开原图</a>
         <a className="lp-action" href={selected.file_url} download={selected.filename}><Download size={13} /> 下载</a>
+        <button type="button" className="lp-action" onClick={() => setLiquify(selected)}><Scaling size={13} /> 液化塑形</button>
         <button type="button" className="lp-action" onClick={() => void copy(selected.title, '标签')}><Copy size={13} /> 复制标签</button>
       </div>
     </aside>}
+
+    {liquify && <LiquifyDialog imagePath={liquify.file_url} materialId={liquify.id} allowRefine={false}
+      onClose={() => setLiquify(null)}
+      onDone={(_path, count) => {
+        setLiquify(null);
+        setNotice(`已存回「${liquify.category}」子库（${count} 个调整中心）；原图未改动`);
+        void load(0);
+      }} />}
+
 
     {notice && <p className="lp-notice" role="status">{notice}</p>}
   </div>;

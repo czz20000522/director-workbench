@@ -3,6 +3,7 @@ import type { PointerEvent as ReactPointerEvent } from 'react';
 import { Eraser, LoaderCircle, Paintbrush, Trash2, X } from 'lucide-react';
 import { mediaUrl, request } from './api/client';
 import ProgressBar, { type TaskProgress } from './TaskProgress';
+import TranslateButton from './TranslateButton';
 
 /** 首帧局部重绘。
  *
@@ -37,12 +38,14 @@ function readOutput(result: unknown): string {
   return '';
 }
 
-export default function InpaintDialog({ projectId, imagePath, profile, onClose, onDone }: {
+export default function InpaintDialog({ projectId, imagePath, profile, initialStrength, onClose, onDone }: {
   projectId: string;
   imagePath: string;
   profile: 'general' | 'adult-realism' | 'adult-anime';
+  /** 「精修五官」这类低强度场景：降噪给低一点，只补质感不换人；默认 0.75。 */
+  initialStrength?: number;
   onClose: () => void;
-  onDone: (path: string, prompt: string) => void;
+  onDone: (path: string, prompt: string, taskId?: string) => void;
 }) {
   const baseRef = useRef<HTMLCanvasElement | null>(null);
   const maskRef = useRef<HTMLCanvasElement | null>(null);
@@ -53,7 +56,7 @@ export default function InpaintDialog({ projectId, imagePath, profile, onClose, 
   const [erase, setErase] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [prompt, setPrompt] = useState('');
-  const [strength, setStrength] = useState(0.75);
+  const [strength, setStrength] = useState(initialStrength ?? 0.75);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
   const [progress, setProgress] = useState<TaskProgress | null>(null);
@@ -191,7 +194,7 @@ export default function InpaintDialog({ projectId, imagePath, profile, onClose, 
         await new Promise(resolve => setTimeout(resolve, 2000));
       }
       if (!output) throw new Error('任务成功但没有拿到图片路径');
-      onDone(output, prompt.trim());
+      onDone(output, prompt.trim(), String(taskId));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '局部重绘失败');
       setStatus('');
@@ -219,7 +222,9 @@ export default function InpaintDialog({ projectId, imagePath, profile, onClose, 
           onClick={() => setErase(true)}><Eraser size={13} /> 橡皮</button>
         <button type="button" disabled={busy || !dirty} onClick={clear}><Trash2 size={13} /> 清空蒙版</button>
       </div>
-      <label className="sf-field"><span>这里改成什么</span>
+      <label className="sf-field"><span className="tb-row">这里改成什么
+        <TranslateButton text={prompt} disabled={busy} onTranslated={setPrompt} />
+      </span>
         <textarea rows={3} value={prompt} disabled={busy} onChange={event => setPrompt(event.target.value)}
           placeholder="只写被涂区域的新内容，例如：换成白色高领毛衣，领口有细针织纹理。" />
       </label>

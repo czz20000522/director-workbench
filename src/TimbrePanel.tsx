@@ -1,12 +1,13 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import TaskQueueStatus, { type QueueReceipt } from './TaskQueueStatus';
 import { ApiError, mediaUrl, request as apiRequest } from './api/client';
+import { hideSample, normalizeDescription, notifyPresetLibraryChanged, onSamplesChanged, readHidden, rememberSample, restoreHidden, sampleFor, sampleSrc, stagedSample } from './timbreSamples';
 
 // 两条真实链路：VoxCPM2 能凭文字造音色，IndexTTS 2.5 只能克隆你给的参考音频。
 // 换引擎不会偷偷换模型，而是把表单换成那一条路真正需要填的东西。
 type Engine = 'voxcpm-2' | 'indextts-2.5';
 type Draft = { engine: Engine; voice_description: string; voice_reference: string; text: string; seed: number };
-type DesignBody = { engine: 'voxcpm-2'; mode: 'design'; voice_description: string; text: string; seed: number };
+type DesignBody = { engine: 'voxcpm-2'; mode: 'design'; voice_description: string; text: string; seed: number; source_card?: string };
 type ReferenceBody = { engine: 'indextts-2.5'; mode: 'reference'; voice_reference: string; text: string };
 type Submission = (DesignBody | ReferenceBody) & { idempotency_key: string };
 type Saved = { draft: Draft; pending?: Submission; completedTaskId?: string };
@@ -55,10 +56,11 @@ function load(storageKey: string): Saved {
 }
 // Only the fields that engine actually accepts go out; IndexTTS rejects a random number.
 type DistOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
-function body(draft: Draft): DistOmit<Submission, 'idempotency_key'> {
+function body(draft: Draft, sourceCard?: string): DistOmit<Submission, 'idempotency_key'> {
   const text = draft.text.trim();
   return draft.engine === 'voxcpm-2'
-    ? { engine: 'voxcpm-2', mode: 'design', voice_description: draft.voice_description.trim(), text, seed: draft.seed }
+    ? { engine: 'voxcpm-2', mode: 'design', voice_description: draft.voice_description.trim(), text, seed: draft.seed,
+        ...(sourceCard ? { source_card: sourceCard } : {}) }
     : { engine: 'indextts-2.5', mode: 'reference', voice_reference: draft.voice_reference, text };
 }
 function valid(draft: Draft): boolean {
@@ -70,8 +72,10 @@ function valid(draft: Draft): boolean {
 }
 class RequestError extends Error { constructor(message: string, readonly status: number) { super(message); } }
 
-export default function TimbrePanel({ projectId, onComplete, initialDescription, initialDraft }: {
+export default function TimbrePanel({ projectId, onComplete, initialDescription, initialDraft, sourceCard }: {
   projectId: string; onComplete: () => void; initialDescription?: string; initialDraft?: Partial<Draft> | null;
+  /** 从音色库带入的卡片名：生成成功后服务端优先把试听小样回写到这张卡。 */
+  sourceCard?: string;
 }) {
   const storageKey = `director-workbench:${projectId}:timbre:v1`;
   const prefix = useId();
@@ -100,12 +104,20 @@ export default function TimbrePanel({ projectId, onComplete, initialDescription,
   const [samples, setSamples] = useState<Asset[]>([]);
   const [audios, setAudios] = useState<Asset[]>([]);
   const [cardName, setCardName] = useState('');
+  // 「不显示这条」只在本浏览器记隐藏名单，音频文件本身不动，随时可恢复。
+  const [hidden, setHidden] = useState<string[]>(() => readHidden());
   const base = `/api/projects/${encodeURIComponent(projectId)}`;
   const pendingKey = saved.pending?.idempotency_key;
   const draft = saved.draft;
   const locked = Boolean(saved.pending);
   const vox = draft.engine === 'voxcpm-2';
   const result = task?.status === 'succeeded' && task.result && typeof task.result === 'object' ? task.result as Receipt : null;
+  const visibleSamples = samples.filter(sample =>
+    !hidden.includes(sample.id) && !hidden.includes(String(sample.sources?.A || '')));
+  // 从音色库「带入」时暂存的试听小样：只有描述没被改过才认领，改了就当另一条音色。
+  const brought = stagedSample();
+  const showBrought = Boolean(brought && draft.voice_description.trim()
+    && normalizeDescription(brought.description) === normalizeDescription(draft.voice_description));
   function persist(next: Saved) {
     if (!alive.current) return false;
     try { localStorage.setItem(storageKey, JSON.stringify(next)); current.current = next; setSaved(next); return true; }
@@ -114,7 +126,18 @@ export default function TimbrePanel({ projectId, onComplete, initialDescription,
   function accept(next: Task, key: string) {
     if (!alive.current || current.current.pending?.idempotency_key !== key) return;
     setTask(next); setMessage('');
-    if (next.status === 'succeeded') void readAssets();
+    if (next.status === 'succeeded') {
+      void readAssets();
+      // 生成成功就把小样按「当前音色描述」记一条：描述没改 → 覆盖音色库那张卡的小样，
+      // 于是打开卡片就能直接试听；描述改了 → 是另一条音色，不会污染原卡。
+      const receipt = next.result && typeof next.result === 'object' ? next.result as Receipt : null;
+      const description = current.current.draft.voice_description.trim();
+      if (receipt?.output && current.current.pending?.mode === 'design' && description) {
+        rememberSample({ path: String(receipt.output), description,
+          duration_seconds: receipt.duration_seconds, text: current.current.draft.text.trim(), source: 'timbre-panel',
+          ...(sourceCard ? { name: sourceCard } : {}) });
+      }
+    }
     if (next.status === 'succeeded' && current.current.completedTaskId !== next.id) {
       if (persist({ ...current.current, completedTaskId: next.id })) completion.current();
     }
@@ -148,6 +171,7 @@ export default function TimbrePanel({ projectId, onComplete, initialDescription,
       .catch(() => { if (alive.current) setCapability({ available: false, reason: '无法检查声音环境，请检查连接后刷新。' }); });
     return () => { alive.current = false; };
   }, []);
+  useEffect(() => onSamplesChanged(() => setHidden(readHidden())), []);
   useEffect(() => {
     if (!pendingKey) return;
     let active = true; let polling = false;
@@ -172,7 +196,7 @@ export default function TimbrePanel({ projectId, onComplete, initialDescription,
     try {
       let next: Task;
       if (action === 'submit') {
-        const submission = current.current.pending || { ...body(current.current.draft), idempotency_key: `timbre-${crypto.randomUUID()}` };
+        const submission = current.current.pending || { ...body(current.current.draft, sourceCard), idempotency_key: `timbre-${crypto.randomUUID()}` };
         if (!valid(current.current.draft)) throw new Error(vox ? '请写清音色描述与试听台词，并确认随机编号是 0 到 4294967295 的整数。' : 'IndexTTS 2.5 需要一段参考音频和一句试听台词。');
         if (!persist({ ...current.current, pending: submission })) return;
         key = submission.idempotency_key;
@@ -198,11 +222,19 @@ export default function TimbrePanel({ projectId, onComplete, initialDescription,
   async function saveCard() {
     const label = cardName.trim();
     if (!label || !valid(draft)) return;
-    const params = vox ? { engine: draft.engine, voice_description: draft.voice_description.trim(), text: draft.text.trim() }
+    // 刚生成过、描述没改：把小样一起写进卡片，换一台机器也能试听。
+    const remembered = vox ? sampleFor(draft.voice_description.trim(), label) : null;
+    const sample = remembered ? {
+      sample_path: remembered.path,
+      ...(remembered.duration_seconds ? { sample_duration_seconds: remembered.duration_seconds } : {}),
+      ...(remembered.text ? { sample_text: remembered.text } : {}),
+    } : {};
+    const params = vox ? { engine: draft.engine, voice_description: draft.voice_description.trim(), text: draft.text.trim(), ...sample }
       : { engine: draft.engine, voice_reference: draft.voice_reference, text: draft.text.trim() };
     setBusy(true);
     try {
       await apiRequest(`/api/preset-library/timbre/${encodeURIComponent(label)}`, { init: { method: 'PUT', body: JSON.stringify({ params }), headers: { 'Content-Type': 'application/json' } } });
+      notifyPresetLibraryChanged();
       if (alive.current) { setCardName(''); setMessage(`已存入音色库：${label}`); }
     } catch (reason) {
       if (alive.current) setMessage(reason instanceof ApiError ? `存入音色库失败：${reason.message}` : '存入音色库未完成');
@@ -251,17 +283,25 @@ export default function TimbrePanel({ projectId, onComplete, initialDescription,
       {!ready && <p className="sf-post-message" role="status" aria-live="polite">{engineNames[draft.engine]} 未就绪：{(facts?.missing || []).join('、') || capability?.reason || '缺少运行环境。'}</p>}
       {message && <p className="sf-post-message" role="status" aria-live="polite">{message}</p>}
       {task?.error && <p className="sf-post-message" role="status" aria-live="polite">{task.error}</p>}
+      {brought && showBrought && <div className="sf-post-subblock lib-sample-bar">
+        <div className="sf-post-section-head"><h3 className="sf-post-subtitle">音色库带来的小样</h3>
+          <p className="sf-post-meta">直接试听，不用重新生成</p></div>
+        <p className="sf-post-hint">{brought.description}</p>
+        <audio controls preload="none" src={sampleSrc(brought.path)} aria-label="音色库带来的音色小样" />
+      </div>}
       {result?.output && <div className="sf-post-subblock">
         <audio controls preload="metadata" aria-label="音色样本试听" src={mediaUrl(result.output)} />
-        <p className="sf-post-hint">{vox ? `音色说明「${result.timbre_prefix?.slice(0, 60) || draft.voice_description.slice(0, 60)}」· ` : '参考音色克隆 · '}{result.duration_seconds ? `${result.duration_seconds.toFixed(2)} 秒` : '时长未知'} · {result.sample_rate ?? facts?.sample_rate ?? 48000}Hz。满意就把它当音色参考：本作品可直接选，换作品时在素材区「复用素材」带走。</p>
+        <p className="sf-post-hint">{vox ? `音色说明「${result.timbre_prefix?.slice(0, 60) || draft.voice_description.slice(0, 60)}」· ` : '参考音色克隆 · '}{result.duration_seconds ? `${result.duration_seconds.toFixed(2)} 秒` : '时长未知'} · {result.sample_rate ?? facts?.sample_rate ?? 48000}Hz。满意就把它当音色参考：本作品可直接选，换作品时在素材区「复用素材」带走。{vox && ' 这段小样已按音色描述挂到音色库对应卡片上，回库里可直接试听，不用再生成一次。'}</p>
       </div>}
-      {samples.length > 0 && <div className="sf-post-subblock">
-        <div className="sf-post-section-head"><h3 className="sf-post-subtitle">本作已设计的音色</h3><p className="sf-post-meta">{samples.length} 段 · 可在配音与锚点配音里选作音色参考</p></div>
-        {samples.map(sample => <div className="sf-post-fields" key={sample.id}>
+      {(visibleSamples.length > 0 || hidden.length > 0) && <div className="sf-post-subblock">
+        <div className="sf-post-section-head"><h3 className="sf-post-subtitle">本作已设计的音色</h3><p className="sf-post-meta">{visibleSamples.length} 段 · 可在配音与锚点配音里选作音色参考</p></div>
+        {visibleSamples.map(sample => <div className="sf-post-fields" key={sample.id}>
           <div className="sf-post-field sf-post-field--wide"><span>{sample.title}</span>
             <audio controls preload="metadata" aria-label={`试听 ${sample.title || sample.id}`} src={mediaUrl(String(sample.sources?.A || ''))} /></div>
-          <div className="sf-post-field"><span>素材编号</span><p className="sf-post-hint">{sample.id} · {sample.end ? `${sample.end.toFixed(2)} 秒` : '时长未知'}</p></div>
+          <div className="sf-post-field"><span>素材编号</span><p className="sf-post-hint">{sample.id} · {sample.end ? `${sample.end.toFixed(2)} 秒` : '时长未知'}</p>
+            <button className="sf-inline-link" type="button" onClick={() => hideSample(sample.id)}>不显示这条</button></div>
         </div>)}
+        {hidden.length > 0 && <div className="sf-post-actions"><button className="button secondary compact" type="button" onClick={() => restoreHidden()}>恢复已隐藏的 {hidden.length} 条</button></div>}
       </div>}
       <div className="sf-post-actions">
         {!locked && <button className="button primary compact" disabled={busy || !ready || !valid(draft)} onClick={() => void act('submit')}>生成音色样本</button>}
@@ -271,11 +311,13 @@ export default function TimbrePanel({ projectId, onComplete, initialDescription,
         {task && terminal.includes(task.status) && <button className="button secondary compact" disabled={busy} onClick={() => { if (persist({ ...current.current, pending: undefined })) { setTask(null); setMessage(''); } }}>设计下一个音色</button>}
         {task && <TaskQueueStatus task={{ ...task, asset_id: '音色设计' }} />}
       </div>
-      {!locked && <div className="sf-post-subblock" aria-label="存进音色库">
+      {(!locked || result?.output) && <div className="sf-post-subblock" aria-label="存进音色库">
+        <div className="sf-post-section-head"><h3 className="sf-post-subtitle">存进音色库</h3>
+          <p className="sf-post-meta">生成完也能存，不用先点「设计下一个音色」</p></div>
         <div className="sf-post-fields">
-          <div className="sf-post-field sf-post-field--wide"><label htmlFor={`${prefix}-card`}>把这段音色存进音色库</label>
+          <div className="sf-post-field sf-post-field--wide"><label htmlFor={`${prefix}-card`}>把这段音色存成一张卡片</label>
             <input id={`${prefix}-card`} maxLength={40} value={cardName} placeholder="卡片名称，例如：沙哑老翁" onChange={event => setCardName(event.target.value)} /></div>
-          <div className="sf-post-field"><span className="sf-post-hint">只存引擎、描述与台词</span>
+          <div className="sf-post-field"><span className="sf-post-hint">{result?.output ? '小样已按描述挂上；卡片存好后打开音色库即可试听' : '只存引擎、描述与台词，不会自动开始生成'}</span>
             <button className="button secondary compact" type="button" disabled={busy || !cardName.trim() || !valid(draft)} onClick={() => void saveCard()}>存入音色库</button></div>
         </div>
       </div>}

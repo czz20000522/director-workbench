@@ -6,18 +6,87 @@ import { ApiError, mediaUrl, request as apiRequest } from './api/client';
 type Facts = { width?: number; height?: number; duration_seconds?: number; frames?: number; fps?: number; audio_streams?: number };
 type Recipe = { source: string; source_facts: Facts & { kind: 'image' | 'video' }; model: string; scale: number };
 type Task = { id: string; asset_id: string; status: string; error?: string; created_at?: number; queue?: { state: string; position?: number | null; reason?: { code: string; message?: string } | null }; payload?: { enhancement?: Recipe }; result?: { published_outputs?: string[]; outputs?: string[]; output_facts?: Facts; comfy_timing?: { execution_seconds?: number } } };
-type Pending = { source: string; idempotency_key: string };
+type Pending = { source?: string; material_id?: string; idempotency_key: string };
 type BatchItem = { name: string; taskId: string; status: string; archived?: string; error?: string };
 type Capability = { model: string; limits: string; engine_offline?: boolean; kinds: Record<'image' | 'video', { available: boolean; missing: string[] }> };
 type LibraryItem = { name: string; path: string; size: number; modified: number; width?: number | null; height?: number | null };
+/** 素材库里的一张图：只按 id 选，路径由后端暂存，界面不拼本地路径。 */
+type LibraryMaterial = { id: string; title: string; category: string; thumb_url: string; file_url: string; people?: number };
+type SourceTab = 'work' | 'library' | 'upload';
+type BatchTab = 'files' | 'library';
 const IMAGE_EXTENSIONS = /\.(png|jpe?g|webp|gif|bmp)$/i;
 // 与 backend/enhancement.py 的输入上限一致：静态图片 840 万像素，视频每帧 420 万。
 const inputLimit = (name: string) => IMAGE_EXTENSIONS.test(name) ? 8_400_000 : 4_200_000;
 const terminal = ['succeeded', 'failed', 'stopped'];
 const statusLabel: Record<string, string> = { succeeded: '已完成 · 待比较', failed: '处理失败', stopped: '已停止', scheduler_waiting: '等待资源', preparing: '准备中', submitting: '正在提交', queued: '引擎排队中', running: '正在处理', stop_requested: '正在停止', stopping: '正在停止', needs_reconcile: '需要核对回执' };
 const dimensions = (facts?: Facts) => facts?.width && facts.height ? `${facts.width} × ${facts.height}` : '尺寸待核验';
+const PAGE = 24;
 class RequestError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string) { super(message); }
+}
+
+/** 素材库选择器：分类 + 搜索 + 缩略图网格。单选用在「选择原素材」，
+ *  多选用在「批量清晰化」；两处各自持有状态，互不影响。 */
+function LibraryBrowser({ multiple = false, selection, onPick, disabled = false }: {
+  multiple?: boolean;
+  selection: string[];
+  onPick: (material: LibraryMaterial) => void;
+  disabled?: boolean;
+}) {
+  const [categories, setCategories] = useState<{ name: string; count: number }[]>([]);
+  const [category, setCategory] = useState('');
+  const [query, setQuery] = useState('');
+  const [items, setItems] = useState<LibraryMaterial[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [limit, setLimit] = useState(PAGE);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    apiRequest<{ libraries: { name: string; count: number }[] }>('/api/reference-library/libraries')
+      .then(data => setCategories(data.libraries || []))
+      .catch(() => setCategories([]));
+  }, []);
+  useEffect(() => {
+    let active = true;
+    setItems(null); setError('');
+    const timer = window.setTimeout(() => {
+      apiRequest<{ items: LibraryMaterial[]; total: number }>(
+        `/api/reference-library/library?category=${encodeURIComponent(category)}&q=${encodeURIComponent(query)}&offset=0&limit=${limit}`)
+        .then(data => { if (!active) return; setItems(data.items || []); setTotal(data.total || 0); })
+        .catch(reason => { if (!active) return; setItems([]); setTotal(0); setError(reason instanceof Error ? reason.message : '素材库读取失败'); });
+    }, query ? 260 : 0);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [category, query, limit]);
+  const picked = new Set(selection);
+  return <div className="sf-slot-picker sf-post-picker" aria-label="从素材库选择">
+    <div className="sf-slot-bar">
+      {categories.length > 1
+        ? <div className="sf-slot-cats">
+            <button type="button" className={category === '' ? 'selected' : ''} disabled={disabled} onClick={() => { setCategory(''); setLimit(PAGE); }}>全部</button>
+            {categories.map(item => <button key={item.name} type="button" className={category === item.name ? 'selected' : ''} disabled={disabled}
+              onClick={() => { setCategory(item.name); setLimit(PAGE); }}>{item.name} {item.count}</button>)}
+          </div>
+        : <span className="sf-slot-scope">{categories[0] ? `只列「${categories[0].name}」` : '素材库'}</span>}
+      <input value={query} maxLength={40} placeholder="按标题筛选，如 中长发 / 站姿 / 白衬衫" disabled={disabled}
+        onChange={event => { setQuery(event.target.value); setLimit(PAGE); }} />
+    </div>
+    {error && <p className="sf-post-alert" role="alert">{error}</p>}
+    {!items && !error && <p className="sf-post-hint">正在读取素材库…</p>}
+    {items && !items.length && <p className="sf-post-hint">这个筛选下没有素材。换个词，或切到「本机上传」处理自己电脑里的文件。</p>}
+    {items && items.length > 0 && <div className="sf-slot-grid" role="listbox" aria-multiselectable={multiple}>
+      {items.map(item => <button key={item.id} type="button" disabled={disabled}
+        className={picked.has(item.id) ? 'is-picked' : undefined}
+        aria-selected={picked.has(item.id)}
+        title={(item.people || 1) >= 2 ? `${item.title}（画面里有 ${item.people} 个人）` : item.title}
+        onClick={() => onPick(item)}>
+        <img src={item.thumb_url} alt={item.title} loading="lazy" />
+        {(item.people || 1) >= 2 && <em className="sf-slot-people">{item.people} 人</em>}
+        {picked.has(item.id) && <em className="sf-post-picked-mark">已选</em>}
+        <span>{item.title}</span>
+      </button>)}
+    </div>}
+    {items && limit < total && <button type="button" className="sf-inline-link" disabled={disabled}
+      onClick={() => setLimit(value => value + PAGE)}>再显示 {PAGE} 张（共 {total} 张）</button>}
+  </div>;
 }
 
 export default function EnhancementPanel({ projectId, initialSource = '', onBack }: { projectId: string; initialSource?: string; onBack: () => void }) {
@@ -43,7 +112,10 @@ export default function EnhancementPanel({ projectId, initialSource = '', onBack
   const [clearing, setClearing] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [source, setSource] = useState(initialSource || initial.pending?.source || '');
+  const [tab, setTab] = useState<SourceTab>(() => initial.pending?.material_id ? 'library' : 'work');
+  const [pickedMaterial, setPickedMaterial] = useState<LibraryMaterial | null>(null);
   const [sources, setSources] = useState<MaterialOption[]>([]);
+  const [uploads, setUploads] = useState<MaterialOption[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [offset, setOffset] = useState(0);
   const [nextOffset, setNextOffset] = useState<number | null>(null);
@@ -51,6 +123,8 @@ export default function EnhancementPanel({ projectId, initialSource = '', onBack
   // 批量清晰化：一次选多个文件，逐条上传提交（引擎队列自然排队），全部完成后自动归档。
   const [batch, setBatch] = useState<BatchItem[]>([]);
   const [batchBusy, setBatchBusy] = useState(false);
+  const [batchTab, setBatchTab] = useState<BatchTab>('files');
+  const [batchMaterials, setBatchMaterials] = useState<LibraryMaterial[]>([]);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const mounted = useRef(true);
@@ -130,9 +204,9 @@ export default function EnhancementPanel({ projectId, initialSource = '', onBack
   }
   async function refresh() {
     const seq = ++listSequence.current;
-    const data = await request<{ sources: MaterialOption[]; tasks: Task[]; next_offset: number | null }>(`${base}/enhancements?offset=${offset}`);
+    const data = await request<{ sources: MaterialOption[]; uploads: MaterialOption[]; tasks: Task[]; next_offset: number | null }>(`${base}/enhancements?offset=${offset}`);
     if (!mounted.current || seq !== listSequence.current) return;
-    setSources(data.sources); setTasks(data.tasks); setNextOffset(data.next_offset);
+    setSources(data.sources); setUploads(data.uploads || []); setTasks(data.tasks); setNextOffset(data.next_offset);
   }
   useEffect(() => {
     mounted.current = true;
@@ -173,7 +247,10 @@ export default function EnhancementPanel({ projectId, initialSource = '', onBack
     if (working.current) return;
     working.current = true; setBusy(true); setMessage('');
     try {
-      const body = pending || { source, idempotency_key: `enhance-${crypto.randomUUID()}` };
+      const chosenMaterial = tab === 'library' ? pickedMaterial : null;
+      const body = pending || (chosenMaterial
+        ? { material_id: chosenMaterial.id, idempotency_key: `enhance-${crypto.randomUUID()}` }
+        : { source, idempotency_key: `enhance-${crypto.randomUUID()}` });
       persist({ pending: body }); setPending(body);
       const task = await request<Task>(`${base}/enhancement-tasks`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       accept(task); await refresh();
@@ -199,32 +276,22 @@ export default function EnhancementPanel({ projectId, initialSource = '', onBack
     try {
       const form = new FormData(); form.append('files', file, file.name);
       const data = await request<{ uploaded: string[] }>(`${base}/upload`, { method: 'POST', body: form });
-      if (mounted.current) { await refresh(); setSource(data.uploaded[0] || ''); setLibrarySource(null); }
+      if (mounted.current) { await refresh(); setSource(data.uploaded[0] || ''); setLibrarySource(null); setPickedMaterial(null); setTab('upload'); }
     } catch (error) { if (mounted.current) setMessage(error instanceof Error ? error.message : '上传失败'); }
     finally { working.current = false; if (mounted.current) setBusy(false); }
   }
 
-  /** 批量清晰化：上传 + 提交全在前台逐条做，处理交给引擎队列；
-   * 每条到终态就立刻归档，所以这一轮跑完，清晰化库里就是全部成品。 */
-  async function runBatch(fileList: FileList | File[]) {
-    const files = Array.from(fileList);
-    if (!files.length || batchBusy) return;
+  /** 批量队列：提交由调用方逐条做，这里只负责排队、轮询与自动归档。 */
+  async function runQueue(items: BatchItem[], submitOne: (index: number) => Promise<Task>) {
+    if (batchBusy) return;
     setBatchBusy(true); setMessage('');
-    const items: BatchItem[] = files.map(file => ({ name: file.name, taskId: '', status: '上传中', error: '' }));
     setBatch([...items]);
     let succeeded = 0;
     let failed = 0;
     try {
-      for (let index = 0; index < files.length; index += 1) {
+      for (let index = 0; index < items.length; index += 1) {
         try {
-          const form = new FormData(); form.append('files', files[index], files[index].name);
-          const data = await request<{ uploaded: string[] }>(`${base}/upload`, { method: 'POST', body: form });
-          const source = data.uploaded[0] || '';
-          if (!source) throw new Error('上传返回为空');
-          const task = await request<Task>(`${base}/enhancement-tasks`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ source, idempotency_key: `enhance-batch-${crypto.randomUUID()}` }),
-          });
+          const task = await submitOne(index);
           items[index] = { ...items[index], taskId: task.id, status: statusLabel[task.status] || task.status };
         } catch (reason) {
           items[index] = { ...items[index], status: 'failed', error: reason instanceof Error ? reason.message : '提交失败' };
@@ -270,11 +337,45 @@ export default function EnhancementPanel({ projectId, initialSource = '', onBack
       await loadLibrary();
     }
   }
+
+  /** 本机文件批量：上传 + 提交全在前台逐条做，处理交给引擎队列。 */
+  async function runBatch(fileList: FileList | File[]) {
+    const files = Array.from(fileList);
+    if (!files.length || batchBusy) return;
+    await runQueue(files.map(file => ({ name: file.name, taskId: '', status: '上传中', error: '' })), async index => {
+      const form = new FormData(); form.append('files', files[index], files[index].name);
+      const data = await request<{ uploaded: string[] }>(`${base}/upload`, { method: 'POST', body: form });
+      const uploaded = data.uploaded[0] || '';
+      if (!uploaded) throw new Error('上传返回为空');
+      return request<Task>(`${base}/enhancement-tasks`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: uploaded, idempotency_key: `enhance-batch-${crypto.randomUUID()}` }),
+      });
+    });
+  }
+
+  /** 素材库批量：只提交 material_id，后端按需把库里的原图暂存到本作再处理。 */
+  async function runLibraryBatch() {
+    const items = batchMaterials;
+    if (!items.length || batchBusy) return;
+    await runQueue(items.map(item => ({ name: `素材库 · ${item.title}`, taskId: '', status: '正在提交', error: '' })), index =>
+      request<Task>(`${base}/enhancement-tasks`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ material_id: items[index].id, idempotency_key: `enhance-library-${crypto.randomUUID()}` }),
+      }));
+  }
+
   const recipe = selectedTask?.payload?.enhancement;
   const output = selectedTask?.result?.published_outputs?.[0] || (selectedTask?.result?.outputs?.[0] ? `output/${selectedTask.result.outputs[0]}` : '');
-  const chosen = sources.find(item => item.value === source)
+  const listedSource = sources.find(item => item.value === source)
+    || uploads.find(item => item.value === source)
     || (librarySource?.value === source ? librarySource : undefined);
-  const available = chosen && (capability?.kinds[chosen.kind as 'image' | 'video']?.available || capability?.engine_offline);
+  // 当前页签选中的才是输入：素材库按 id，另外两路按路径，互不串。
+  const chosenKind: 'image' | 'video' | undefined = tab === 'library'
+    ? (pickedMaterial ? 'image' : undefined)
+    : (listedSource && listedSource.kind !== 'audio' ? listedSource.kind : undefined);
+  const chosenPath = tab === 'library' ? '' : source;
+  const available = chosenKind ? (capability?.kinds[chosenKind]?.available || capability?.engine_offline) : false;
   function preview(path: string, kind: string, label: string) {
     return kind === 'image' ? <img src={mediaUrl(path)} alt={label} /> : <video aria-label={label} src={mediaUrl(path)} controls preload="metadata" playsInline />;
   }
@@ -305,6 +406,8 @@ export default function EnhancementPanel({ projectId, initialSource = '', onBack
   // 库里这一份一个字节都不动。删除则是直接删文件，删前在行内确认一次。
   function reuseArchived(item: LibraryItem) {
     setPending(undefined);
+    setTab('work');
+    setPickedMaterial(null);
     setSource(item.path);
     // 库文件不在作品素材候选里，单独挂一个选项，否则下拉框回落到空白、用户看不出已选。
     setLibrarySource({ value: item.path, label: `清晰化库 · ${item.name}`,
@@ -323,29 +426,91 @@ export default function EnhancementPanel({ projectId, initialSource = '', onBack
       setMessage(`删除未完成：${reason instanceof Error ? reason.message : '原因未知，请重试'}`);
     } finally { setRemoving(''); await loadLibrary(); }
   }
+  const workOptions = sources;
+  const uploadOptions = uploads;
+  const toggleBatchMaterial = (material: LibraryMaterial) => {
+    setBatchMaterials(current => current.some(item => item.id === material.id)
+      ? current.filter(item => item.id !== material.id)
+      : [...current, material]);
+  };
   return <section className="sf-post-tools" aria-label="图像／视频清晰化">
     <section className="sf-post-section" aria-label="选择原素材">
       <div className="sf-post-section-head"><h2 className="sf-post-title">选择原素材</h2><p className="sf-post-meta">AI 超分辨率 · 宽高各放大 2 倍 · 保持画幅</p></div>
-      <div className="sf-post-fields">
-        <label className="sf-post-field sf-post-field--wide">当前作品的图片或视频<select aria-label="清晰化原素材" value={source} disabled={busy || !!pending} onChange={event => { setSource(event.target.value); setLibrarySource(null); }}><option value="">选择已有候选或上传素材</option>{sources.map(item => <option key={item.value} value={item.value}>{item.kind === 'image' ? '图片' : '视频'} · {item.label}</option>)}{librarySource && !sources.some(item => item.value === librarySource.value) && <option value={librarySource.value}>{librarySource.label}</option>}</select></label>
-        <label className="sf-post-field sf-post-field--wide">上传图片或视频<input className="sf-post-file" aria-label="上传清晰化素材" type="file" accept=".png,.jpg,.jpeg,.webp,.heic,.heif,.mp4,.mov,.webm,.mkv" disabled={busy || !!pending} onChange={event => { const file = event.target.files?.[0]; if (file) void upload(file); event.target.value = ''; }} /></label>
+      {/* 三条来源分开：本作生成的内容、素材库里的图、本机文件。混在一个下拉框里
+          会让人分不清哪张是自己生出来的、哪张是库里复制进来的。 */}
+      <div className="sf-post-tabs" role="tablist" aria-label="原素材来源">
+        <button type="button" role="tab" aria-selected={tab === 'work'} className={tab === 'work' ? 'is-active' : undefined}
+          disabled={!!pending || busy} onClick={() => { setTab('work'); setPickedMaterial(null); }}>本作生成 · {workOptions.length}</button>
+        <button type="button" role="tab" aria-selected={tab === 'library'} className={tab === 'library' ? 'is-active' : undefined}
+          disabled={!!pending || busy} onClick={() => { setTab('library'); setSource(''); }}>素材库</button>
+        <button type="button" role="tab" aria-selected={tab === 'upload'} className={tab === 'upload' ? 'is-active' : undefined}
+          disabled={!!pending || busy} onClick={() => { setTab('upload'); setPickedMaterial(null); }}>本机上传 · {uploadOptions.length}</button>
       </div>
-      {chosen && <div className="sf-post-source">{preview(source, chosen.kind, '所选原素材')}</div>}
+      {tab === 'work' && <div className="sf-post-fields">
+        <label className="sf-post-field sf-post-field--wide">本作生成出来的图片或视频
+          <select aria-label="本作生成的原素材" value={source} disabled={busy || !!pending}
+            onChange={event => { setSource(event.target.value); setLibrarySource(null); setPickedMaterial(null); }}>
+            <option value="">{workOptions.length ? '选择一条本作产出' : '这个作品还没有生成内容'}</option>
+            {workOptions.map(item => <option key={item.value} value={item.value}>{item.kind === 'image' ? '图片' : '视频'} · {item.label}</option>)}
+            {librarySource && !workOptions.some(item => item.value === librarySource.value)
+              && <option value={librarySource.value}>{librarySource.label}（清晰化库）</option>}
+          </select>
+        </label>
+      </div>}
+      {tab === 'upload' && <div className="sf-post-fields">
+        <label className="sf-post-field sf-post-field--wide">本作品里上传过的图片或视频
+          <select aria-label="本机上传的原素材" value={source} disabled={busy || !!pending}
+            onChange={event => { setSource(event.target.value); setLibrarySource(null); setPickedMaterial(null); }}>
+            <option value="">{uploadOptions.length ? '选择一条上传记录' : '还没有上传过文件'}</option>
+            {uploadOptions.map(item => <option key={item.value} value={item.value}>{item.kind === 'image' ? '图片' : '视频'} · {item.label}</option>)}
+          </select>
+        </label>
+        <label className="sf-post-field sf-post-field--wide">上传图片或视频<input className="sf-post-file" aria-label="上传清晰化素材" type="file" accept=".png,.jpg,.jpeg,.webp,.heic,.heif,.mp4,.mov,.webm,.mkv" disabled={busy || !!pending} onChange={event => { const file = event.target.files?.[0]; if (file) void upload(file); event.target.value = ''; }} /></label>
+      </div>}
+      {tab === 'library' && <>
+        <LibraryBrowser selection={pickedMaterial ? [pickedMaterial.id] : []}
+          disabled={busy || !!pending} onPick={material => { setPickedMaterial(material); setSource(''); setLibrarySource(null); }} />
+        {pickedMaterial && <p className="sf-post-hint">已选素材库：<b>{pickedMaterial.title}</b> · {pickedMaterial.category}。提交时会把它复制一份到本作，库里的原图不动。</p>}
+      </>}
+      {chosenKind && <div className="sf-post-source">
+        {tab === 'library' && pickedMaterial
+          ? <img src={pickedMaterial.file_url} alt="素材库所选原素材" />
+          : preview(chosenPath, chosenKind, '所选原素材')}
+      </div>}
       <p className="sf-post-hint">RealESRGAN 2× 增强；图片输出 PNG（不保留透明通道），视频保留原帧率与音频。AI 可能改变纹理，请对照原素材检查；逐帧增强不保证消除模糊或闪烁。</p>
       <p className="sf-post-hint">来源尽量选原生输出（文件名不带 <code>-output-2k</code>／<code>-output-4k</code>）：2K、4K 是生成后用 Lanczos 放大的，细节仍停在原生分辨率，对着放大件再做 2× 只会更软。</p>
       <p className="sf-post-hint">{capability?.limits || '正在检查处理环境…'}</p>
-      {chosen && capability && !available && !capability.engine_offline && <p className="sf-post-alert" role="alert">环境尚未就绪：{capability.kinds[chosen.kind as 'image' | 'video']?.missing.join('、')}</p>}
+      {chosenKind && capability && !available && !capability.engine_offline && <p className="sf-post-alert" role="alert">环境尚未就绪：{capability.kinds[chosenKind]?.missing.join('、')}</p>}
       {capability?.engine_offline && <p className="sf-post-hint">生成引擎当前未运行；点开始处理会自动拉起，首次约 10–30 秒。</p>}
-      <div className="sf-post-actions"><button className="button primary" disabled={busy || !pending && (!source || !available)} onClick={() => void submit()}>{pending ? '沿用原请求重试' : '开始 AI 清晰化 · 2×'}</button>{pending && <button className="button secondary" disabled={busy} onClick={() => { void request<Task>(`${base}/submission-receipt?key=${encodeURIComponent(pending.idempotency_key)}`).then(accept).catch(error => setMessage(error.message)); }}>核对提交回执</button>}</div>
+      <div className="sf-post-actions"><button className="button primary" disabled={busy || (!pending && (!chosenKind || !available))} onClick={() => void submit()}>{pending ? '沿用原请求重试' : '开始 AI 清晰化 · 2×'}</button>{pending && <button className="button secondary" disabled={busy} onClick={() => { void request<Task>(`${base}/submission-receipt?key=${encodeURIComponent(pending.idempotency_key)}`).then(accept).catch(error => setMessage(error.message)); }}>核对提交回执</button>}</div>
       {message && <p className="sf-post-message" role="status" aria-live="polite">{message}</p>}
     </section>
     <section className="sf-post-section" aria-label="批量清晰化">
       <div className="sf-post-section-head"><h2 className="sf-post-title">批量清晰化</h2><p className="sf-post-meta">一次多选 · 自动排队 · 成品自动入库</p></div>
-      <label className="sf-post-field sf-post-field--wide">一次选择多个文件（图片 / 视频），选完即开始排队
+      <div className="sf-post-tabs" role="tablist" aria-label="批量来源">
+        <button type="button" role="tab" aria-selected={batchTab === 'files'} className={batchTab === 'files' ? 'is-active' : undefined}
+          disabled={batchBusy} onClick={() => setBatchTab('files')}>本机文件</button>
+        <button type="button" role="tab" aria-selected={batchTab === 'library'} className={batchTab === 'library' ? 'is-active' : undefined}
+          disabled={batchBusy} onClick={() => setBatchTab('library')}>素材库 · 已选 {batchMaterials.length}</button>
+      </div>
+      {batchTab === 'files' && <label className="sf-post-field sf-post-field--wide">一次选择多个文件（图片 / 视频），选完即开始排队
         <input className="sf-post-file" aria-label="批量选择清晰化素材" type="file" multiple
           accept=".png,.jpg,.jpeg,.webp,.heic,.heif,.mp4,.mov,.webm,.mkv" disabled={batchBusy}
           onChange={event => { const files = event.target.files; if (files?.length) void runBatch(files); event.target.value = ''; }} />
-      </label>
+      </label>}
+      {batchTab === 'library' && <>
+        <LibraryBrowser multiple selection={batchMaterials.map(item => item.id)} disabled={batchBusy} onPick={toggleBatchMaterial} />
+        {batchMaterials.length > 0 && <div className="sf-post-picked">
+          {batchMaterials.map(item => <button key={item.id} type="button" disabled={batchBusy}
+            title="从这批里移除" onClick={() => toggleBatchMaterial(item)}>{item.title} ×</button>)}
+        </div>}
+        <div className="sf-post-actions">
+          <button className="button primary" disabled={batchBusy || !batchMaterials.length} onClick={() => void runLibraryBatch()}>
+            {batchBusy ? '正在排队…' : `开始批量清晰化 · ${batchMaterials.length} 张`}
+          </button>
+          <button className="button secondary" disabled={batchBusy || !batchMaterials.length} onClick={() => setBatchMaterials([])}>清空选择</button>
+        </div>
+      </>}
       {batch.length > 0 && <ul className="sf-post-history sf-post-history--library" aria-label="批量队列">
         {batch.map(item => <li key={`${item.name}-${item.taskId || 'pending'}`}>
           <span className={item.status === 'failed' ? 'danger' : undefined}>{item.name}</span>

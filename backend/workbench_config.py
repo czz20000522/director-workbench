@@ -33,6 +33,10 @@ RENDERER = paths.SKILLS_ROOT / "skills" / "aigc-video-production" / "scripts" / 
 TEMPLATE = paths.SKILLS_ROOT / "skills" / "aigc-video-production" / "assets" / "workflows" / "minimax-h3-current-api.json"
 STORAGE_ROOTS = storage_roots(ROOT, shared_root=SHARED_ROOT)
 INPUT_ROOT = STORAGE_ROOTS['input']
+# ComfyUI 由 comfy_engine.launch_command() 用 `--input-directory COMFY_ROOT` 启动，
+# 所以它眼里的 input 根是这个机器根，不是配置里的 INPUT_ROOT。暂存冻结素材必须落
+# 在这里，否则 LoadImage 按「路径穿越」拒绝，静默返回 None（下游报 NoneType 的怪错）。
+COMFY_INPUT_ROOT = Path(COMFY_ROOT)
 OUTPUT_ROOT = STORAGE_ROOTS['output']
 ASSETS_ROOT = STORAGE_ROOTS['assets']
 WORKS_ARCHIVE_ROOT = STORAGE_ROOTS['works_archive']

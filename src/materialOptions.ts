@@ -38,7 +38,9 @@ export function projectMaterialOptions(project: {
   for (const asset of project?.assets ?? []) {
     if (!isCreativeMaterial(asset)) continue;
     const kind = asset.kind === 'audio' || asset.kind === 'image' ? asset.kind as TreeKind : 'video';
-    const label = assetTitle(String(asset.id ?? ''), String(asset.title ?? asset.id ?? '项目素材'), kind);
+    // 来源标注：从草稿箱归入的资产要能一眼认出来，别让人以为是本作生成的。
+    const adopted = asset.adopted_from && typeof asset.adopted_from === 'object' ? '草稿归入 · ' : '';
+    const label = `${adopted}${assetTitle(String(asset.id ?? ''), String(asset.title ?? asset.id ?? '项目素材'), kind)}`;
     add(asset.image_path, `${label} · 图片`, 'image');
     if (asset.sources && typeof asset.sources === 'object') {
       for (const [version, path] of Object.entries(asset.sources)) add(path, `${label} · ${version}`);

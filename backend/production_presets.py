@@ -23,6 +23,10 @@ ADULT_TRIGGER = 'r34l1sm'
 ADULT_REALISM_TEXT_PRESET_ID = 'h3-text-realism-people'
 ADULT_REALISM_IMAGE_PRESET_ID = 'h3-first-realism-people'
 QUALITY_IMAGE_LANDSCAPE_PRESET_ID = 'h3-first-quality-landscape'
+# Pika H3 Flex：官方 6 步 LCM 联合音视频，LoRA 挂在 H3 底模上。
+# 目前只接纯文字横屏；FL2VA / Ref2VA 等素材链路验证后再加。
+PIKA_TEXT_LANDSCAPE_PRESET_ID = 'h3-pika-text-landscape'
+PIKA_PRESET_IDS = (PIKA_TEXT_LANDSCAPE_PRESET_ID,)
 ADULT_PRESET_IDS = (ADULT_REALISM_TEXT_PRESET_ID, ADULT_REALISM_IMAGE_PRESET_ID)
 QUALITY_PRESET_IDS = (QUALITY_IMAGE_LANDSCAPE_PRESET_ID,)
 TEXT_PRESET_IDS = (TEXT_LANDSCAPE_PRESET_ID, TEXT_SQUARE_PRESET_ID, TEXT_PORTRAIT_PRESET_ID, ADULT_REALISM_TEXT_PRESET_ID)
@@ -32,12 +36,12 @@ TEXT_PRESET_IDS = (TEXT_LANDSCAPE_PRESET_ID, TEXT_SQUARE_PRESET_ID, TEXT_PORTRAI
 END_PRESET_IDS = ('h3-frames-native-landscape', 'h3-frames-native-square', 'h3-frames-native-portrait')
 SQUARE_PRESET_IDS = (NATIVE_SQUARE_PRESET_ID, TEXT_SQUARE_PRESET_ID, END_PRESET_IDS[1])
 LANDSCAPE_PRESET_IDS = (NATIVE_LANDSCAPE_PRESET_ID, TEXT_LANDSCAPE_PRESET_ID, ADULT_REALISM_TEXT_PRESET_ID,
-                        QUALITY_IMAGE_LANDSCAPE_PRESET_ID, END_PRESET_IDS[0])
+                        QUALITY_IMAGE_LANDSCAPE_PRESET_ID, END_PRESET_IDS[0], *PIKA_PRESET_IDS)
 TEXT_PRESET_IDS = (*TEXT_PRESET_IDS, FAST_TEXT_LANDSCAPE_PRESET_ID)
 NATIVE_PRESET_IDS = (NATIVE_LANDSCAPE_PRESET_ID, NATIVE_SQUARE_PRESET_ID, NATIVE_PORTRAIT_PRESET_ID,
                      FAST_IMAGE_LANDSCAPE_PRESET_ID, ADULT_REALISM_IMAGE_PRESET_ID,
                      QUALITY_IMAGE_LANDSCAPE_PRESET_ID, *TEXT_PRESET_IDS, *END_PRESET_IDS)
-PRESET_IDS = (PRESET_ID, FIRST_PRESET_ID, LOCKED_PRESET_ID, *NATIVE_PRESET_IDS)
+PRESET_IDS = (PRESET_ID, FIRST_PRESET_ID, LOCKED_PRESET_ID, *NATIVE_PRESET_IDS, *PIKA_PRESET_IDS)
 CONTRACTS = Path(__file__).resolve().parents[1] / 'contracts'
 
 
@@ -48,6 +52,9 @@ def aspect_ratio(preset_id: str) -> str:
 
 def megapixels(preset_id: str) -> float:
     title(preset_id)
+    if preset_id in PIKA_PRESET_IDS:
+        # Pika 官方权重只到 480p/768p；这里给 768p（16:9 约 1024×576）。
+        return 0.6
     if preset_id in (FAST_TEXT_LANDSCAPE_PRESET_ID, FAST_IMAGE_LANDSCAPE_PRESET_ID):
         return hardware.video_megapixels('fast')
     if preset_id in ADULT_PRESET_IDS or preset_id in QUALITY_PRESET_IDS:
@@ -57,6 +64,9 @@ def megapixels(preset_id: str) -> float:
 
 def turbo_default(preset_id: str) -> bool:
     title(preset_id)
+    # Pika 是固定 6 步 LCM，没有 Turbo / 精细两条采样分支。
+    if preset_id in PIKA_PRESET_IDS:
+        return False
     # False = 关闭 Turbo，走 105:123 的 20 步分支（精细档 / 成人向）。
     if preset_id in QUALITY_PRESET_IDS or preset_id in ADULT_PRESET_IDS:
         return False
@@ -69,6 +79,8 @@ def _steps_for(preset_id: str, graph: dict[str, Any]) -> int | None:
     `105:9.steps` 接的是 `105:123` 开关，两侧分别是 `105:124`（20 步）和
     `105:125`（8 步），所以不能直接读 KSampler 的 steps 字段。
     """
+    if preset_id in PIKA_PRESET_IDS:
+        return 6
     switch = graph.get('105:123', {}).get('inputs') or {}
     turbo = turbo_default(preset_id)
 
@@ -94,6 +106,8 @@ def plain_title(preset_id: str) -> str:
     旧标题里的 `0.4MP + Kitchen`、`H3 原生声音样片（待小样验证）` 是内部验收用语，
     在单步工具里只会让人不知道该选哪个。技术细节仍留在 description/verification。
     """
+    if preset_id in PIKA_PRESET_IDS:
+        return 'Pika 6 步 · 纯文字 · 横屏 16:9'
     if preset_id in END_PRESET_IDS:
         names = ('横屏 16:9', '方形 1:1', '竖屏 9:16')
         return f'首尾帧衔接 · {names[END_PRESET_IDS.index(preset_id)]}'
@@ -144,12 +158,16 @@ _PLAIN_SUMMARY = {
     LOCKED_PRESET_ID: '对白时间轴会锁进视频，人物按这段声音开口；口型仍需小样确认。',
     FIRST_PRESET_ID: '用一段声音引导人物怎么动，不限制结束姿态，适合转身、行走。',
     PRESET_ID: '两张图之外再加一段声音，动作起点、终点和节奏都定下来。',
+    PIKA_TEXT_LANDSCAPE_PRESET_ID: 'Pika 官方 6 步 LCM：一次出画面和声音，交付 5.0 秒（生成 124 帧、交付 120 帧）；原生 768p，不叠 Turbo。',
 }
 
 
 def guide(preset_id: str) -> dict[str, Any]:
     """给方案选择器用的结构化白话信息。前端不该再靠 id 猜语义。"""
-    if preset_id in TEXT_PRESET_IDS:
+    if preset_id in PIKA_PRESET_IDS:
+        group, needs = 'text', ['一句画面描述']
+        summary = 'Pika 6 步 LCM，一次生成画面和声音；交付 5.0 秒、原生 768p。'
+    elif preset_id in TEXT_PRESET_IDS:
         group, needs = 'text', ['一句画面描述']
         summary = '不用准备图片，写好画面与动作就能生成一段视频。'
     elif preset_id in END_PRESET_IDS or preset_id == PRESET_ID:
@@ -213,6 +231,8 @@ def trigger_prefix(preset_id: str | None) -> str:
 
 def stage_id(preset_id: str = PRESET_ID) -> str:
     title(preset_id)
+    if preset_id in PIKA_PRESET_IDS:
+        return preset_id.replace('h3-', 'motion-') + '-generation'
     if preset_id in (*TEXT_PRESET_IDS, *END_PRESET_IDS, NATIVE_PORTRAIT_PRESET_ID, *QUALITY_PRESET_IDS):
         return preset_id.replace('h3-', 'motion-') + '-generation'
     if preset_id == LOCKED_PRESET_ID:
@@ -232,6 +252,13 @@ preset_stage_id = stage_id
 
 
 def load_recipe(preset_id: str = PRESET_ID) -> dict[str, Any]:
+    if preset_id in PIKA_PRESET_IDS:
+        graph = json.loads((CONTRACTS / 'pika-t2va-api.json').read_text(encoding='utf-8'))
+        # Pika 官方 6 步基线：生成 124 帧，交付裁到 120 帧 / 5.0 秒；
+        # 0.6MP 在 16:9 的网格尺寸是 1056×608。
+        graph['8']['inputs'].update(width=1056, height=608, length=124)
+        graph['14']['inputs'].update(duration_seconds=5.0, frame_count=120)
+        return graph
     title(preset_id)
     if preset_id == FAST_TEXT_LANDSCAPE_PRESET_ID:
         graph = load_recipe(TEXT_LANDSCAPE_PRESET_ID)
@@ -330,6 +357,21 @@ def load_recipe(preset_id: str = PRESET_ID) -> dict[str, Any]:
 
 def input_specs(preset_id: str = PRESET_ID) -> list[dict[str, Any]]:
     title(preset_id)
+    if preset_id in PIKA_PRESET_IDS:
+        document = json.loads((CONTRACTS / 'pipeline-inputs.json').read_text(encoding='utf-8'))
+        specs = [dict(item) for item in document['stages']['motion-generation']['inputs']
+                 if item['id'] in ('prompt', 'seed', 'duration')]
+        for spec in specs:
+            if spec['id'] == 'prompt':
+                spec['binding'] = {'node_id': '8', 'input': 'prompt'}
+                spec['description'] = '描述画面、动作、镜头和声音；Pika 会把声音一起生成。'
+            elif spec['id'] == 'seed':
+                spec['binding'] = {'node_id': '11', 'input': 'noise_seed'}
+            elif spec['id'] == 'duration':
+                spec.update(min=5.0, max=5.0, step=0.0001,
+                            description='Pika 官方 6 步基线：生成 124 帧，交付裁到 120 帧 / 5.0 秒。')
+                spec['binding'] = {'node_id': '14', 'input': 'duration_seconds'}
+        return specs
     document = json.loads((CONTRACTS / 'pipeline-inputs.json').read_text(encoding='utf-8'))
     specs = document['stages']['motion-generation']['inputs']
     if preset_id in (FIRST_PRESET_ID, LOCKED_PRESET_ID, *NATIVE_PRESET_IDS) and preset_id not in END_PRESET_IDS:
@@ -352,6 +394,9 @@ def input_specs(preset_id: str = PRESET_ID) -> list[dict[str, Any]]:
 def _technical_description(preset_id: str) -> str:
     """折叠在「技术细节」里的说明。所有数值从档位读，不写死。"""
     hw = hardware.profile()
+    if preset_id in PIKA_PRESET_IDS:
+        return (f'Pika H3 Flex · 6 步 LCM · 联合音视频 · {aspect_ratio(preset_id)} · '
+                f'768p · 交付 5.0 秒（124 帧生成 / 120 帧输出） · 硬件档位：{hw.gpu_name} / {hw.vram_gib} GiB / {hw.key}。')
     if preset_id in END_PRESET_IDS:
         detail = '首尾帧 + H3 原生声音（待小样）'
     elif preset_id == FAST_TEXT_LANDSCAPE_PRESET_ID:
@@ -406,6 +451,9 @@ def catalog(model_root: Path, preset_id: str = PRESET_ID) -> dict[str, Any]:
         # 实测 534 秒，比它自己写的 20 步（361 秒）还慢。
         'turbo': turbo_default(preset_id),
         'steps': _steps_for(preset_id, graph),
+        # 方案的原生采样档（百万像素）：480p≈0.4、768p≈0.6。前端据此初始化原生档按钮，
+        # 避免统一写死 0.6 把「快速方案」的 0.4 顶掉。
+        'megapixels': megapixels(preset_id),
         'verification': (
             '本机 5070 Ti 16GB / cu130 已跑通快速档；其余档位按 hardware 档位自动匹配，生成后仍需逐条审核。'
             if preset_id in (FAST_TEXT_LANDSCAPE_PRESET_ID, FAST_IMAGE_LANDSCAPE_PRESET_ID) else

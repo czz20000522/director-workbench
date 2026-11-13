@@ -18,7 +18,9 @@ def error_receipt():
 
 @pytest.mark.parametrize('payload,label', [({}, '视频生成'), ({'kind': 'keyframe'}, '关键帧生成'),
     ({'asset_id': 'MASTER', 'assembly_asset_id': 'MASTER'}, '成片装配'),
-    ({'asset_id': 'S01', 'assembly_asset_id': 'MASTER'}, '视频生成')])
+    ({'asset_id': 'S01', 'assembly_asset_id': 'MASTER'}, '视频生成'),
+    # 清晰化是图片任务，不能再叫「视频生成失败」。
+    ({'pipeline_stage_id': 'media-enhancement', 'kind': 'workflow'}, '清晰化')])
 def test_execution_error_summary_preserves_type_and_omits_bulk_diagnostics(payload, label):
     receipt=error_receipt()
     original=json.dumps(receipt)
@@ -108,7 +110,7 @@ def test_workflow_monitor_observes_running_then_records_original_error(task_db,m
         if path=='/queue':return {'queue_running':[[0,'ours']], 'queue_pending':[]}
         if path=='/history/ours':return {}
         raise AssertionError(path)
-    def history(*args):
+    def history(*args, **kwargs):
         observations.append(backend.get_task('task')['status'])
         return None if len(observations)==1 else done
     monkeypatch.setattr(backend,'request_json',request)

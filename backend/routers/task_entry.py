@@ -16,7 +16,8 @@ import av
 from fastapi import APIRouter, HTTPException, Query
 import importlib.util
 from urllib.error import HTTPError, URLError
-from .. import enhance_library, enhancement
+from .. import enhance_library, enhancement, reference_library, style_blocks
+from .. import audio_swap
 from ..schemas import FinishRequest, StartRequest, EnhanceArchiveRequest, EnhanceLibraryDeleteRequest
 from .. import app as backend
 
@@ -156,34 +157,53 @@ def start_finish_task(project_id: str, request: FinishRequest) -> dict[str, Any]
     return backend.get_task(task_id) or {'id': task_id, 'status': 'preparing'}
 
 
-def enhancement_sources(project_id: str) -> list[dict[str, str]]:
-    """Only registered creative media and this work's successful task outputs."""
+def project_workspace(project_id: str) -> Path:
+    manifest = backend.require_project_manifest(project_id)
+    value = manifest.get('workspace_root')
+    return backend.resolve_registered_path(str(value)) if value else (backend.DIRECTOR_WORKSPACES_ROOT / project_id).resolve()
+
+
+def enhancement_sources(project_id: str) -> dict[str, list[dict[str, str]]]:
+    """两条互不混的输入路径。
+
+    ``generated`` 是本作真正生成出来的画面（任务产物、分镜与装配登记），也就是
+    「我生出来的内容」；``uploads`` 是作品工作区里用户自己放进去的文件（上传的
+    原始素材、生成时用的参考图）。素材库那条路径不在这里：它按 ``material_id``
+    单独选、单独提交，避免库里成千上万张参考图和本作产出混在同一个下拉框里。
+    """
     manifest = backend.require_project_manifest(project_id)
     document, _ = backend.load_project_plan(project_id)
-    paths: dict[str, dict[str, str]] = {}
+    workspace = project_workspace(project_id).resolve()
+    # 素材库按 material_id 暂存到作品里的副本不算「本作内容」，否则删了库里的素材
+    # 这里还留一条选不中又删不掉的影子记录。
+    library_root = (workspace / 'assets' / 'reference-library').resolve()
+    generated: dict[str, dict[str, str]] = {}
+    uploads: dict[str, dict[str, str]] = {}
 
-    def add(value, label):
+    def add(bucket: dict[str, dict[str, str]], value, label):
         if not isinstance(value, str) or not value:
             return
         try:
             path = backend.resolve_registered_path(value)
-            if path.is_file() and path.suffix.lower() in enhancement.IMAGE_EXTENSIONS | enhancement.VIDEO_EXTENSIONS:
-                # One portable path form for every entry: upload receipts and plan
-                # entries already use it, and the panel selects by exact value.
-                paths.setdefault(str(path).casefold(), {'value': backend.root_relative_path(path), 'label': label,
-                    'kind': 'image' if path.suffix.lower() in enhancement.IMAGE_EXTENSIONS else 'video'})
+            suffix = path.suffix.lower()
+            if not path.is_file() or suffix not in enhancement.IMAGE_EXTENSIONS | enhancement.VIDEO_EXTENSIONS:
+                return
+            if path.is_relative_to(library_root):
+                return
+            # One portable path form for every entry: upload receipts and plan
+            # entries already use it, and the panel selects by exact value.
+            bucket.setdefault(str(path).casefold(), {'value': backend.root_relative_path(path), 'label': label,
+                'kind': 'image' if suffix in enhancement.IMAGE_EXTENSIONS else 'video'})
         except (ValueError, OSError, HTTPException):
             pass
 
-    for item in backend.reusable_materials(project_id)['materials']:
-        add(item['path'], item['title'])
     for segment in document.get('segments', []):
         label = str(segment.get('id'))
-        add((segment.get('video') or {}).get('path'), f'{label} · 当前视频')
-        add(((segment.get('video') or {}).get('finish_review') or {}).get('path'), f'{label} · 高清候选')
+        add(generated, (segment.get('video') or {}).get('path'), f'{label} · 当前视频')
+        add(generated, ((segment.get('video') or {}).get('finish_review') or {}).get('path'), f'{label} · 高清候选')
         for key, value in (segment.get('keyframes') or {}).items():
-            add(value, f'{label} · {key}')
-    add((document.get('assembly') or {}).get('output'), '装配成片候选')
+            add(generated, value, f'{label} · {key}')
+    add(generated, (document.get('assembly') or {}).get('output'), '装配成片候选')
     with backend.DB_LOCK, backend.db() as connection:
         rows = connection.execute("SELECT * FROM tasks WHERE project_id=? AND status='succeeded' ORDER BY created_at DESC", (project_id,)).fetchall()
     for row in rows:
@@ -192,20 +212,26 @@ def enhancement_sources(project_id: str) -> list[dict[str, str]]:
             continue
         result = task.get('result') or {}
         for value in result.get('published_outputs') or ([result['output']] if result.get('output') else [f'output/{v}' for v in result.get('outputs', []) if isinstance(v, str)]):
-            add(value, f"{task['asset_id']} · 候选 {task['id'][:8]}")
-    return list(paths.values())
+            add(generated, value, f"{task['asset_id']} · 候选 {task['id'][:8]}")
+    for item in backend.reusable_materials(project_id)['materials']:
+        add(uploads, item['path'], item['title'])
+    # 生成物已经在上面的清单里，上传槽只补「不在生成物里」的那些。
+    for key in generated:
+        uploads.pop(key, None)
+    return {'generated': list(generated.values()), 'uploads': list(uploads.values())}
 
 
 @ROUTER.get('/api/projects/{project_id}/enhancements')
 def project_enhancements(project_id: str, offset: int = Query(0, ge=0)) -> dict[str, Any]:
-    sources = backend.enhancement_sources(project_id)
+    catalog = backend.enhancement_sources(project_id)
+    sources, uploads = catalog['generated'], catalog['uploads']
     with backend.DB_LOCK, backend.db() as connection:
         rows = connection.execute("SELECT * FROM tasks WHERE project_id=? AND json_extract(payload, '$.pipeline_stage_id')='media-enhancement' ORDER BY created_at DESC, id DESC LIMIT 21 OFFSET ?", (project_id, offset)).fetchall()
     tasks = [backend.task_row(row) for row in rows[:20]]
     queue_values = backend.TASK_SCHEDULER.queue_info_many([task['id'] for task in tasks])
     for task in tasks:
         task['queue'] = queue_values.get(task['id'], {})
-    return {'sources': sources, 'tasks': tasks, 'next_offset': offset + 20 if len(rows) > 20 else None}
+    return {'sources': sources, 'uploads': uploads, 'tasks': tasks, 'next_offset': offset + 20 if len(rows) > 20 else None}
 
 
 @ROUTER.get('/api/enhance-library')
@@ -262,15 +288,32 @@ def start_enhancement_task(project_id: str, request: enhancement.EnhancementRequ
         return existing
     backend.require_submission_capacity()
     try:
-        source = backend.resolve_registered_path(request.source)
-        admitted = {backend.resolve_registered_path(item['value']) for item in backend.enhancement_sources(project_id)}
-        # 清晰化库里的成品同样可以作为输入（"再次清晰化"就是这条路径）。它仍受
-        # 归档区与媒体扩展名两道限制，不会因为放宽而接受作品外的任意路径。
-        library_root = enhance_library.directory().resolve()
-        from_library = (source.is_relative_to(library_root)
-                        and source.suffix.lower() in enhance_library.MEDIA_EXTENSIONS)
-        if source not in admitted and not from_library:
-            raise ValueError('请选择当前作品已登记的图片或视频，或清晰化库里的成品')
+        # 两条路径：material_id = 从素材库挑（服务端按需暂存到本作 assets/reference-library），
+        # source = 本作生成物／本机上传／清晰化库成品。两者互斥，避免同一个输入有两个来源。
+        if request.material_id:
+            material = reference_library.find_material(backend.ROOT, request.material_id)
+            if material is None:
+                raise ValueError('素材库里没有这张素材，可能已被移除，请重新选择')
+            source, material = reference_library.stage_material(
+                backend.ROOT, request.material_id, project_workspace(project_id))
+            registered = backend.root_relative_path(source)
+            label = str(material.get('title') or source.stem)
+        else:
+            if not request.source:
+                raise ValueError('请选择要清晰化的素材')
+            source = backend.resolve_registered_path(request.source)
+            registered = request.source
+            catalog = backend.enhancement_sources(project_id)
+            admitted = {backend.resolve_registered_path(item['value'])
+                        for group in ('generated', 'uploads') for item in catalog[group]}
+            # 清晰化库里的成品同样可以作为输入（"再次清晰化"就是这条路径）。它仍受
+            # 归档区与媒体扩展名两道限制，不会因为放宽而接受作品外的任意路径。
+            library_root = enhance_library.directory().resolve()
+            from_library = (source.is_relative_to(library_root)
+                            and source.suffix.lower() in enhance_library.MEDIA_EXTENSIONS)
+            if source not in admitted and not from_library:
+                raise ValueError('请选择本作生成的内容、本机上传的文件，或清晰化库里的成品')
+            label = ''
         stamp = source.stat()
         facts = enhancement.inspect_source(source)
     except (ValueError, OSError, av.error.FFmpegError) as exc:
@@ -289,13 +332,14 @@ def start_enhancement_task(project_id: str, request: enhancement.EnhancementRequ
     else:
         workflow = backend.build_finish_workflow_snapshot(project_id, asset_id, source, enhancement.MODEL, None, 'uniform', 0)
     # 标题在这里就定好并冻进任务：卡片列表和归档文件名都读它，不必每次再查一遍。
-    try:
-        label = enhance_library.source_label(project_id, source)
-    except (OSError, ValueError):
-        label = source.stem
+    if not label:
+        try:
+            label = enhance_library.source_label(project_id, source)
+        except (OSError, ValueError):
+            label = source.stem
     payload = {'kind': 'workflow', 'pipeline_stage_id': 'media-enhancement',
                'project_id': project_id, 'asset_id': asset_id, 'workflow': str(workflow),
-               'enhancement': {'source': request.source, 'label': label,
+               'enhancement': {'source': registered, 'label': label,
                                'source_facts': facts, 'model': enhancement.MODEL, 'scale': 2},
                'submission_receipt': {'key': request.idempotency_key, 'request': submission}}
     try:
@@ -400,23 +444,59 @@ def submit_project_task(request: StartRequest, manifest: dict[str, Any] | None =
         values = dict(request.pipeline_values)
         if request.prompt is not None:
             values["prompt"] = request.prompt
+        # 走制作方案时提示词在 pipeline_values 里：风格锁同样只改送模型的那一份。
+        if request.style_block and values.get("prompt") is not None:
+            text, applied_style = style_blocks.apply(str(values["prompt"]), request.style_block)
+            values["prompt"] = text
+            if applied_style:
+                payload["style_block"] = applied_style
         if request.seed is not None and "seed" not in values:
             values["seed"] = request.seed
+        # 原生采样档只在生成图上覆盖 ResolutionSelector，不进 pipeline_values 白名单校验。
+        if request.native_megapixels is not None:
+            payload["native_megapixels"] = float(request.native_megapixels)
         payload = backend.prepare_pipeline_payload(payload, stage_id, values, manifest)
     else:
         if request.prompt is not None:
+            text, applied_style = style_blocks.apply(request.prompt, request.style_block)
             if payload.get("workflow"):
-                payload["prompt_override"] = request.prompt
+                payload["prompt_override"] = text
             else:
-                payload["prompt"] = request.prompt
+                payload["prompt"] = text
+            if applied_style:
+                payload["style_block"] = applied_style
         elif payload.get("workflow") and isinstance(segment, dict) and segment.get("prompt"):
-            payload["prompt_override"] = str(segment["prompt"])
+            text, applied_style = style_blocks.apply(str(segment["prompt"]), request.style_block)
+            payload["prompt_override"] = text
+            if applied_style:
+                payload["style_block"] = applied_style
         if request.seed is not None:
             payload["seed"] = request.seed
     if isinstance(segment, dict):
         payload["segment_snapshot"] = backend.segment_generation_snapshot(segment)
         payload['segment_dependencies'] = list(segment.get('dependencies') or [])
     payload.update({"project_id": project_id, "plan_path": str(plan_path), "assembly_asset_id": str(project.get("assembly_asset_id", ""))})
+    if request.music_overlay:
+        # 配乐在生成完成后由执行器混进成片：这里只校验路径可读、确实是一条音频，
+        # 并把它冻结进任务，避免任务跑完时原文件已被换掉。
+        try:
+            music_path = backend.resolve_registered_path(request.music_overlay)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(422, f'配乐文件不在允许读取的目录里：{exc}') from exc
+        if not music_path.is_file() or music_path.suffix.lower() not in audio_swap.AUDIO_SUFFIXES:
+            raise HTTPException(422, '配乐必须是本机可读取的音频文件')
+        payload['music_overlay'] = backend.root_relative_path(music_path)
+        payload['music_gain'] = float(request.music_gain)
+    if request.adopt_into:
+        # 只允许「草稿箱 → 作品」这一个方向：正式作品的任务本来就有归属，不需要再归入；
+        # 反向（作品 → 草稿箱）也不是这里的语义。
+        if project_id != backend.QUICK_PROJECT_ID:
+            raise HTTPException(422, '只有草稿箱里的单步任务才能自动归入作品')
+        try:
+            backend.require_project_manifest(request.adopt_into)
+        except RuntimeError as exc:
+            raise HTTPException(404, f'归入目标不存在：{exc}') from exc
+        payload['adopt_into'] = request.adopt_into
     if request.idempotency_key is not None:
         payload['submission_receipt'] = {'key': request.idempotency_key, 'request': submission_request}
     try:

@@ -51,15 +51,39 @@ def to_jpeg(data: bytes, quality: int = 92) -> bytes:
     return buffer.getvalue()
 
 
+# 视觉编码的 token 数随边长平方增长：1024×1536 的原图能吃掉 4000+ token，
+# 正好顶爆 Ollama 默认的 4096 上下文（实测报错 4262 > 4096）。缩到长边 1024
+# 大约 1000 token，识图内容看不出差别。
+VISION_MAX_EDGE = 1024
+
+
 def read_for_vision(path: Path) -> tuple[bytes, str]:
-    """给模型看的字节与 MIME：HEIC 先转 JPEG，其它原样。"""
+    """给模型看的字节与 MIME：统一缩到长边 1024 的 JPEG。
+
+    不管原图是 HEIC、PNG 还是超大 JPEG，出去的都是同一规格的小 JPEG——
+    识图只为拿一段文字描述，不需要原始像素。
+    """
     payload = path.read_bytes()
     if is_heif(path):
-        return to_jpeg(payload), 'image/jpeg'
-    return payload, {
-        '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-        '.webp': 'image/webp', '.gif': 'image/gif', '.bmp': 'image/bmp',
-    }.get(path.suffix.lower(), 'image/png')
+        payload = to_jpeg(payload)
+    try:
+        from PIL import Image, ImageOps
+
+        with Image.open(io.BytesIO(payload)) as image:
+            upright = ImageOps.exif_transpose(image)
+            if upright.mode != 'RGB':
+                upright = upright.convert('RGB')
+            if max(upright.size) > VISION_MAX_EDGE:
+                upright.thumbnail((VISION_MAX_EDGE, VISION_MAX_EDGE), Image.LANCZOS)
+            buffer = io.BytesIO()
+            upright.save(buffer, format='JPEG', quality=86, optimize=True)
+        return buffer.getvalue(), 'image/jpeg'
+    except Exception:
+        # 解码失败就按原样发：宁可让模型自己判断，也别因为缩放把识图整个关掉。
+        return payload, {
+            '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+            '.webp': 'image/webp', '.gif': 'image/gif', '.bmp': 'image/bmp',
+        }.get(path.suffix.lower(), 'image/png')
 
 
 def convert_upload(destination: Path) -> Path:

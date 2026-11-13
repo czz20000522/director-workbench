@@ -7,7 +7,7 @@ import threading
 from pathlib import Path
 
 
-SCHEMA_VERSION = 6  # 6: tasks.started_at（耗时按真正开始执行算）
+SCHEMA_VERSION = 7  # 7: tasks.read_at（未读/已读）；6: tasks.started_at（耗时按真正开始执行算）
 _MIGRATION_LOCK = threading.RLock()
 
 
@@ -53,9 +53,15 @@ def _migrate(connection: sqlite3.Connection) -> None:
     columns = _columns(connection, "tasks")
     for column, declaration in (("batch_id", "TEXT"), ("sequence", "INTEGER"), ("project_id", "TEXT"),
                                 # 实际开始执行的时间：耗时按它算，排队等待不计入。
-                                ("started_at", "REAL")):
+                                ("started_at", "REAL"),
+                                # 结果第一次被打开的时间；NULL 就是「未读」。
+                                ("read_at", "REAL")):
         if column not in columns:
             connection.execute(f"ALTER TABLE tasks ADD COLUMN {column} {declaration}")
+            if column == "read_at":
+                # 升级前就存在的历史结果一律当作已读：否则第一次打开首页会满屏「未读」，
+                # 反而看不出哪条是这次新生成的。
+                connection.execute("UPDATE tasks SET read_at = updated_at WHERE status = 'succeeded'")
     connection.execute(
         """CREATE TABLE IF NOT EXISTS resource_samples (
             id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT, timestamp REAL NOT NULL,

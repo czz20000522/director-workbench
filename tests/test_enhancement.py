@@ -6,7 +6,7 @@ import av
 import numpy as np
 import pytest
 
-from backend import app as backend, enhancement
+from backend import app as backend, enhancement, reference_library
 from support import reference_image
 
 
@@ -134,13 +134,42 @@ def test_general_enhancement_requires_owned_project_and_files(private_workbench,
     assert other.post(f"/api/projects/{other_project['id']}/enhancement-tasks", json={'source': source, 'idempotency_key': 'foreign-file'}).status_code in (403, 422)
 
 
+def test_library_material_is_submitted_by_id_and_stays_out_of_generated_list(preset_client, monkeypatch, tmp_path):
+    """素材库那条路径只认 material_id：暂存副本不进「本作生成」，也不混进上传槽。"""
+    client, _ = preset_client
+    monkeypatch.setattr(backend, 'request_json', lambda *args: nodes(True))
+    queued = []
+    monkeypatch.setattr(backend, 'queue_task', queued.append)
+    original = reference_image(tmp_path)
+    staged = backend.DIRECTOR_WORKSPACES_ROOT / 'preset-test' / 'assets' / 'reference-library' / 'mat-test.png'
+    staged.parent.mkdir(parents=True)
+    staged.write_bytes(original.read_bytes())
+    monkeypatch.setattr(reference_library, 'find_material', lambda root, mid: {'id': mid, 'title': '素材库测试图'})
+    monkeypatch.setattr(reference_library, 'stage_material',
+                        lambda root, mid, workspace: (staged, {'id': mid, 'title': '素材库测试图'}))
+    endpoint = '/api/projects/preset-test/enhancement-tasks'
+    response = client.post(endpoint, json={'material_id': 'mat-test', 'idempotency_key': 'library-one'})
+    assert response.status_code == 202, response.text
+    task = response.json()
+    assert queued == [task['id']]
+    assert task['payload']['enhancement']['source'].replace('\\', '/').endswith('assets/reference-library/mat-test.png')
+    assert task['payload']['enhancement']['label'] == '素材库测试图'
+    assert client.post(endpoint, json={'material_id': 'mat-test', 'idempotency_key': 'library-one'}).json()['id'] == task['id']
+    monkeypatch.setattr(reference_library, 'find_material', lambda root, mid: None)
+    assert client.post(endpoint, json={'material_id': 'gone', 'idempotency_key': 'library-gone'}).status_code == 422
+    assert client.post(endpoint, json={'idempotency_key': 'library-empty'}).status_code == 422
+
+
 def test_uploaded_media_is_listed_verbatim_for_the_panel_selector(preset_client, tmp_path):
     """The panel selects a source by exact value, so the list must echo the upload receipt."""
     client, _ = preset_client
     source = register_image(client, 'preset-test', tmp_path)
-    listed = client.get('/api/projects/preset-test/enhancements').json()['sources']
+    catalog = client.get('/api/projects/preset-test/enhancements').json()
+    # 上传的文件进「本机上传」这一路；「本作生成」只放真正生成出来的画面。
+    listed = catalog['uploads']
     assert source in [item['value'] for item in listed]
     assert [item['kind'] for item in listed if item['value'] == source] == ['image']
+    assert source not in [item['value'] for item in catalog['sources']]
 
 
 def test_worker_and_reconcile_publish_separate_candidate_without_plan_writes(preset_client, monkeypatch, tmp_path):

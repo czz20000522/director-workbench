@@ -237,3 +237,123 @@ def test_delete_files_never_touches_the_archive_zones(libs):
     removed = library_archive.delete_files([str(a), str(b), str(doomed)])
     assert removed == [str(doomed.resolve())]
     assert a.exists() and b.exists()
+
+
+def test_workspace_task_folder_counts_as_its_own_output(libs, tmp_path, monkeypatch):
+    """剪辑/配音的产物在 <workspace>/…-tasks/<task_id>/ 下，文件名里没有任务号。
+
+    只按 OUTPUT_ROOT + 文件名判定，会把它们当成“不是这个任务的”，删任务时
+    文件留在磁盘上、界面却显示已删除。
+    """
+    workspace = tmp_path / '临时作品内容'
+    monkeypatch.setattr(backend, 'DIRECTOR_WORKSPACES_ROOT', workspace)
+    task_id = 'aaaaaaaa-1111-2222-3333-444444444444'
+    output = workspace / 'video-edits' / task_id / 'edit.mp4'
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b'x')
+    rows = [{'id': task_id, 'payload': '{}',
+             'result': json.dumps({'output': str(output), 'outputs': [{'kind': 'video', 'path': str(output)}]})}]
+
+    assert str(output.resolve()) in library_archive.owned_outputs(rows)
+    removed, failed = library_archive.recycle_files([str(output)])
+    assert removed == [str(output.resolve())] and not failed
+    assert not output.exists()
+
+
+def test_workspace_task_folder_counts_as_its_own_output(libs, tmp_path, monkeypatch):
+    """剪辑/配音的产物在 <workspace>/…-tasks/<task_id>/ 下，文件名里没有任务号。
+
+    只按 OUTPUT_ROOT + 文件名判定，会把它们当成“不是这个任务的”，删任务时
+    文件留在磁盘上、界面却显示已删除。
+    """
+    workspace = tmp_path / '临时作品内容'
+    monkeypatch.setattr(backend, 'DIRECTOR_WORKSPACES_ROOT', workspace)
+    task_id = 'aaaaaaaa-1111-2222-3333-444444444444'
+    output = workspace / 'video-edits' / task_id / 'edit.mp4'
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b'x')
+    rows = [{'id': task_id, 'payload': '{}',
+             'result': json.dumps({'output': str(output), 'outputs': [{'kind': 'video', 'path': str(output)}]})}]
+
+    assert str(output.resolve()) in library_archive.owned_outputs(rows)
+    removed, failed = library_archive.recycle_files([str(output)])
+    assert removed == [str(output.resolve())] and not failed
+    assert not output.exists()
+
+
+def test_delete_asset_removes_record_and_recycles_file(preset_client_factory):
+    client, project = preset_client_factory()
+    folder = backend.DIRECTOR_WORKSPACES_ROOT / 'audio'
+    folder.mkdir(parents=True, exist_ok=True)
+    audio = folder / 'take.wav'
+    audio.write_bytes(b'RIFF0000')
+    manifest = backend.require_project_manifest('preset-test')
+    manifest.setdefault('assets', []).append({'id': 'aud-take', 'kind': 'audio', 'title': '试听',
+                                              'ready': True, 'sources': {'A': str(audio)}})
+    manifest.setdefault('media', {})['take.wav'] = str(audio)
+    backend.save_project_manifest(manifest)
+
+    response = client.delete('/api/projects/preset-test/assets/aud-take')
+    assert response.status_code == 200, response.text
+    assert response.json()['removed'] == [str(audio.resolve())]
+    assert not audio.exists()
+    project_body = client.get('/api/projects/preset-test').json()
+    assert 'aud-take' not in [item['id'] for item in project_body['assets']]
+    assert 'take.wav' not in (project_body.get('media') or {})
+
+
+def test_delete_asset_refuses_when_another_asset_shares_the_file(preset_client_factory):
+    client, project = preset_client_factory()
+    folder = backend.DIRECTOR_WORKSPACES_ROOT / 'audio'
+    folder.mkdir(parents=True, exist_ok=True)
+    audio = folder / 'shared.wav'
+    audio.write_bytes(b'RIFF0000')
+    manifest = backend.require_project_manifest('preset-test')
+    manifest.setdefault('assets', []).extend([
+        {'id': 'aud-a', 'kind': 'audio', 'title': '甲', 'ready': True, 'sources': {'A': str(audio)}},
+        {'id': 'aud-b', 'kind': 'audio', 'title': '乙', 'ready': True, 'sources': {'A': str(audio)}},
+    ])
+    backend.save_project_manifest(manifest)
+
+    response = client.delete('/api/projects/preset-test/assets/aud-a')
+    assert response.status_code == 409
+    assert audio.exists()
+
+
+def test_delete_asset_removes_record_and_recycles_file(preset_client_factory):
+    client, project = preset_client_factory()
+    folder = backend.DIRECTOR_WORKSPACES_ROOT / 'audio'
+    folder.mkdir(parents=True, exist_ok=True)
+    audio = folder / 'take.wav'
+    audio.write_bytes(b'RIFF0000')
+    manifest = backend.require_project_manifest('preset-test')
+    manifest.setdefault('assets', []).append({'id': 'aud-take', 'kind': 'audio', 'title': '试听',
+                                              'ready': True, 'sources': {'A': str(audio)}})
+    manifest.setdefault('media', {})['take.wav'] = str(audio)
+    backend.save_project_manifest(manifest)
+
+    response = client.delete('/api/projects/preset-test/assets/aud-take')
+    assert response.status_code == 200, response.text
+    assert response.json()['removed'] == [str(audio.resolve())]
+    assert not audio.exists()
+    project_body = client.get('/api/projects/preset-test').json()
+    assert 'aud-take' not in [item['id'] for item in project_body['assets']]
+    assert 'take.wav' not in (project_body.get('media') or {})
+
+
+def test_delete_asset_refuses_when_another_asset_shares_the_file(preset_client_factory):
+    client, project = preset_client_factory()
+    folder = backend.DIRECTOR_WORKSPACES_ROOT / 'audio'
+    folder.mkdir(parents=True, exist_ok=True)
+    audio = folder / 'shared.wav'
+    audio.write_bytes(b'RIFF0000')
+    manifest = backend.require_project_manifest('preset-test')
+    manifest.setdefault('assets', []).extend([
+        {'id': 'aud-a', 'kind': 'audio', 'title': '甲', 'ready': True, 'sources': {'A': str(audio)}},
+        {'id': 'aud-b', 'kind': 'audio', 'title': '乙', 'ready': True, 'sources': {'A': str(audio)}},
+    ])
+    backend.save_project_manifest(manifest)
+
+    response = client.delete('/api/projects/preset-test/assets/aud-a')
+    assert response.status_code == 409
+    assert audio.exists()

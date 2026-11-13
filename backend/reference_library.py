@@ -430,6 +430,21 @@ def _summary(entry: dict[str, Any], terms: list[str] | None = None) -> dict[str,
     }
 
 
+def _people_count(filename: str) -> int:
+    """从素材命名推断画面里有几个人。
+
+    姿势库这批图是成对导出的：``pair60_P001_front`` 是双人、``full_sexy_P001_front``
+    和 ``upper80v2_*`` 是单人。用人数来决定界面提示——双人图配单人描述时，模型
+    要么把人合并成一个，要么凭空多画一个人。将来接视觉检测时只要换掉这个函数。
+    """
+    stem = filename.lower()
+    if stem.startswith(('pair', 'duo', 'two')):
+        return 2
+    if stem.startswith(('trio', 'three', 'group')):
+        return 3
+    return 1
+
+
 def _material_title(filename: str) -> tuple[str, str]:
     stem = filename
     while True:
@@ -591,6 +606,8 @@ def _scan_materials(data_root: Path, config: dict[str, Any], entries: list[dict[
                 'source_path': str(source['path']),
                 'path': str(path),
                 'size': path.stat().st_size,
+                # 画面人数：姿势槽据此把双人图单独分组并提示补第二人描述。
+                'people': _people_count(path.name),
                 'description': description,
                 'related_entry_id': related,
                 'tags': [category, source['title']],
@@ -781,6 +798,8 @@ def public_material(material: dict[str, Any]) -> dict[str, Any]:
         'description': material['description'],
         'related_entry_id': material['related_entry_id'],
         'tags': material['tags'],
+        # 画面人数：姿势槽据此把双人图单独成组，并提示补第二个人的描述。
+        'people': material.get('people', 1),
         'thumb_url': f'/api/reference-library/materials/{material["id"]}/thumb',
         'file_url': f'/api/reference-library/materials/{material["id"]}/file',
     }
@@ -1056,5 +1075,76 @@ def save_first_frame(data_root: str | Path, assets_root: str | Path,
         'tags': [FIRST_FRAME_LIBRARY, FIRST_FRAME_LIBRARY],
         'thumb_url': f'/api/reference-library/materials/{material_id}/thumb',
         'file_url': f'/api/reference-library/materials/{material_id}/file',
+        'path': str(destination),
+    }
+
+
+VARIANT_MAX_BYTES = 64 * 1024 * 1024
+PNG_MAGIC = b'\x89PNG\r\n\x1a\n'
+
+
+def save_material_variant(data_root: str | Path, material_id: str,
+                          payload: bytes, title: str = '') -> dict[str, Any]:
+    """把改过的图存回原素材所在的子库，作为一张**新**素材。
+
+    液化/精修都不该覆盖原图（库里那张通常是精挑过的），所以这里始终写新文件：
+    文件名带日期时间，``labels.json`` 记可读标题；子库分类与来源保持不变，
+    下次浏览同一个子库就能直接看到。
+    """
+    material = find_material(data_root, material_id)
+    if not material:
+        raise ValueError('素材不存在或已被移出素材库')
+    source = Path(str(material['path']))
+    if source.suffix.lower() not in IMAGE_SUFFIXES:
+        raise ValueError('只有图片素材才能这样另存')
+    if not payload or len(payload) > VARIANT_MAX_BYTES:
+        raise ValueError('图片大小不合法')
+    # 只收 PNG：前端 canvas.toBlob 出的就是 PNG，其它字节一律不写进素材库。
+    if not payload.startswith(PNG_MAGIC):
+        raise ValueError('只接受 PNG 图片')
+    directory = source.parent
+    label = _safe_label(str(title or '').strip() or f"{material['title']} 液化")
+    # 文件名本身就是可读标题（资源管理器里也看得懂）；同名不覆盖，加序号。
+    destination = (directory / f'{label}.png').resolve()
+    counter = 2
+    while destination.exists():
+        destination = (directory / f'{label} ({counter}).png').resolve()
+        counter += 1
+    if counter > 2:
+        label = destination.stem
+    if directory not in destination.parents:
+        raise ValueError('只能存回原素材所在的子库')
+    destination.write_bytes(payload)
+    labels_path = directory / 'labels.json'
+    labels = _label_map(str(labels_path)) if labels_path.is_file() else {}
+    labels[destination.name] = label
+    try:
+        labels_path.write_text(json.dumps(labels, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    except OSError:
+        # 标签只是「更好读的名字」，写不进去也不该让整次保存失败。
+        pass
+    else:
+        # 子库若还没登记 labels.json，补上；否则索引只认文件名，会把序号也当标题。
+        try:
+            config, _ = load_config(data_root)
+            wanted = str(directory)
+            entry = next((item for item in config['image_directories']
+                          if str(_resolved(item.get('path') or '')) == wanted), None)
+            if entry is not None and not entry.get('labels'):
+                entry['labels'] = str(labels_path)
+                save_config(data_root, config)
+        except (OSError, ValueError):
+            pass
+    invalidate(data_root)
+    key = str(destination).lower()
+    new_id = 'mat-' + hashlib.sha1(key.encode('utf-8')).hexdigest()[:12]
+    return {
+        'id': new_id, 'title': label, 'filename': destination.name,
+        'category': material.get('category'), 'work': material.get('work'),
+        'source_title': material.get('source_title'), 'description': None,
+        'related_entry_id': material.get('related_entry_id'),
+        'tags': list(material.get('tags') or []), 'people': _people_count(destination.name),
+        'thumb_url': f'/api/reference-library/materials/{new_id}/thumb',
+        'file_url': f'/api/reference-library/materials/{new_id}/file',
         'path': str(destination),
     }

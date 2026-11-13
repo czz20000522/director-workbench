@@ -110,6 +110,8 @@ def execute_scheduled_task(task):
         return backend.run_audio_swap_task(task['id'], payload)
     if kind == 'media_operation':
         return backend.run_media_operation_task(task['id'], payload)
+    if kind == 'video_edit':
+        return backend.run_video_edit_task(task['id'], payload)
     if kind == 'reference_semantic':
         job = dict(payload)
         if not backend.REVERSE_SEMANTIC_LOCK.acquire(blocking=False):
