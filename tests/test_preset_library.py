@@ -1,5 +1,6 @@
 """预设库：内置起点卡片、用户同名覆盖、删除保护与参数校验。"""
 import json
+from pathlib import Path
 
 import pytest
 
@@ -165,7 +166,8 @@ def test_attach_sample_creates_builtin_override(tmp_path):
                                         sample_path='output/voice.wav',
                                         sample_duration_seconds=4.5, sample_text='试听', path=path) == '沉稳中年旁白'
     card = next(item for item in preset_library.cards('timbre', path) if item['name'] == '沉稳中年旁白')
-    assert card['modified'] is True
+    # 只挂试听小样不算「改了起点参数」：批量补齐小样不该让内置卡全部标成「已改」。
+    assert card['modified'] is False
     assert card['params']['sample_path'] == 'output/voice.wav'
     assert card['params']['sample_text'] == '试听'
 
@@ -212,6 +214,45 @@ def test_attach_sample_creates_builtin_override(tmp_path):
                                         sample_path='output/voice.wav',
                                         sample_duration_seconds=4.5, sample_text='试听', path=path) == '沉稳中年旁白'
     card = next(item for item in preset_library.cards('timbre', path) if item['name'] == '沉稳中年旁白')
-    assert card['modified'] is True
+    # 只挂试听小样不算「改了起点参数」：批量补齐小样不该让内置卡全部标成「已改」。
+    assert card['modified'] is False
     assert card['params']['sample_path'] == 'output/voice.wav'
     assert card['params']['sample_text'] == '试听'
+
+
+
+def test_editing_a_builtin_parameter_still_marks_modified(tmp_path):
+    path = tmp_path / 'preset-library.json'
+    builtin = next(item for item in preset_library.cards('timbre', path) if item['name'] == '沉稳中年旁白')
+    params = dict(builtin['params'])
+    params['voice_description'] = params['voice_description'] + '，略带笑意'
+    preset_library.save('timbre', '沉稳中年旁白', params, path=path)
+    card = next(item for item in preset_library.cards('timbre', path) if item['name'] == '沉稳中年旁白')
+    assert card['modified'] is True
+
+
+
+def test_attach_sample_copies_audio_into_assets_so_deleting_the_task_is_safe(tmp_path, monkeypatch):
+    """卡片小样必须是独立副本：删掉那条单步任务，试听不能跟着消失。"""
+    from backend import app as backend_app
+    monkeypatch.setattr(backend_app, 'ASSETS_ROOT', tmp_path / '素材库')
+    source = tmp_path / '临时作品内容' / 'speech-tasks' / 'task-1' / 'result' / 'speech.wav'
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b'RIFF' + b'\x00' * 64)
+
+    path = tmp_path / 'preset-library.json'
+    builtin = next(item for item in preset_library.cards('timbre', path) if item['name'] == '沉稳中年旁白')
+    description = builtin['params']['voice_description']
+    assert preset_library.attach_sample(
+        description, source_card='沉稳中年旁白', sample_path=str(source),
+        sample_duration_seconds=4.5, path=path) == '沉稳中年旁白'
+
+    card = next(item for item in preset_library.cards('timbre', path) if item['name'] == '沉稳中年旁白')
+    stored = Path(card['params']['sample_path'])
+    assert stored.is_file()
+    assert stored.is_relative_to(tmp_path / '素材库' / '音色库')
+    assert stored != source
+
+    # 模拟删除任务：原文件进回收站/被移除，卡片副本仍在。
+    source.unlink()
+    assert stored.is_file()

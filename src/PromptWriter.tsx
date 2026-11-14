@@ -432,6 +432,7 @@ export default function PromptWriter({ disabled, prompt, context, onUse, label, 
           : <><PenLine size={12} /> 写一段</>}
       </button>
     </div>
+    {busy && provider === 'local' && <p className="sf-fine">本机模型没运行时会先拉起，首次约 20 秒（不会弹窗口了），不用重复点。</p>}
   </>;
 
   /** 结果区：直接可改，改完再填进画面描述。 */

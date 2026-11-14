@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { LoaderCircle } from 'lucide-react';
 import { mediaUrl, request } from './api/client';
+import SamplePlayer from './SamplePlayer';
 import { notifyPresetLibraryChanged, rememberSample } from './timbreSamples';
 
 // 图生视频页内嵌的精简版配套制作：只留"写一句话就能出东西"的必要输入，
@@ -125,7 +126,7 @@ export default function CompanionStudio({ projectId, parentTaskId, duration, kin
       {running && <LoaderCircle size={14} className="sf-spin" />}
     </div>
     {output && <div className="qt-companion-result">
-      <audio controls preload="metadata" src={mediaUrl(output)} aria-label={kind === 'music' ? '配乐试听' : '音色试听'} />
+      <SamplePlayer src={mediaUrl(output) || ''} label={kind === 'music' ? '配乐' : '音色'} />
       <a className="button secondary compact" href={mediaUrl(output)} download={`${kind === 'music' ? '配乐' : '音色'}-${task?.id.slice(0, 8)}.mp3`}>下载</a>
     </div>}
     {kind === 'timbre' && output && <div className="qt-companion-save">

@@ -1,23 +1,26 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   ArrowRight, AudioLines, BookOpen, Check, CheckSquare, ChevronLeft, ChevronRight, Clapperboard, FolderOpen, ListTodo, ScanEye,
   Sparkles, Square, Trash2, Wand2,
   Film, HardDrive, Image, ImagePlus, Layers3, Library, LoaderCircle, Music, Play, Plus, Scissors, Upload, Volume2, X,
 } from 'lucide-react';
-const ScriptWorkbench = lazy(() => import('./ScriptWorkbench'));
-const ReverseWorkbench = lazy(() => import('./ReverseWorkbench'));
-const ProjectMaterialLibrary = lazy(() => import('./ProjectMaterialLibrary'));
-const QuickToolPage = lazy(() => import('./QuickTools'));
-const EnhancementPanel = lazy(() => import('./EnhancementPanel'));
-const MediaToolsPanel = lazy(() => import('./MediaToolsPanel'));
-const AudioEditPanel = lazy(() => import('./AudioEditPanel'));
-const KeyframePanel = lazy(() => import('./KeyframePanel'));
-const SpeechPanel = lazy(() => import('./SpeechPanel'));
-const DubbingPanel = lazy(() => import('./DubbingPanel'));
-const AudioSwapPanel = lazy(() => import('./AudioSwapPanel'));
-const ObservationPanel = lazy(() => import('./ObservationPanel'));
-const MusicPanel = lazy(() => import('./MusicPanel'));
+const ScriptWorkbench = lazyWithReload(() => import('./ScriptWorkbench'), 'ScriptWorkbench');
+const ReverseWorkbench = lazyWithReload(() => import('./ReverseWorkbench'), 'ReverseWorkbench');
+const ProjectMaterialLibrary = lazyWithReload(() => import('./ProjectMaterialLibrary'), 'ProjectMaterialLibrary');
+const QuickToolPage = lazyWithReload(() => import('./QuickTools'), 'QuickTools');
+const EnhancementPanel = lazyWithReload(() => import('./EnhancementPanel'), 'EnhancementPanel');
+const MediaToolsPanel = lazyWithReload(() => import('./MediaToolsPanel'), 'MediaToolsPanel');
+const AudioEditPanel = lazyWithReload(() => import('./AudioEditPanel'), 'AudioEditPanel');
+const KeyframePanel = lazyWithReload(() => import('./KeyframePanel'), 'KeyframePanel');
+const SpeechPanel = lazyWithReload(() => import('./SpeechPanel'), 'SpeechPanel');
+const DubbingPanel = lazyWithReload(() => import('./DubbingPanel'), 'DubbingPanel');
+const AudioSwapPanel = lazyWithReload(() => import('./AudioSwapPanel'), 'AudioSwapPanel');
+const ObservationPanel = lazyWithReload(() => import('./ObservationPanel'), 'ObservationPanel');
+const MusicPanel = lazyWithReload(() => import('./MusicPanel'), 'MusicPanel');
+import { lazyWithReload } from './lazyWithReload';
+import SamplePlayer from './SamplePlayer';
+import PanelErrorBoundary from './PanelErrorBoundary';
 import SeriesResources from './SeriesResources';
 import type { QuickSeed, QuickTool } from './QuickTools';
 import PresetLibraryPanel from './PresetLibraryPanel';
@@ -77,7 +80,9 @@ type QuickTask = {
   video_mode?: 'text-video' | 'image-video' | null;
   reuse?: { tool: QuickTool; values: Record<string, unknown> } | null;
 };
-type TaskPlanEntry = { task_id: string; project_id?: string; status: string; title: string; snapshots: string[] };
+type TaskPlanEntry = { task_id: string; project_id?: string; status: string; title: string; snapshots: string[]; asset_id?: string;
+  /** 这条任务的产物是否已经收进预设库（音色库/配乐库）。 */
+  archived?: { library: string; name: string; at: number } | null };
 type TaskPlan = { plan_id: string; expires_at: number; entries: TaskPlanEntry[]; preserved: string; archivable?: Archivable[]; outputs?: string[]; retained_outputs?: string[] };
 type OrphanItem = { path: string; name: string; size: number; modified_at: number; root: string; reason: string; label: string };
 type OrphanReport = { count: number; total_bytes: number; by_reason: Record<string, number>; note: string; roots: string[]; items: OrphanItem[] };
@@ -109,9 +114,32 @@ function resultIcon(path: string) {
 }
 
 /** 单步任务的结果预览：同一处看视频、看图、听音色，不用跳新标签页。 */
-function ResultPreview({ title, paths, onClose }: { title: string; paths: string[]; onClose: () => void }) {
+function ResultPreview({ title, paths, taskId, taskTool, onClose }: {
+  title: string; paths: string[]; taskId?: string; taskTool?: string; onClose: () => void;
+}) {
+  const [cardName, setCardName] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saveNote, setSaveNote] = useState('');
+  const [saveError, setSaveError] = useState('');
+  const saveMusic = async () => {
+    if (!taskId || !cardName.trim()) return;
+    setSaving(true); setSaveError(''); setSaveNote('');
+    try {
+      await api(`/api/preset-library/music/sample`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task_id: taskId, name: cardName.trim() }),
+      });
+      setSaveNote(`已存入配乐库：${cardName.trim()}（成品音频已复制，删掉这条任务也不影响）`);
+      setCardName('');
+    } catch (reason) {
+      setSaveError(reason instanceof Error ? reason.message : '存入配乐库未完成');
+    } finally { setSaving(false); }
+  };
   const [index, setIndex] = useState(0);
+  // 预览框跟着素材自身的比例走：竖屏就长成竖屏，不再被一个固定高度的框裁/压。
+  const [mediaRatio, setMediaRatio] = useState(0);
   const current = paths[Math.min(index, paths.length - 1)];
+  useEffect(() => { setMediaRatio(0); }, [current]);
   const fileName = String(current || '').split(/[\\/]/).pop() || '结果文件';
   const isAudio = MEDIA_AUDIO.test(current || '');
   const isVideo = MEDIA_VIDEO.test(current || '');
@@ -122,18 +150,29 @@ function ResultPreview({ title, paths, onClose }: { title: string; paths: string
       <button className="sf-modal-close" onClick={onClose} aria-label="关闭"><X size={18} /></button>
       <p className="sf-step-label">任务结果</p>
       <h2>{title}</h2>
-      <div className={`sf-result-stage${isAudio || isFile ? ' is-audio' : ''}`}>
+      <div className={`sf-result-stage${isAudio || isFile ? ' is-audio' : ''}`}
+        style={!isAudio && !isFile && mediaRatio
+          ? { aspectRatio: String(mediaRatio), width: `min(100%, ${(78 * mediaRatio).toFixed(2)}vh)` }
+          : undefined}>
         {isVideo
-          ? <video src={mediaFile(current)} controls autoPlay preload="metadata" />
+          ? <video src={mediaFile(current)} controls autoPlay preload="metadata"
+              onLoadedMetadata={event => {
+                const el = event.currentTarget;
+                if (el.videoWidth && el.videoHeight) setMediaRatio(el.videoWidth / el.videoHeight);
+              }} />
           : isImage
-            ? <img src={mediaFile(current)} alt={title} />
+            ? <img src={mediaFile(current)} alt={title}
+                onLoad={event => {
+                  const el = event.currentTarget;
+                  if (el.naturalWidth && el.naturalHeight) setMediaRatio(el.naturalWidth / el.naturalHeight);
+                }} />
             : <div className="sf-result-audio">
                 <span className="sf-result-audio-icon">{isAudio ? <Volume2 size={24} /> : <HardDrive size={24} />}</span>
                 <div className="sf-result-audio-meta">
                   <strong>{isAudio ? '音频结果 · 可直接试听' : '文件结果'}</strong><span>{fileName}</span>
                 </div>
                 {isAudio
-                  ? <audio controls preload="metadata" src={mediaFile(current)} aria-label={title} />
+                  ? <SamplePlayer src={mediaFile(current)} label={title} />
                   : <p className="sf-result-audio-hint">这类文件没有内嵌预览，用下面的「在新窗口打开」或「下载」查看。</p>}
               </div>}
       </div>
@@ -141,6 +180,18 @@ function ResultPreview({ title, paths, onClose }: { title: string; paths: string
         {paths.map((path, item) => <button key={path} type="button" className={item === index ? 'selected' : ''} onClick={() => setIndex(item)}>
           {resultIcon(path)}<span>{path.split(/[\\/]/).pop()}</span>
         </button>)}
+      </div>}
+      {taskTool === '配乐' && isAudio && taskId && <div className="sf-result-save">
+        <label><span>存进配乐库</span>
+          <input value={cardName} onChange={event => setCardName(event.target.value)} maxLength={60}
+            placeholder="给这段配乐起个名字（例如：雨夜·钢琴）"
+            onKeyDown={event => { if (event.key === 'Enter') void saveMusic(); }} />
+        </label>
+        <button type="button" className="sf-secondary" disabled={saving || !cardName.trim()} onClick={() => void saveMusic()}>
+          {saving ? '存入中…' : '存入配乐库'}
+        </button>
+        {saveNote && <small className="sf-result-save-note">{saveNote}</small>}
+        {saveError && <small className="sf-error">{saveError}</small>}
       </div>}
       <div className="sf-result-actions">
         <a className="sf-secondary" href={mediaFile(current)} download={fileName}>下载</a>
@@ -179,14 +230,47 @@ function Thumb({ tone = 'rain', label, film = false }: { tone?: string; label?: 
   return <div className={`sf-thumb sf-thumb-${tone}`} aria-hidden="true"><span>{label ?? '01'}</span>{film && <Clapperboard size={22} />}</div>;
 }
 
-function TopBar({ username, projectTitle, onHome, onLogout }: { username: string; projectTitle?: string; onHome: () => void; onLogout: () => void }) {
+// 顶栏的功能切换器要用中文名；这里只放名字，图标和说明仍留在 QuickTools 里，
+// 避免为了一个下拉把整个工具包（含各个面板）提前加载进来。
+const TOOL_LABELS: Record<QuickTool, string> = {
+  image: '文生图',
+  'text-video': '文生视频',
+  'image-video': '图生视频',
+  'reference-image': '参考图生成',
+  'virtual-image': '虚图生真图',
+  enhance: '清晰化',
+  music: '配乐',
+  timbre: '音色设计',
+  'video-edit': '剪辑',
+};
+
+function TopBar({ username, projectTitle, context, onBack, tool, onQuick, onHome, onLogout }: {
+  username: string; projectTitle?: string;
+  /** 当前所在位置（工具名、系列名…），显示在中间。 */
+  context?: string;
+  /** 不在首页时提供：返回工作台固定在最上面，滚多远都能点。 */
+  onBack?: () => void;
+  /** 在单步工具里时提供：顶栏直接切换功能，不必先回首页。 */
+  tool?: QuickTool; onQuick?: (tool: QuickTool) => void;
+  onHome: () => void; onLogout: () => void;
+}) {
   return (
     <header className="sf-topbar">
       <button className="sf-brand" onClick={onHome} aria-label="返回首页">
         <span className="sf-brand-mark"><Clapperboard size={18} /></span><span><strong>导演工作台</strong></span>
       </button>
-      <div className="sf-topbar-center"><span className="sf-dot" /> {projectTitle || '工具台'}</div>
-      <div className="sf-topbar-actions"><span className="sf-account">{(username || 'U').slice(0, 1).toUpperCase()}</span><button className="sf-ghost" onClick={onLogout}>退出</button></div>
+      {onBack && <button type="button" className="sf-topbar-back" onClick={onBack}><ChevronLeft size={15} /> 返回工作台</button>}
+      <div className="sf-topbar-center"><span className="sf-dot" /> {context || projectTitle || '工具台'}</div>
+      <div className="sf-topbar-actions">
+        {tool && onQuick && <label className="sf-topbar-tool">
+          <span className="sf-sr-only">切换功能</span>
+          <select value={tool} onChange={event => onQuick(event.target.value as QuickTool)} aria-label="切换功能">
+            {Object.entries(TOOL_LABELS).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+          </select>
+        </label>}
+        <span className="sf-account">{(username || 'U').slice(0, 1).toUpperCase()}</span>
+        <button className="sf-ghost" onClick={onLogout}>退出</button>
+      </div>
     </header>
   );
 }
@@ -244,9 +328,12 @@ function Home({ projects, seriesNames, continueProject, loading, error, onStart,
   const [quickBatch, setQuickBatch] = useState(false);
   const [quickSelected, setQuickSelected] = useState<string[]>([]);
   const [quickPlan, setQuickPlan] = useState<TaskPlan | null>(null);
+  // 每条任务的素材都已在音色库/配乐库里：不用再勾「我已核对」，对话框本身就是确认。
+  const quickAllArchived = Boolean(quickPlan?.entries.length)
+    && (quickPlan?.entries.every(entry => Boolean(entry.archived)) ?? false);
   const [quickArchivePick, setQuickArchivePick] = useState<string[]>([]);
   const [quickConfirmed, setQuickConfirmed] = useState(false);
-  const [preview, setPreview] = useState<{ title: string; paths: string[] } | null>(null);
+  const [preview, setPreview] = useState<{ title: string; paths: string[]; taskId?: string; taskTool?: string } | null>(null);
 
   const loadQuick = async () => {
     try { setQuick((await api<{ tasks: QuickTask[] }>('/api/quick-tasks')).tasks || []); setQuickError(''); }
@@ -307,7 +394,7 @@ function Home({ projects, seriesNames, continueProject, loading, error, onStart,
     finally { setBusy(false); }
   };
   const applyQuickDelete = async () => {
-    if (!quickPlan || !quickConfirmed) return;
+    if (!quickPlan || (!quickConfirmed && !quickAllArchived)) return;
     setBusy(true); setDialogError('');
     try {
       const result = await api<{ failed?: string[]; removed_outputs?: string[]; removed_snapshots?: string[] }>('/api/tasks/deletion', {
@@ -352,14 +439,15 @@ function Home({ projects, seriesNames, continueProject, loading, error, onStart,
         </div>
       </header>
       <section className="qt-tools">
-        <button onClick={() => onQuick('image')}><Image size={24} /><strong>文生图</strong><span>输入提示词，生成一张图</span></button>
-        <button onClick={() => onQuick('text-video')}><Play size={24} /><strong>文生视频</strong><span>文字直接生成一个镜头</span></button>
-        <button onClick={() => onQuick('image-video')}><Upload size={24} /><strong>图生视频</strong><span>上传一张图，生成一个镜头</span></button>
-        <button onClick={() => onQuick('reference-image')}><ImagePlus size={24} /><strong>参考图生成</strong><span>识别一张图，再批量生成相似画面</span></button>
-        <button onClick={() => onQuick('enhance')}><Wand2 size={24} /><strong>清晰化</strong><span>提高图片或视频分辨率</span></button>
-        <button onClick={() => onQuick('video-edit')}><Scissors size={24} /><strong>剪辑</strong><span>剪切、排序、拼接，铺音乐导出成片</span></button>
-        <button onClick={() => onQuick('music')}><Music size={24} /><strong>配乐</strong><span>按标签与时长生成音乐候选</span></button>
-        <button onClick={() => onQuick('timbre')}><AudioLines size={24} /><strong>音色设计</strong><span>文字造音色或克隆参考，出可复用样本</span></button>
+        <button onClick={() => onQuick('image')} aria-label="文生图：输入提示词，生成一张图"><Image size={24} /><strong>文生图</strong><span className="sf-tool-note" role="tooltip">输入提示词，生成一张图</span></button>
+        <button onClick={() => onQuick('text-video')} aria-label="文生视频：文字直接生成一个镜头"><Play size={24} /><strong>文生视频</strong><span className="sf-tool-note" role="tooltip">文字直接生成一个镜头</span></button>
+        <button onClick={() => onQuick('image-video')} aria-label="图生视频：上传一张图，生成一个镜头"><Upload size={24} /><strong>图生视频</strong><span className="sf-tool-note" role="tooltip">上传一张图，生成一个镜头</span></button>
+        <button onClick={() => onQuick('reference-image')} aria-label="参考图生成：识别一张图，再批量生成相似画面"><ImagePlus size={24} /><strong>参考图生成</strong><span className="sf-tool-note" role="tooltip">识别一张图，再批量生成相似画面</span></button>
+        <button onClick={() => onQuick('virtual-image')} aria-label="虚图生真图：线稿/深度图当骨架，配脸与服装出真图"><Sparkles size={24} /><strong>虚图生真图</strong><span className="sf-tool-note" role="tooltip">线稿/深度图当骨架，配脸与服装出真图</span></button>
+        <button onClick={() => onQuick('enhance')} aria-label="清晰化：提高图片或视频分辨率"><Wand2 size={24} /><strong>清晰化</strong><span className="sf-tool-note" role="tooltip">提高图片或视频分辨率</span></button>
+        <button onClick={() => onQuick('video-edit')} aria-label="剪辑：剪切、排序、拼接，铺音乐导出成片"><Scissors size={24} /><strong>剪辑</strong><span className="sf-tool-note" role="tooltip">剪切、排序、拼接，铺音乐导出成片</span></button>
+        <button onClick={() => onQuick('music')} aria-label="配乐：按标签与时长生成音乐候选"><Music size={24} /><strong>配乐</strong><span className="sf-tool-note" role="tooltip">按标签与时长生成音乐候选</span></button>
+        <button onClick={() => onQuick('timbre')} aria-label="音色设计：文字造音色或克隆参考，出可复用样本"><AudioLines size={24} /><strong>音色设计</strong><span className="sf-tool-note" role="tooltip">文字造音色或克隆参考，出可复用样本</span></button>
       </section>
 
       {continueProject ? (
@@ -446,7 +534,7 @@ function Home({ projects, seriesNames, continueProject, loading, error, onStart,
                       {(() => {
                         const paths = task.outputs?.length ? task.outputs : task.output ? [task.output] : [];
                         if (!paths.length) return null;
-                        return <button type="button" className="sf-secondary" onClick={() => { markQuickRead(task.id); setPreview({ title: task.prompt || task.title, paths }); }}>
+                        return <button type="button" className="sf-secondary" onClick={() => { markQuickRead(task.id); setPreview({ title: task.prompt || task.title, paths, taskId: task.id, taskTool: task.tool }); }}>
                           查看结果{paths.length > 1 ? `（${paths.length}）` : ''}
                         </button>;
                       })()}                      {task.reuse && <button className="sf-secondary" type="button" aria-label={`编辑重生成 · ${task.title}`} onClick={() => onReuseTask(task.reuse as { tool: QuickTool; values: Record<string, unknown> }, task.title)}>编辑重生成</button>}
@@ -467,7 +555,7 @@ function Home({ projects, seriesNames, continueProject, loading, error, onStart,
           });
         })()}
       </section>}
-      {preview && <ResultPreview title={preview.title} paths={preview.paths} onClose={() => setPreview(null)} />}
+      {preview && <ResultPreview title={preview.title} paths={preview.paths} taskId={preview.taskId} taskTool={preview.taskTool} onClose={() => setPreview(null)} />}
       {adopt && <AdoptDialog task={adopt} projects={projects} onClose={() => setAdopt(null)} />}
       {plan && (
         <div className="sf-modal-mask" role="dialog" aria-modal="true">
@@ -521,6 +609,11 @@ function Home({ projects, seriesNames, continueProject, loading, error, onStart,
                 <li key={entry.task_id}>
                   <strong>{entry.title}</strong><small>{entry.task_id.slice(0, 8)} · {taskStates[entry.status] || entry.status}</small>
                   <span>{entry.snapshots.length ? `${entry.snapshots.length} 份冻结工作流快照将移入回收站` : '无独立冻结快照'}</span>
+                  {entry.archived && <span className="sf-del-archived">
+                    素材已归档 · {entry.archived.library}
+                    {entry.archived.at ? ` · ${new Date(entry.archived.at * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}` : ''}
+                    {entry.archived.name ? ` · ${entry.archived.name}` : ''}
+                  </span>}
                 </li>
               ))}
             </ul>
@@ -528,24 +621,33 @@ function Home({ projects, seriesNames, continueProject, loading, error, onStart,
               const items = quickPlan.archivable || [];
               const outputs = quickPlan.outputs || [];
               const retained = quickPlan.retained_outputs || [];
+              // 已经收进库里的素材不再出现在勾选列表里：重复归档只会在库里多一份副本。
+              const archivedAssets = new Set(quickPlan.entries.filter(entry => entry.archived && entry.asset_id).map(entry => entry.asset_id));
+              const pending = items.filter(item => !archivedAssets.has(item.asset_id));
               if (!items.length && !outputs.length && !retained.length) return null;
               return <div className="sf-del-archive">
-                <p className="sf-del-archive-head">删除前归档 · 可选，默认不勾；勾中的会移进素材库并登记</p>
-                {items.map(item => <label className="sf-del-confirm" key={item.asset_id}>
+                <p className="sf-del-archive-head">{pending.length
+                  ? '删除前归档 · 可选，默认不勾；勾中的会移进素材库并登记'
+                  : '素材已归档，无需再勾选；删除不会影响库里的副本'}</p>
+                {pending.map(item => <label className="sf-del-confirm" key={item.asset_id}>
                   <input type="checkbox" checked={quickArchivePick.includes(item.asset_id)}
                     onChange={() => setQuickArchivePick(current => current.includes(item.asset_id) ? current.filter(id => id !== item.asset_id) : [...current, item.asset_id])} />
                   存进{item.library}：{item.title}
                 </label>)}
                 {!items.length && <p className="sf-post-hint">这次没有可归档的参考图或音色样本。</p>}
-                {outputs.length > 0 && <p className="sf-post-hint">另有 {outputs.length} 个生成产物会移入回收站（勾选归档的除外）。</p>}
+                {outputs.length > 0 && <p className="sf-post-hint">{pending.length
+                  ? `另有 ${outputs.length} 个生成产物会移入回收站（勾选归档的除外）。`
+                  : `另有 ${outputs.length} 个生成产物会移入回收站；库里的归档副本不受影响。`}</p>}
                 {retained.length > 0 && <p className="sf-post-hint">另有 {retained.length} 个产物被其它任务引用，会保留在磁盘上，不会清除。</p>}
               </div>;
             })()}
-            <label className="sf-del-confirm"><input type="checkbox" checked={quickConfirmed} onChange={event => setQuickConfirmed(event.target.checked)} /> 我已核对：任务记录会删除（不可恢复），相关文件移入回收站（可还原）</label>
+            {quickAllArchived
+              ? <p className="sf-del-archived-note">素材已归档，可直接删除；任务记录仍不可恢复，产物文件会移入回收站（可还原）。</p>
+              : <label className="sf-del-confirm"><input type="checkbox" checked={quickConfirmed} onChange={event => setQuickConfirmed(event.target.checked)} /> 我已核对：任务记录会删除（不可恢复），相关文件移入回收站（可还原）</label>}
             {dialogError && <p className="sf-error" role="alert">{dialogError}</p>}
             <div className="sf-step-actions">
               <button className="sf-ghost" disabled={busy} onClick={() => { setQuickPlan(null); setDialogError(''); }}>取消</button>
-              <button className="sf-primary" disabled={busy || !quickConfirmed} onClick={() => void applyQuickDelete()}>{busy ? '处理中…' : '确认删除任务'} <Trash2 size={15} /></button>
+              <button className="sf-primary" disabled={busy || (!quickConfirmed && !quickAllArchived)} onClick={() => void applyQuickDelete()}>{busy ? '处理中…' : '确认删除任务'} <Trash2 size={15} /></button>
             </div>
           </div>
         </div>
@@ -1270,13 +1372,19 @@ export default function StudioFlowLive({ username, onLogout }: { username: strin
   const home = () => { setScreen('home'); setActiveSeries(''); setError(''); void loadProjects(); };
 
   return <div className="sf-root">
-    <TopBar username={username} projectTitle={screen === 'wizard' ? projectTitle : undefined} onHome={home} onLogout={onLogout} />
+    <TopBar username={username}
+      projectTitle={screen === 'wizard' ? projectTitle : undefined}
+      context={screen === 'quick' ? TOOL_LABELS[quickTool] : screen === 'series' ? activeSeries : undefined}
+      onBack={screen === 'quick' || screen === 'series' ? home : undefined}
+      tool={screen === 'quick' ? quickTool : undefined}
+      onQuick={tool => { setQuickSeed(null); setQuickTool(tool); setScreen('quick'); }}
+      onHome={home} onLogout={onLogout} />
     {screen === 'home' && <Home projects={projects} seriesNames={seriesNames} continueProject={projects[0] || null} loading={loading} error={loadError} onStart={startFull} onOpen={id => void openProject(id)} onSeries={name => { setActiveSeries(name); setScreen('series'); }} onRetry={() => void loadProjects()} onQuick={tool => { setQuickSeed(null); setQuickTool(tool); setScreen('quick'); }} onDeleted={() => void loadProjects()} onUsePrompt={(text, target) => { setQuickSeed({ prompt: text }); setQuickTool(target); setScreen('quick'); }} onUseFrame={path => { setQuickSeed({ frame: path }); setQuickTool('image-video'); setScreen('quick'); }} onUseTimbre={(params, name) => { setQuickSeed({ timbreCard: { name, params } }); setQuickTool('timbre'); setScreen('quick'); }} onUseMusic={card => { setQuickSeed({ music: card }); setQuickTool('music'); setScreen('quick'); }} onReuseTask={(reuse, title) => { setQuickSeed({ ...reuse.values as QuickSeed, fromTask: title }); setQuickTool(reuse.tool); setScreen('quick'); }} />}
-    {screen === 'quick' && <Suspense fallback={<div className="sf-center"><LoaderCircle className="sf-spin" size={20} /><p>正在载入工具…</p></div>}><QuickToolPage tool={quickTool} seed={quickSeed} onBack={() => setScreen('home')} /></Suspense>}
+    {screen === 'quick' && <PanelErrorBoundary label="这个工具" onBack={() => setScreen('home')}><Suspense fallback={<div className="sf-center"><LoaderCircle className="sf-spin" size={20} /><p>正在载入工具…</p></div>}><QuickToolPage tool={quickTool} seed={quickSeed} onBack={() => setScreen('home')} /></Suspense></PanelErrorBoundary>}
     {newProjectOpen && <div className="sf-modal-backdrop" role="dialog" aria-modal="true" aria-label="新建项目"><div className="sf-modal"><button className="sf-modal-close" onClick={() => setNewProjectOpen(false)} aria-label="关闭"><X size={18} /></button><p className="sf-step-label">新建</p><h2>新建项目</h2><p className="sf-modal-lede">项目只是一个结果容器；创建后再选择方案、镜头和生成工具。</p><label className="sf-field"><span>项目名</span><input value={title} onChange={event => setTitle(event.target.value)} placeholder="例如：咖啡测试" /></label><label className="sf-field"><span>系列</span><input value={series} onChange={event => setSeries(event.target.value)} placeholder="例如：单步工具" /></label><ReferenceHints query={title} />{error && <p className="sf-error">{error}</p>}<div className="sf-step-actions"><button className="sf-primary" disabled={busy || !title.trim()} onClick={() => { void createProject().then(created => { if (created) { setNewProjectOpen(false); setScreen('wizard'); } }); }}>{busy ? '创建中…' : '创建项目'}</button></div></div></div>}
     {screen === 'series' && <SeriesResources series={activeSeries} episodes={projects.filter(project => project.series === activeSeries)} onBack={() => setScreen('home')} onOpen={id => void openProject(id)} />}
         {screen === 'wizard' && <Wizard step={step} tool={tool} projectReady={Boolean(projectId)} projectTitle={projectTitle} onStep={next => { setTool(null); setStep(next); }} onTool={setTool} onHome={home}>
-      {tool && projectId ? <Suspense fallback={<div className="sf-center"><LoaderCircle className="sf-spin" size={20} /><p>正在载入工具…</p></div>}><ToolPage tool={tool} projectId={projectId} plan={plan} projectDetail={projectDetail} postTab={postTab} setPostTab={setPostTab} onStep={next => { setTool(null); setStep(next); }} onRefreshPlan={refreshPlan} onRefreshProject={refreshProject} onOpenShot={openShot} onBrowse={() => setTool('materials')} onDeleted={() => { void loadProjects(); setTool(null); setScreen('home'); }} /></Suspense> : <>
+      {tool && projectId ? <PanelErrorBoundary label="这个工具" onBack={() => { setTool(null); setStep(4); }} backText="返回上一步"><Suspense fallback={<div className="sf-center"><LoaderCircle className="sf-spin" size={20} /><p>正在载入工具…</p></div>}><ToolPage tool={tool} projectId={projectId} plan={plan} projectDetail={projectDetail} postTab={postTab} setPostTab={setPostTab} onStep={next => { setTool(null); setStep(next); }} onRefreshPlan={refreshPlan} onRefreshProject={refreshProject} onOpenShot={openShot} onBrowse={() => setTool('materials')} onDeleted={() => { void loadProjects(); setTool(null); setScreen('home'); }} /></Suspense></PanelErrorBoundary> : <>
       {step === 2 && <StepTwo presets={presets} selected={presetId} setSelected={setPresetId} busy={busy} error={error} onNext={() => void installPreset()} />}
       {step === 3 && <StepThree projectId={projectId} segments={plan?.segments || []} planRevision={plan?.revision ?? 0} prompt={prompt} setPrompt={setPrompt} duration={shotDuration} setDuration={setShotDuration} onAdd={() => void addShot()} onAddMany={addShots} busy={busy} error={error} onNext={() => setStep(4)} />}
       {step === 4 && <StepFour segments={plan?.segments || []} shotId={versionShot} setShotId={setVersionShot} versions={versions} busy={busy} error={error} onLoad={id => void loadVersions(id)} onAdopt={version => void adoptVersion(version)} onNext={() => setStep(5)} onGenerate={segment => void generateCandidate(segment)} generating={busy} task={generationTask} />}

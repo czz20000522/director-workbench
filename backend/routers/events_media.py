@@ -7,11 +7,18 @@ monkeypatch（setattr(backend, "X", ...)）语义完全不变。
 """
 from __future__ import annotations
 
-import json
-from pathlib import Path
 import asyncio
+import json
+import os
+import subprocess
+import uuid
+import wave
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field
+
 from .. import app as backend
 from ..secure_files import VerifiedFileResponse, checked_file
 
@@ -55,14 +62,26 @@ def media(asset_name: str) -> FileResponse:
 @ROUTER.get("/media-file")
 def media_file(path: str) -> FileResponse:
     """Serve an authorized asset from configured storage roots."""
+    candidate = None
     try:
         candidate = backend.resolve_registered_path(path)
-    except ValueError as exc:
-        raise HTTPException(403, str(exc)) from exc
+    except ValueError:
+        # 相对路径先按登记规则解析；解析不出来时再按输出根试一次。
+        candidate = None
+    if candidate is None or not candidate.is_file():
+        # 历史结果里同时存在绝对路径和相对输出路径（「导演工作台工作目录/…」）。
+        # 相对路径按 SHARED_ROOT 解析会落到错误位置，结果就是图片地址 404、页面上留一块空白。
+        text = str(path).replace('\\', '/').lstrip('/')
+        root = Path(backend.OUTPUT_ROOT).resolve()
+        attempt = (root / text).resolve()
+        if root in attempt.parents and attempt.is_file():
+            candidate = attempt
+    if candidate is None:
+        raise HTTPException(403, '素材路径不在允许的目录里')
     try:
         candidate, identity = checked_file(candidate)
     except (FileNotFoundError, ValueError, OSError) as exc:
-        raise HTTPException(404, "素材不存在")
+        raise HTTPException(404, "素材不存在") from exc
     return VerifiedFileResponse(candidate, identity=identity, stat_result=candidate.stat())
 
 
@@ -100,3 +119,50 @@ def workflow_file(path: str) -> FileResponse:
     except (FileNotFoundError, ValueError, OSError) as exc:
         raise HTTPException(404, "工作流不存在")
     return VerifiedFileResponse(candidate, identity=identity, media_type="application/json", filename=candidate.name, stat_result=candidate.stat())
+
+
+class DialogueAudioRequest(BaseModel):
+    """截取一段视频的音轨，给「按台词配音」当音色参考。"""
+
+    model_config = ConfigDict(extra='forbid')
+
+    source: str = Field(min_length=1, max_length=1000)
+    # 参考音轨只用来认音色：太长会让配音引擎超时（参考 + 待生成合计上限 30 秒）。
+    seconds: float = Field(default=10.0, gt=0, le=20)
+
+
+@ROUTER.post('/api/projects/{project_id}/dialogue/audio')
+def extract_dialogue_audio(project_id: str, request: DialogueAudioRequest) -> dict:
+    """把上一条视频里的一小段人声抽成 WAV，作为下一段台词的音色参考。
+
+    只读、只写项目工作区里的 dialogue/ 目录；不碰原视频。
+    """
+    manifest = backend.require_project_manifest(project_id)
+    try:
+        source = backend.resolve_registered_path(request.source)
+    except ValueError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    if not source.is_file():
+        raise HTTPException(404, '作为音色参考的视频不存在')
+    workspace = backend.resolve_registered_path(str(manifest['workspace_root']))
+    folder = workspace / 'dialogue'
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / f'{uuid.uuid4().hex}.wav'
+    command = [str(backend.media_operations.FFMPEG), '-nostdin', '-v', 'error', '-y',
+               '-i', str(source), '-t', f'{request.seconds:.2f}', '-vn',
+               '-ac', '1', '-ar', '24000', '-c:a', 'pcm_s16le', str(target)]
+    try:
+        subprocess.run(command, check=True, capture_output=True, timeout=90,
+                       creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0) if os.name == 'nt' else 0)
+    except (OSError, subprocess.SubprocessError) as exc:
+        target.unlink(missing_ok=True)
+        raise HTTPException(422, f'读取这段视频的音轨失败：{exc}') from exc
+    if not target.is_file() or target.stat().st_size < 2048:
+        target.unlink(missing_ok=True)
+        raise HTTPException(422, '这条视频没有可用音轨（可能生成时没带声音）')
+    try:
+        with wave.open(str(target), 'rb') as handle:
+            seconds = handle.getnframes() / float(handle.getframerate() or 1)
+    except (wave.Error, OSError):
+        seconds = request.seconds
+    return {'path': backend.root_relative_path(target), 'duration_seconds': round(seconds, 2)}

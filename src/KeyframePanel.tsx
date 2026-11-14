@@ -133,6 +133,10 @@ export default function KeyframePanel({ projectId, options, onBrowse, onComplete
   const completion = useRef(onComplete);
   completion.current = onComplete;
   const base = `/api/projects/${encodeURIComponent(projectId)}`;
+  // 面板一打开就预热引擎：第一批要等的那一分钟（ComfyUI 冷启动）提前跑掉。
+  useEffect(() => {
+    void apiRequest('/api/engine/warm', { init: { method: 'POST' }, timeoutMs: 8_000 }).catch(() => undefined);
+  }, []);
   function persist(next: Saved) {
     try { localStorage.setItem(storageKey, JSON.stringify(next)); pendingKey.current = next.pending?.idempotency_key; setSaved(next); return true; }
     catch { setMessage('本机无法保存提交凭据，请恢复浏览器存储后重试。'); return false; }
@@ -476,7 +480,7 @@ export default function KeyframePanel({ projectId, options, onBrowse, onComplete
         {task?.status === 'needs_reconcile' && <button className="button secondary compact" disabled={busy} onClick={() => void act('reconcile')}>核对关键帧结果</button>}
         {task && terminal.includes(task.status) && !simple && <button className="button secondary compact" disabled={busy} onClick={() => { if (persist({ ...saved, pending: undefined })) setTask(null); }}>准备下一张关键帧</button>}
         {simple && candidateTaskId && (!saved.pending || task && terminal.includes(task.status)) && <button className="button secondary compact" disabled={busy} onClick={() => void editCandidate()}>载入当前图片的提示词</button>}
-        {task && <ProgressBar progress={task.progress} />}
+        {task && !['succeeded', 'failed', 'stopped', 'needs_reconcile'].includes(task.status) && <ProgressBar progress={task.progress} />}
       {task && <TaskQueueStatus task={{ ...task, asset_id: '关键帧' }} />}
         {task && <span className="sf-post-status">{labels[task.status] || task.status}</span>}
       </div>

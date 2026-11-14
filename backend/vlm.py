@@ -161,6 +161,15 @@ def _ensure_service_online() -> None:
         return
     except (OSError, ValueError, httpx.HTTPError):
         pass
+    # 和「润色 / 写提示词」共用同一个启动器：两边各拉一份 serve 会撞端口，
+    # 先起来的赢，后起来的闪一下就死，模型跟着重载一次。
+    from . import prompt_writer
+    if prompt_writer.SERVICE_URL.rstrip('/') == SERVICE_URL.rstrip('/'):
+        try:
+            prompt_writer.ensure_service()
+            return
+        except prompt_writer.WriterUnavailable as exc:
+            raise VlmFailed(str(exc)) from exc
     with _start_lock:
         try:
             _request_json('/api/version', timeout=2.0)

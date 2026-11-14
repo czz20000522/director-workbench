@@ -44,6 +44,10 @@ class RestoreRequest(BaseModel):
     id: str | None = Field(default=None, max_length=120)
 
 
+class DeleteMaterialsRequest(BaseModel):
+    material_ids: list[str] = Field(min_length=1, max_length=200)
+
+
 @ROUTER.get('/api/reference-library')
 def reference_library_overview() -> dict[str, Any]:
     return reference_library.overview(backend.ROOT)
@@ -164,6 +168,21 @@ def reference_library_stage_material(material_id: str, request: "StageMaterialRe
     except OSError as exc:
         raise HTTPException(500, f'素材复制失败：{exc}') from exc
     return {'path': registered, 'material': reference_library.public_material(material)}
+
+
+@ROUTER.post('/api/reference-library/materials/delete')
+def reference_library_delete_materials(request: "DeleteMaterialsRequest") -> dict[str, Any]:
+    """删除素材：文件进回收站（可还原），并清掉缩略图与标题。
+
+    单张和批量走同一个入口，避免两套语义；只删素材库目录内的文件。
+    """
+    try:
+        result = reference_library.delete_materials(backend.ROOT, request.material_ids)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(500, f'删除素材失败：{exc}') from exc
+    return result
 
 
 @ROUTER.post('/api/reference-library/materials/{material_id}/variants')

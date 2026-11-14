@@ -20,6 +20,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import threading
 import uuid
@@ -275,7 +276,10 @@ def _models_root() -> Path:
     env = os.environ.get('OLLAMA_MODELS')
     if env:
         candidates.append(Path(env))
-    candidates.append(Path('D:/AI/Ollama/models'))
+    # 自定义安装位置用 DIRECTOR_OLLAMA_HOME 指过去，不把某台机器的盘符写进公开代码。
+    home = os.environ.get('DIRECTOR_OLLAMA_HOME')
+    if home:
+        candidates.append(Path(home) / 'models')
     local = os.environ.get('LOCALAPPDATA')
     if local:
         candidates.append(Path(local) / 'Ollama' / 'models')
@@ -321,11 +325,10 @@ def find_executable() -> str | None:
     if found:
         return found
     local = os.environ.get('LOCALAPPDATA')
-    candidates = [
-        r'D:\AI\Ollama\ollama.exe',
-        r'D:\Ollama\ollama.exe',
-        r'C:\Program Files\Ollama\ollama.exe',
-    ]
+    candidates = [r'C:\Program Files\Ollama\ollama.exe']
+    home = os.environ.get('DIRECTOR_OLLAMA_HOME')
+    if home:
+        candidates.insert(0, str(Path(home) / 'ollama.exe'))
     if local:
         candidates.insert(0, str(Path(local) / 'Programs' / 'Ollama' / 'ollama.exe'))
     for candidate in candidates:
@@ -356,6 +359,25 @@ def service_alive(timeout: float = 2.0) -> bool:
         return False
 
 
+def _port_open(host: str, port: int, timeout: float = 0.6) -> bool:
+    """端口上有没有人监听。只看 TCP，不发 HTTP，不受模型加载阻塞影响。"""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _wait_for_existing(limit: float) -> dict[str, Any]:
+    started = time.monotonic()
+    while time.monotonic() - started < limit:
+        if service_alive(timeout=1.0):
+            return {'started': False, 'wait_ms': int((time.monotonic() - started) * 1000), 'pid': None}
+        time.sleep(0.4)
+    raise WriterUnavailable(
+        f'本机服务端口已占用，但 {limit:.0f} 秒内没有响应；可能正在加载模型，稍后再试。')
+
+
 def ensure_service(*, wait_seconds: float | None = None) -> dict[str, Any]:
     """服务没跑就现拉一个，跑着就直接用。
 
@@ -366,6 +388,13 @@ def ensure_service(*, wait_seconds: float | None = None) -> dict[str, Any]:
     limit = STARTUP_TIMEOUT if wait_seconds is None else wait_seconds
     if service_alive():
         return {'started': False, 'wait_ms': 0, 'pid': None}
+    parsed = urlparse(SERVICE_URL)
+    host, port = parsed.hostname or '127.0.0.1', int(parsed.port or 11434)
+    # 端口已经有人监听、但 /api/tags 暂时没回：多半是模型正在加载，或者上一条请求占着。
+    # 这时再拉一个 serve 只会撞端口——实测会让 Ollama 托盘每秒重试一次，
+    # 每次闪一个控制台窗口，用户看到的就是「弹框反复开关」。
+    if _port_open(host, port):
+        return _wait_for_existing(limit)
     executable = find_executable()
     if not executable:
         raise WriterUnavailable(
@@ -374,15 +403,23 @@ def ensure_service(*, wait_seconds: float | None = None) -> dict[str, Any]:
         # 两个请求同时点生成时，后到的那个不该再拉一份。
         if service_alive():
             return {'started': False, 'wait_ms': 0, 'pid': None}
+        if _port_open(host, port):
+            return _wait_for_existing(limit)
         environment = dict(os.environ)
         environment['OLLAMA_MODELS'] = str(_models_root())
         # 拉起的实例必须监听我们探测的地址；否则 DIRECTOR_PROMPT_URL 换了端口，
         # 新服务还是蹲在 11434，这边永远等不到。
-        parsed = urlparse(SERVICE_URL)
-        environment['OLLAMA_HOST'] = f'{parsed.hostname or "127.0.0.1"}:{parsed.port or 11434}'
+        environment['OLLAMA_HOST'] = f'{host}:{port}'
         flags = 0
         if os.name == 'nt':
-            flags = getattr(subprocess, 'DETACHED_PROCESS', 0) | getattr(
+            # 必须是 CREATE_NO_WINDOW，不能只给 DETACHED_PROCESS。
+            # DETACHED_PROCESS 只是「本进程没有控制台」；ollama serve 起来后会用
+            # lib/ollama/llama-server.exe 加载模型，那是个控制台程序，父进程没有控制台
+            # 时它会自己新开一个——在 Win11 上就是每次加载模型弹一个 Windows Terminal
+            # 黑窗口，关掉它模型也跟着死，于是越点越弹。
+            # CREATE_NO_WINDOW 给的是一个「存在但不可见」的控制台，子进程直接继承，
+            # 整条链路都不会再冒出窗口。两者互斥，只能二选一。
+            flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0) | getattr(
                 subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
         started_at = time.monotonic()
         try:

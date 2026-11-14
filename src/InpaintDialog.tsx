@@ -239,7 +239,7 @@ export default function InpaintDialog({ projectId, imagePath, profile, initialSt
       </div>
       {error && <p className="sf-error" role="alert">{error}</p>}
       {status && <p className="qt-status">{busy && <LoaderCircle size={14} className="sf-spin" />}{status}</p>}
-      <ProgressBar progress={progress} />
+      <ProgressBar progress={busy ? progress : null} />
       <footer className="ffs-inpaint-foot">
         <button type="button" className="sf-secondary" disabled={busy} onClick={onClose}>取消</button>
         <button type="button" className="sf-primary" disabled={busy || !dirty || !prompt.trim()} onClick={() => void submit()}>

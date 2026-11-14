@@ -1,3 +1,7 @@
+import os
+import subprocess
+from pathlib import Path
+
 import httpx
 import pytest
 from fastapi import HTTPException
@@ -184,9 +188,28 @@ def test_ensure_service_reuses_running_instance(monkeypatch):
 
 def test_ensure_service_reports_missing_executable(monkeypatch):
     monkeypatch.setattr(prompt_writer, 'service_alive', lambda **k: False)
+    monkeypatch.setattr(prompt_writer, '_port_open', lambda *a, **k: False)
     monkeypatch.setattr(prompt_writer, 'find_executable', lambda: None)
     with pytest.raises(prompt_writer.WriterUnavailable, match='ollama.exe'):
         prompt_writer.ensure_service()
+
+
+def test_ensure_service_waits_instead_of_spawning_when_port_is_taken(monkeypatch):
+    """端口有人监听但 /api/tags 没回：必须等，不能再拉一个 serve。
+
+    再拉一个会撞端口；Ollama 托盘程序随后会每秒重试一次，每次闪一个控制台窗口，
+    用户看到的就是「弹框反复开关」。
+    """
+    monkeypatch.setattr(prompt_writer, 'service_alive', lambda **k: False)
+    monkeypatch.setattr(prompt_writer, '_port_open', lambda *a, **k: True)
+
+    def must_not_probe(*args, **kwargs):
+        raise AssertionError('端口已占用，不该去找可执行文件或拉进程')
+
+    monkeypatch.setattr(prompt_writer, 'find_executable', must_not_probe)
+    monkeypatch.setattr(prompt_writer.subprocess, 'Popen', must_not_probe)
+    with pytest.raises(prompt_writer.WriterUnavailable, match='端口已占用'):
+        prompt_writer.ensure_service(wait_seconds=0.1)
 
 
 def test_draft_reports_service_startup(monkeypatch):
@@ -434,3 +457,38 @@ def test_describe_image_maps_400_to_vision_unsupported(monkeypatch, tmp_path):
                         lambda *a, **k: FakeResponse(status_code=400, text='does not support images'))
     with pytest.raises(prompt_writer.WriterFailed, match='不接受图片'):
         prompt_writer.describe_image(str(target))
+
+
+
+def test_ensure_service_starts_ollama_without_any_console_window(monkeypatch):
+    """拉起 ollama 必须给 CREATE_NO_WINDOW。
+
+    用 DETACHED_PROCESS 时 ollama 自己没有控制台，但它加载模型要起
+    lib/ollama/llama-server.exe，那个控制台程序会新建一个可见窗口——
+    每润色一次弹一个黑窗口，关掉窗口模型也跟着死，用户看到的就是「疯狂弹框」。
+    """
+    if os.name != 'nt':
+        pytest.skip('只在 Windows 上校验控制台标志')
+    monkeypatch.setattr(prompt_writer, '_port_open', lambda *a, **k: False)
+    monkeypatch.setattr(prompt_writer, 'find_executable', lambda: 'C:/tools/ollama/ollama.exe')
+    monkeypatch.setattr(prompt_writer, '_models_root', lambda: Path('C:/tools/ollama/models'))
+    captured: dict[str, int] = {}
+
+    class FakeProcess:
+        pid = 4242
+
+        def poll(self):
+            return None
+
+    def fake_popen(*args, **kwargs):
+        captured.update({'flags': kwargs.get('creationflags') or 0})
+        return FakeProcess()
+
+    # 第一次（启动前）还没活，进程拉起来之后才算活，否则会直接走「复用」分支。
+    monkeypatch.setattr(prompt_writer, 'service_alive', lambda **k: 'flags' in captured)
+    monkeypatch.setattr(prompt_writer.subprocess, 'Popen', fake_popen)
+    prompt_writer.ensure_service()
+
+    flags = captured['flags']
+    assert flags & subprocess.CREATE_NO_WINDOW
+    assert not flags & getattr(subprocess, 'DETACHED_PROCESS', 0)

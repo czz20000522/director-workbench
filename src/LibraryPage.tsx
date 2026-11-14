@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Copy, Download, ExternalLink, ImageIcon, LoaderCircle, Scaling, Search, X } from 'lucide-react';
+import { ArrowLeft, CheckSquare, Copy, Download, ExternalLink, ImageIcon, LoaderCircle, Scaling, Search, Square, Trash2, X } from 'lucide-react';
 import { request } from './api/client';
 import LiquifyDialog from './LiquifyDialog';
 import './library-page.css';
@@ -25,6 +25,11 @@ export default function LibraryPage({ initialCategory = '' }: { initialCategory?
   const [selected, setSelected] = useState<Item | null>(null);
   const [notice, setNotice] = useState('');
   const [liquify, setLiquify] = useState<Item | null>(null);
+  // 批量选择与删除：选中态只存在这张页面上，换子库/换搜索就清空。
+  const [selectMode, setSelectMode] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [confirm, setConfirm] = useState<{ ids: string[]; label: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const requestId = useRef(0);
 
   useEffect(() => {
@@ -46,7 +51,7 @@ export default function LibraryPage({ initialCategory = '' }: { initialCategory?
     return () => window.clearTimeout(timer);
   }, [query]);
 
-  useEffect(() => { setItems([]); setTotal(0); }, [category, debounced]);
+  useEffect(() => { setItems([]); setTotal(0); setPicked(new Set()); setSelectMode(false); setConfirm(null); }, [category, debounced]);
 
   const load = useCallback(async (offset: number) => {
     const ticket = ++requestId.current;
@@ -68,11 +73,15 @@ export default function LibraryPage({ initialCategory = '' }: { initialCategory?
   useEffect(() => { void load(0); }, [load]);
 
   useEffect(() => {
-    if (!selected) return;
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setSelected(null); };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (confirm) { setConfirm(null); return; }
+      if (selected) { setSelected(null); return; }
+      if (selectMode) { setSelectMode(false); setPicked(new Set()); }
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selected]);
+  }, [selected, selectMode, confirm]);
 
   useEffect(() => {
     if (!notice) return;
@@ -90,6 +99,46 @@ export default function LibraryPage({ initialCategory = '' }: { initialCategory?
     catch { setNotice('浏览器不允许复制，请手动选择'); }
   };
 
+  const togglePick = (id: string) => setPicked(current => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  const pickAllLoaded = () => setPicked(current =>
+    current.size === items.length ? new Set() : new Set(items.map(item => item.id)));
+
+  // 删除只走一个接口：单张 = 一个 id，批量 = 多个 id。失败的分项会回报原因，
+  // 不会因为其中一张是外部目录就整体失败。
+  const removeMaterials = async (ids: string[]) => {
+    if (!ids.length || deleting) return;
+    setDeleting(true); setError('');
+    try {
+      const data = await request<{ deleted: { id: string }[]; blocked: { title: string; reason: string }[] }>(
+        '/api/reference-library/materials/delete',
+        { json: { material_ids: ids }, timeoutMs: 120_000 });
+      const gone = new Set(data.deleted.map(item => item.id));
+      if (gone.size) {
+        setItems(current => current.filter(item => !gone.has(item.id)));
+        setTotal(current => Math.max(0, current - gone.size));
+        setSelected(current => (current && gone.has(current.id) ? null : current));
+        setPicked(current => new Set([...current].filter(id => !gone.has(id))));
+        setNotice(`已删除 ${gone.size} 张（移入回收站，可以还原）`);
+        void request<{ libraries: Library[] }>('/api/reference-library/libraries')
+          .then(next => setLibraries(next.libraries || [])).catch(() => { /* 计数下次刷新会纠正 */ });
+      } else {
+        setNotice('没有删除任何文件');
+      }
+      if (data.blocked.length) {
+        setError(`${data.blocked.length} 张没删：${data.blocked.slice(0, 3).map(item => `${item.title}（${item.reason}）`).join('；')}${data.blocked.length > 3 ? '…' : ''}`);
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '删除失败');
+    } finally {
+      setDeleting(false); setConfirm(null);
+    }
+  };
+
   const activeName = category || '全部素材';
   const activeCount = useMemo(
     () => (category ? libraries?.find(item => item.name === category)?.count ?? 0 : libraries?.reduce((sum, item) => sum + item.count, 0) ?? 0),
@@ -105,6 +154,11 @@ export default function LibraryPage({ initialCategory = '' }: { initialCategory?
         <input value={query} maxLength={40} placeholder="搜标签，如 蕾丝 / 双马尾 / 站姿" onChange={event => setQuery(event.target.value)} aria-label="搜索素材标签" />
         {query && <button type="button" aria-label="清除搜索" onClick={() => setQuery('')}><X size={12} /></button>}
       </label>
+      <button type="button" className={`lp-batch${selectMode ? ' is-on' : ''}`}
+        aria-pressed={selectMode}
+        onClick={() => { setSelectMode(value => !value); setPicked(new Set()); setSelected(null); }}>
+        {selectMode ? <><X size={13} /> 退出批量</> : <><CheckSquare size={13} /> 批量选择</>}
+      </button>
     </header>
 
     <div className="lp-body">
@@ -123,10 +177,22 @@ export default function LibraryPage({ initialCategory = '' }: { initialCategory?
       </nav>
 
       <main className="lp-main">
+        {selectMode && <div className="lp-select-bar">
+          <span>已选 {picked.size} 张 / 已载入 {items.length}</span>
+          <button type="button" onClick={pickAllLoaded}>{items.length && picked.size === items.length ? '取消全选' : '全选已载入'}</button>
+          <button type="button" className="lp-danger" disabled={!picked.size || deleting}
+            onClick={() => setConfirm({ ids: [...picked], label: `所选 ${picked.size} 张` })}>
+            <Trash2 size={13} /> 删除所选
+          </button>
+        </div>}
         {error && <p className="lp-error" role="alert">{error}</p>}
         {!error && !items.length && !loading && <p className="lp-hint"><ImageIcon size={16} /> 这个筛选下没有素材。</p>}
         <div className="lp-grid">
-          {items.map(item => <button key={item.id} type="button" className="lp-card" onClick={() => setSelected(item)} title={item.title}>
+          {items.map(item => <button key={item.id} type="button"
+            className={`lp-card${selectMode && picked.has(item.id) ? ' is-picked' : ''}`}
+            aria-pressed={selectMode ? picked.has(item.id) : undefined}
+            onClick={() => (selectMode ? togglePick(item.id) : setSelected(item))} title={item.title}>
+            {selectMode && <span className="lp-pick" aria-hidden>{picked.has(item.id) ? <CheckSquare size={15} /> : <Square size={15} />}</span>}
             <img src={item.thumb_url} alt={item.title} loading="lazy" />
             <span className="lp-card-title">{item.title}</span>
             {!category && <span className="lp-card-meta">{item.category}</span>}
@@ -151,6 +217,7 @@ export default function LibraryPage({ initialCategory = '' }: { initialCategory?
         <a className="lp-action" href={selected.file_url} download={selected.filename}><Download size={13} /> 下载</a>
         <button type="button" className="lp-action" onClick={() => setLiquify(selected)}><Scaling size={13} /> 液化塑形</button>
         <button type="button" className="lp-action" onClick={() => void copy(selected.title, '标签')}><Copy size={13} /> 复制标签</button>
+        <button type="button" className="lp-action lp-danger" onClick={() => setConfirm({ ids: [selected.id], label: selected.title })}><Trash2 size={13} /> 删除素材</button>
       </div>
     </aside>}
 
@@ -162,6 +229,19 @@ export default function LibraryPage({ initialCategory = '' }: { initialCategory?
         void load(0);
       }} />}
 
+
+    {confirm && <div className="lp-confirm-mask" role="dialog" aria-modal="true" aria-label="确认删除素材">
+      <div className="lp-confirm">
+        <strong>删除「{confirm.label}」？</strong>
+        <p>文件会移入回收站，可以还原；素材库里的缩略图和标签也会一起清掉。外部目录里的图不会被删除。</p>
+        <div className="lp-confirm-actions">
+          <button type="button" className="lp-danger" disabled={deleting} onClick={() => void removeMaterials(confirm.ids)}>
+            {deleting ? '删除中…' : `确认删除${confirm.ids.length > 1 ? ` ${confirm.ids.length} 张` : ''}`}
+          </button>
+          <button type="button" disabled={deleting} onClick={() => setConfirm(null)}>取消</button>
+        </div>
+      </div>
+    </div>}
 
     {notice && <p className="lp-notice" role="status">{notice}</p>}
   </div>;

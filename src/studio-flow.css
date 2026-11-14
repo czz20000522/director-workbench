@@ -886,8 +886,10 @@
 .sf-result-stage { display: grid; place-items: center; min-height: 240px; border-radius: 10px; background: #0f1218; overflow: hidden; }
 .sf-result-stage video, .sf-result-stage img { max-width: 100%; max-height: 66vh; border-radius: 10px; }
 /* 音频没有画面：给一块浅色卡片放原生播放器，别把 wav/mp3 塞进 <img>。 */
-.sf-result-stage.is-audio { min-height: 200px; padding: 24px; }
-.sf-result-audio { width: min(560px, 100%); display: grid; gap: 14px; padding: 20px 22px; border-radius: 12px; background: #fff; box-shadow: 0 8px 28px rgba(0, 0, 0, .22); }
+/* 音频没有画面：给足宽度，长音频的进度条才拉得开、拖得准。
+   注意不能再只靠 margin:0 auto——grid 项会被 auto 外边距收缩成内容宽度。 */
+.sf-result-stage.is-audio { width: min(760px, 100%); min-height: 200px; padding: 24px; }
+.sf-result-audio { width: 100%; max-width: 720px; display: grid; gap: 14px; padding: 20px 22px; border-radius: 12px; background: #fff; box-shadow: 0 8px 28px rgba(0, 0, 0, .22); }
 .sf-result-audio-icon { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 10px; background: #eef2f9; color: #405a80; }
 .sf-result-audio-meta { display: grid; gap: 3px; min-width: 0; }
 .sf-result-audio-meta strong { font-size: 13px; color: var(--sf-ink, #1c222b); }
@@ -965,3 +967,67 @@
 
 /* 生成结果 · 未读标记 */
 .sf-unread { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 999px; background: #e6f1fb; color: #185fa5; font-size: 10px; font-style: normal; font-weight: 500; vertical-align: 1px; }
+
+/* 虚图生真图 · 姿势结构控制方式 */
+.ffs-pose-mode { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 2px 0 6px; }
+.ffs-pose-mode > span { color: var(--sf-muted); font-size: 11px; }
+.ffs-pose-mode button { padding: 3px 9px; border: 1px solid var(--sf-line); border-radius: 999px; background: #fff; font: inherit; font-size: 11px; color: var(--sf-muted); cursor: pointer; }
+.ffs-pose-mode button[aria-pressed="true"] { background: #202124; border-color: #202124; color: #fff; }
+.ffs-pose-mode small { color: var(--sf-muted); font-size: 10.5px; }
+
+/* 图生视频 · 台词与口型 */
+.qt-dialogue { display: grid; gap: 9px; margin-top: 12px; padding: 12px 13px; border: 1px solid var(--sf-line); border-radius: 12px; background: #fff; }
+.qt-dialogue-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.qt-dialogue-head > strong { font-size: 13px; font-weight: 600; }
+.qt-dialogue-head > small { color: var(--sf-muted); font-size: 11px; }
+.qt-dialogue textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--sf-line); border-radius: 9px; background: #fff; font: inherit; font-size: 12.5px; line-height: 1.7; resize: vertical; }
+.qt-dialogue-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.qt-dialogue-row select { width: 100%; padding: 6px 8px; border: 1px solid var(--sf-line); border-radius: 8px; background: #fff; font: inherit; font-size: 12px; }
+.qt-dialogue-audio { display: grid; gap: 4px; padding-top: 6px; border-top: 1px dashed var(--sf-line); }
+.qt-dialogue-audio > span { color: var(--sf-muted); font-size: 11px; }
+.qt-dialogue-audio audio { width: 100%; height: 32px; }
+
+/* 结果弹窗 · 存入配乐库 */
+.sf-result-save { display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; padding: 10px 12px; border: 1px solid var(--sf-line); border-radius: 10px; background: #fbfbfc; }
+.sf-result-save label { display: grid; gap: 4px; flex: 1 1 240px; font-size: 11px; color: var(--sf-muted); }
+.sf-result-save input { width: 100%; padding: 7px 9px; border: 1px solid var(--sf-line); border-radius: 8px; background: #fff; font: inherit; font-size: 12px; }
+.sf-result-save-note { flex-basis: 100%; color: #1f6b4a; font-size: 11px; }
+
+/* 竖屏成片别被拉扁：视频按自身比例显示，容器只给上限，不写死比例 */
+.sf-result-stage video { width: auto; height: auto; max-width: 100%; max-height: 66vh; object-fit: contain; }
+.qt-preview video { width: 100%; height: auto; max-height: 62vh; object-fit: contain; background: #0f1218; }
+.pl-sample { width: 100%; height: 32px; margin: 2px 0 4px; }
+
+/* 结果预览：框按素材比例长（JS 写入 aspect-ratio + 宽度），不再用 66vh 硬压 */
+.sf-result-stage { margin: 0 auto; max-width: 100%; }
+.sf-result-stage video, .sf-result-stage img { width: auto; height: auto; max-width: 100%; max-height: 100%; object-fit: contain; }
+.sf-result-modal { max-height: 94vh; overflow: auto; }
+
+/* 顶栏：返回工作台固定在顶部，工具页可在顶栏直接切换功能 */
+.sf-topbar-back { display: inline-flex; align-items: center; gap: 2px; margin-left: -6px; padding: 6px 10px; border-radius: 8px; color: var(--sf-muted); font-size: 12.5px; white-space: nowrap; }
+.sf-topbar-back:hover { background: rgba(32, 37, 34, .06); color: var(--sf-ink); }
+.sf-topbar-tool select { padding: 5px 9px; border: 1px solid var(--sf-line); border-radius: 8px; background: #fff; font: inherit; font-size: 12px; color: var(--sf-ink); max-width: 148px; }
+.sf-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+
+/* 首页工具卡：说明默认收起，悬停或键盘聚焦时才浮出 */
+.qt-tools button { position: relative; }
+.qt-tools button:hover, .qt-tools button:focus-visible { z-index: 20; }
+.qt-tools button .sf-tool-note {
+  position: absolute; left: 50%; top: calc(100% + 6px); z-index: 40;
+  width: max-content; max-width: 230px; padding: 6px 10px; border-radius: 8px;
+  background: #202124; color: #fff; font-size: 11px; line-height: 1.55; font-weight: 400; text-align: center;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, .18);
+  opacity: 0; transform: translate(-50%, -3px); pointer-events: none;
+  transition: opacity .14s ease, transform .14s ease;
+}
+.qt-tools button:hover .sf-tool-note,
+.qt-tools button:focus-visible .sf-tool-note { opacity: 1; transform: translate(-50%, 0); }
+
+@media (max-width: 760px) {
+  .sf-topbar-back { font-size: 12px; padding: 5px 6px; }
+  .sf-topbar-tool select { max-width: 104px; }
+}
+
+/* 删除任务：素材已归档的标记 */
+.sf-del-archived { display: inline-flex; align-items: center; gap: 4px; width: fit-content; margin-top: 3px; padding: 2px 8px; border-radius: 999px; background: #e9f5ee; color: #22734a; font-size: 10.5px; font-weight: 500; }
+.sf-del-archived-note { margin-top: 14px; padding: 9px 11px; border: 1px solid #cfe7d9; border-radius: 8px; background: #f4fbf7; color: #22734a; font-size: 11.5px; line-height: 1.7; }

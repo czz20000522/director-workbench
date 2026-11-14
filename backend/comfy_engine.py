@@ -57,7 +57,7 @@ def _start() -> subprocess.Popen:
     environment = dict(os.environ, PYTHONUTF8="1")
     stdout = open(logs / "comfyui.out.log", "ab", buffering=0)
     stderr = open(logs / "comfyui.err.log", "ab", buffering=0)
-    flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     process = subprocess.Popen(
         [str(python), *arguments],
         cwd=str(home), env=environment,

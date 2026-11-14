@@ -165,6 +165,7 @@ def prepare_text(task_id: str, prompt: str, snapshot_root: Path, output_prefix: 
         frozen.append(target.resolve())
         slots.append({'role': str(item.get('role') or ''), 'label': str(item.get('label') or ''),
                       'category': str(item.get('category') or ''),
+                      'control': str(item.get('control') or 'auto'),
                       'path': str(target.resolve())})
     prefix_text = build_reference_prefix([slot for slot in slots if slot['role'] != '姿势'])
     semantic = [slot for slot in slots if slot['role'] != '姿势']
@@ -177,7 +178,15 @@ def prepare_text(task_id: str, prompt: str, snapshot_root: Path, output_prefix: 
         control_path = _fit_control_image(
             Path(control_slot['path']), width, height, directory / 'pose-control.png',
             background_source=Path(semantic[0]['path']) if semantic else None)
-        control_mode = 'Lineart' if '线稿' in control_slot.get('category', '') else 'Depth'
+        # 显式选择优先：线稿和深度图在缩略图里很难分辨，按分类猜会猜错；
+        # auto 才回到老规则（分类里带「线稿」→ Lineart，其余 → Depth）。
+        explicit = str(control_slot.get('control') or 'auto').strip().lower()
+        if explicit == 'lineart':
+            control_mode = 'Lineart'
+        elif explicit == 'depth':
+            control_mode = 'Depth'
+        else:
+            control_mode = 'Lineart' if '线稿' in control_slot.get('category', '') else 'Depth'
     graph_parts = [part for part in (
         '姿势按结构控制图执行' if control_path else '',
         prefix_text,

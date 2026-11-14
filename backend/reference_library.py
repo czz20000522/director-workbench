@@ -984,6 +984,80 @@ def thumbnail_file(data_root: str | Path, material_id: str) -> tuple[Path, dict[
     return (thumbnail or source), material
 
 
+def _drop_material_label(directory: Path, filename: str) -> None:
+    """删图时顺手把 labels.json 里的标题去掉，免得同名新图继承旧标题。"""
+    target = directory / 'labels.json'
+    if not target.is_file():
+        return
+    try:
+        document = json.loads(target.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return
+    if not isinstance(document, dict):
+        return
+    changed = False
+    for key in (filename, Path(filename).stem):
+        if key in document:
+            document.pop(key, None)
+            changed = True
+    if not changed:
+        return
+    try:
+        target.write_text(json.dumps(document, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    except OSError:
+        pass
+
+
+def _drop_material_thumbs(data_root: Path, material_id: str) -> None:
+    folder = thumb_root(data_root)
+    if not folder.is_dir():
+        return
+    for path in folder.glob(f'{material_id}-*'):
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
+def delete_materials(data_root: str | Path, material_ids: list[str]) -> dict[str, Any]:
+    """把素材移入回收站，并清掉缩略图与标签。
+
+    只允许删「素材库目录里」的图：外部挂进来的目录（例如 ComfyUI 输出）一律不动，
+    避免工作台替用户删掉出片原始文件。失败时保留文件并回报原因，不做静默跳过。
+    """
+    from . import trash
+
+    root = Path(data_root).resolve()
+    allowed = [library_root(root).resolve(), inbox_root(root).resolve()]
+    index = build_index(root)
+    by_id = {item['id']: item for item in index.get('materials', [])}
+    deleted: list[dict[str, Any]] = []
+    blocked: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for material_id in material_ids:
+        material = by_id.get(material_id)
+        if not material:
+            missing.append(material_id)
+            continue
+        path = Path(material['path']).resolve()
+        if not any(path == base or base in path.parents for base in allowed):
+            blocked.append({'id': material_id, 'title': material['title'],
+                            'reason': '这张图在外部目录里，请到文件管理器删除'})
+            continue
+        moved, failed = trash.recycle([path])
+        if not moved:
+            blocked.append({'id': material_id, 'title': material['title'],
+                            'reason': failed[0] if failed else '移入回收站失败'})
+            continue
+        _drop_material_label(Path(material['source_path']), path.name)
+        _drop_material_thumbs(root, material_id)
+        deleted.append({'id': material_id, 'title': material['title'],
+                        'category': material['category'], 'path': str(path)})
+    if deleted:
+        invalidate(root)
+    return {'deleted': deleted, 'blocked': blocked, 'missing': missing}
+
+
 def stage_material(data_root: str | Path, material_id: str, workspace: Path) -> tuple[Path, dict[str, Any]]:
     source, material = resolve_material_file(data_root, material_id)
     suffix = source.suffix.lower() if source.suffix.lower() in IMAGE_SUFFIXES else '.png'
@@ -997,8 +1071,8 @@ def stage_material(data_root: str | Path, material_id: str, workspace: Path) -> 
 
 # 首帧图参考：用户自己生成的首帧存回素材库，下次能直接拿来当开始画面。
 # 它落在素材库根目录下（而不是 data-root），因为用户心里「素材库」就是
-# D:/AI/MiniMax H3/素材库，翻文件夹时看得见；同时这个位置在允许读取的
-# 存储根里，路径可以直接回填到开始画面。
+# 数据根旁边那个看得见的文件夹；同时这个位置在允许读取的存储根里，
+# 路径可以直接回填到开始画面。
 FIRST_FRAME_LIBRARY = '首帧图参考'
 FIRST_FRAME_WORK = '我的首帧图'
 

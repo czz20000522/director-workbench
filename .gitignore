@@ -581,3 +581,14 @@
 !/tests/test_shot_parse.py
 !/contracts/prompt-reading-roles.md
 !/src/VideoEditPanel.tsx
+!/tests/test_virtual_image_pose_control.py
+!/tests/test_media_file_paths.py
+!/backend/routers/engine.py
+!/tests/test_engine_warm.py
+!/tests/test_dialogue_audio.py
+!/tests/test_first_frame_crop.py
+!/src/lazyWithReload.ts
+!/src/clientErrorReporter.ts
+!/backend/routers/client_errors.py
+!/tests/test_client_errors.py
+!/src/PanelErrorBoundary.tsx

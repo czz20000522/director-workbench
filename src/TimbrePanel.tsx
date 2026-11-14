@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import TaskQueueStatus, { type QueueReceipt } from './TaskQueueStatus';
 import { ApiError, mediaUrl, request as apiRequest } from './api/client';
+import SamplePlayer from './SamplePlayer';
 import { hideSample, normalizeDescription, notifyPresetLibraryChanged, onSamplesChanged, readHidden, rememberSample, restoreHidden, sampleFor, sampleSrc, stagedSample } from './timbreSamples';
 
 // 两条真实链路：VoxCPM2 能凭文字造音色，IndexTTS 2.5 只能克隆你给的参考音频。
@@ -233,7 +234,11 @@ export default function TimbrePanel({ projectId, onComplete, initialDescription,
       : { engine: draft.engine, voice_reference: draft.voice_reference, text: draft.text.trim() };
     setBusy(true);
     try {
-      await apiRequest(`/api/preset-library/timbre/${encodeURIComponent(label)}`, { init: { method: 'PUT', body: JSON.stringify({ params }), headers: { 'Content-Type': 'application/json' } } });
+      // 小样就是这条任务产出的：把任务号一起存进卡里，删任务时才能显示「素材已归档」。
+      const linked = task && result?.output && remembered?.path === result.output ? task.id : undefined;
+      await apiRequest(`/api/preset-library/timbre/${encodeURIComponent(label)}`, { init: { method: 'PUT',
+        body: JSON.stringify({ params, ...(linked ? { source_task_id: linked } : {}) }),
+        headers: { 'Content-Type': 'application/json' } } });
       notifyPresetLibraryChanged();
       if (alive.current) { setCardName(''); setMessage(`已存入音色库：${label}`); }
     } catch (reason) {
@@ -287,10 +292,10 @@ export default function TimbrePanel({ projectId, onComplete, initialDescription,
         <div className="sf-post-section-head"><h3 className="sf-post-subtitle">音色库带来的小样</h3>
           <p className="sf-post-meta">直接试听，不用重新生成</p></div>
         <p className="sf-post-hint">{brought.description}</p>
-        <audio controls preload="none" src={sampleSrc(brought.path)} aria-label="音色库带来的音色小样" />
+        <SamplePlayer src={sampleSrc(brought.path)} label="音色库带来的小样" />
       </div>}
       {result?.output && <div className="sf-post-subblock">
-        <audio controls preload="metadata" aria-label="音色样本试听" src={mediaUrl(result.output)} />
+        <SamplePlayer src={mediaUrl(result.output || '') || ''} label="音色样本" />
         <p className="sf-post-hint">{vox ? `音色说明「${result.timbre_prefix?.slice(0, 60) || draft.voice_description.slice(0, 60)}」· ` : '参考音色克隆 · '}{result.duration_seconds ? `${result.duration_seconds.toFixed(2)} 秒` : '时长未知'} · {result.sample_rate ?? facts?.sample_rate ?? 48000}Hz。满意就把它当音色参考：本作品可直接选，换作品时在素材区「复用素材」带走。{vox && ' 这段小样已按音色描述挂到音色库对应卡片上，回库里可直接试听，不用再生成一次。'}</p>
       </div>}
       {(visibleSamples.length > 0 || hidden.length > 0) && <div className="sf-post-subblock">

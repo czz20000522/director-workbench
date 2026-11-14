@@ -128,8 +128,10 @@ const statusLabels: Record<string, string> = {
   needs_reconcile: '需要核对结果',
 };
 
-export default function FirstFrameStudio({ projectId, disabled, defaultAspect, currentFrame, onChange, onPromptChange, restoreFrom }: {
+export default function FirstFrameStudio({ projectId, disabled, defaultAspect, currentFrame, onChange, onPromptChange, restoreFrom, purpose = 'video' }: {
   projectId: string; disabled?: boolean;
+  /** video：这张会成为视频开始画面；still：独立的「虚图生真图」工具，产物不做首帧。 */
+  purpose?: 'video' | 'still';
   /** 所选制作方案的画幅。首帧和方案对不上，视频会先裁一刀，所以这里跟着方案走。 */
   defaultAspect?: '16:9' | '9:16' | '1:1';
   /** 外层当前的开始画面：有图时选「自有素材」不再自动顶掉它。 */
@@ -146,12 +148,19 @@ export default function FirstFrameStudio({ projectId, disabled, defaultAspect, c
   };
 }) {
   const [slots, setSlots] = useState<SlotValue[]>([]);
+  // 姿势槽的结构控制方式：线稿和深度图靠分类猜会猜错，给用户一个显式开关。
+  const [poseControl, setPoseControl] = useState<'auto' | 'lineart' | 'depth'>('auto');
   const [base, setBase] = useState('');
   const [prompt, setPrompt] = useState(DEFAULT_PROMPT);
   // 用户自己动过提示词之后，选素材就不再清空它——只有预填的那句会被清掉。
   const [promptTouched, setPromptTouched] = useState(false);
   // 图生视频把这个框当视频提示词用：初始预填、选素材清空、恢复历史都要同步给外层。
   useEffect(() => { onPromptChange?.(prompt); }, [prompt, onPromptChange]);
+  // 打开面板就先预热绘图引擎：ComfyUI 冷启动一分钟，藏进写提示词的时间，
+  // 点「生成」时就不用干等。失败不打扰，后端提交时还会再拉一次。
+  useEffect(() => {
+    void request('/api/engine/warm', { init: { method: 'POST' }, timeoutMs: 8_000 }).catch(() => undefined);
+  }, []);
   const [profile, setProfile] = useState<Profile>('general');
   const [aspect, setAspect] = useState<Aspect>(defaultAspect === '16:9' ? 'landscape' : defaultAspect === '1:1' ? 'square' : 'portrait');
   const [busy, setBusy] = useState(false);
@@ -159,6 +168,9 @@ export default function FirstFrameStudio({ projectId, disabled, defaultAspect, c
   const [progress, setProgress] = useState<TaskProgress | null>(null);
   const [frame, setFrame] = useState('');
   const [history, setHistory] = useState<FrameHistoryEntry[]>(loadHistory);
+  // 打不开的图（文件被移走/路径失效）单独记下来：否则页面只留一块空白，
+  // 用户看不出是「还在加载」还是「这张没了」。
+  const [broken, setBroken] = useState<Set<string>>(new Set());
   // 刷新后内部 frame 是空的，但历史还在。默认选中最新那张，否则并排区一片空白，
   // 用户会以为图丢了。只补内部状态，不自动把旧图同步成开始画面。
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -416,11 +428,36 @@ export default function FirstFrameStudio({ projectId, disabled, defaultAspect, c
     } finally { setEnhanceBusy(false); }
   };
 
+  const markBroken = (path: string) => setBroken(current => {
+    if (current.has(path)) return current;
+    const next = new Set(current); next.add(path); return next;
+  });
+
+  const dropEntry = (entry: FrameHistoryEntry) => {
+    setHistory(current => current.filter(item => item.id !== entry.id));
+    setBroken(current => {
+      if (!current.has(entry.path)) return current;
+      const next = new Set(current); next.delete(entry.path); return next;
+    });
+    if (frame === entry.path) {
+      setFrame(''); onChange('');
+      setStatus('这一版的文件已不在，已从记录里移除。');
+    } else {
+      setStatus('已从记录里移除这一条。');
+    }
+  };
+
   const submit = async () => {
     if (!projectId) { setError('单步项目还没准备好'); return; }
     if (!prompt.trim() && !textSlots.length) { setError('请写一句画面描述，或至少写清要改什么'); return; }
     if (!materialSlots.length && !base && !textSlots.length) { setError('至少选一个素材，或先有一张底图'); return; }
     setBusy(true); setError(''); setProgress(null); setStatus('提交首帧任务…');
+    // 引擎没起来的话，后端要先冷启动 ComfyUI（约一分钟）。先问一句，
+    // 好把这段时间如实写进状态行，而不是让人对着「准备中」猜是不是卡死了。
+    const engine = await request<{ online: boolean }>('/api/engine/warm', { init: { method: 'POST' } })
+      .catch(() => null);
+    const engineCold = Boolean(engine && !engine.online);
+    const startedAt = Date.now();
     const usedSeed = seed ?? nextSeed();
     // 不选图的槽（「不穿衣服」「丸子头」）没有参考图，只能写进提示词里；
     // 有参考图或底图时走参考图模式，否则就是一次纯文字生图。
@@ -437,6 +474,7 @@ export default function FirstFrameStudio({ projectId, disabled, defaultAspect, c
           references: materialSlots.map(slot => ({
             role: slot.role === OWN_ROLE ? '底图' : slot.role,
             material_id: slot.material_id,
+            ...(slot.role === '姿势' ? { control: poseControl } : {}),
           })),
           ...(base ? { reference_image: base } : {}),
         } : {}),
@@ -452,9 +490,16 @@ export default function FirstFrameStudio({ projectId, disabled, defaultAspect, c
       for (let attempt = 0; attempt < 120; attempt += 1) {
         const detail = await request<Task & { task?: Task }>(`/api/tasks/${encodeURIComponent(taskId)}`);
         const current = detail.task || detail;
-        setStatus(statusLabels[current.status] || current.status);
+        const label = statusLabels[current.status] || current.status;
+        const waiting = ['scheduler_waiting', 'batch_waiting', 'preparing', 'submitting', 'queued'].includes(current.status);
+        const seconds = Math.round((Date.now() - startedAt) / 1000);
+        setStatus(waiting
+          ? `${label} · ${seconds} 秒${engineCold && seconds >= 5 ? `（正在启动绘图引擎，首次约 1 分钟，之后就快了）` : ''}`
+          : label);
         setProgress(current.progress || null);
         if (['succeeded', 'failed', 'stopped', 'needs_reconcile'].includes(current.status)) {
+          // 终态不再报「第几步、还需多久」：那条进度只属于还在跑的采样阶段。
+          setProgress(null);
           if (current.status !== 'succeeded') throw new Error(current.error || `首帧生成${statusLabels[current.status] || current.status}`);
           output = readOutput(current.result);
           break;
@@ -476,7 +521,7 @@ export default function FirstFrameStudio({ projectId, disabled, defaultAspect, c
           json: { result: output, task_id: taskId },
         }).catch(() => undefined);
       }
-      setStatus(base ? '已按底图改出新版本，可继续改或直接用作开始画面' : '已生成，可继续改或直接用作开始画面');
+      setStatus((base ? '已按底图改出新版本，' : '已生成，') + (purpose === 'still' ? '可继续改或存入素材库' : '可继续改或直接用作开始画面'));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '首帧生成失败');
       setStatus('');
@@ -484,11 +529,13 @@ export default function FirstFrameStudio({ projectId, disabled, defaultAspect, c
   };
 
   return <div className="ffs">
-    <p className="sf-fine ffs-lede">选素材拼一张首帧，不满意就带着它继续改；改到满意再拿去生成视频。</p>
+    <p className="sf-fine ffs-lede">{purpose === 'still'
+      ? '先在「姿势」里选一张线稿或深度图当骨架，再挑脸型、服装，写一句画面描述——生成的是真实画面，不是复刻这张虚图。'
+      : '选素材拼一张首帧，不满意就带着它继续改；改到满意再拿去生成视频。'}</p>
 
     <fieldset className="ffs-slots" data-own={ownSlot ? 'true' : undefined} disabled={disabled || busy}>
       <legend>参考素材 {ownSlot ? '· 自有素材（整图）' : '· 每类最多一张'}{filled.length ? ` · 已选 ${filled.length}` : ''}</legend>
-      {ROLES.map(role => <ReferenceSlotField
+      {(purpose === 'still' ? (['姿势', '脸型', '服装', '造型'] as ReferenceRole[]) : ROLES).map(role => <ReferenceSlotField
         key={role} role={role} hint={ROLE_HINTS[role]} disabled={disabled || busy || Boolean(ownSlot)}
         value={slots.find(slot => slot.role === role)}
         onChange={next => setSlot(role, next)}
@@ -507,11 +554,11 @@ export default function FirstFrameStudio({ projectId, disabled, defaultAspect, c
 
     {ownSlot && <p className="sf-fine ffs-own-note">
       自有素材已启用：这张图本身就定了长相、造型、服装和姿势，上面四类这次不参与（清掉它就恢复）。
-      写清动作和镜头就能直接生成视频；想让它变成另一张图，再点「生成首帧」。
+      {purpose === 'video' ? '写清动作和镜头就能直接生成视频；想让它变成另一张图，再点「生成首帧」。' : '写清画面和光线就能直接出图。'}
       横屏方案请选横图、竖屏方案选竖图——比例不一致时开始画面会被拉伸。
     </p>}
 
-    {materialSlots.length === 1 && !(autoAdopted.current?.path && autoAdopted.current.path === (currentFrame || frame)) && <div className="ffs-direct">
+    {purpose === 'video' && materialSlots.length === 1 && !(autoAdopted.current?.path && autoAdopted.current.path === (currentFrame || frame)) && <div className="ffs-direct">
       <button type="button" className="sf-secondary" disabled={disabled || busy} onClick={() => void useSlotAsFrame(materialSlots[0])}>
         直接用「{materialSlots[0].title}」作首帧
       </button>
@@ -555,6 +602,13 @@ export default function FirstFrameStudio({ projectId, disabled, defaultAspect, c
         想用参考图里的样子，把这类词删掉；只想改颜色又要保留版型，改用「继续改这张 → 局部重绘」。
       </p>}
       {poseSlot && <small className="sf-fine">姿势图会作为结构控制图：深度图最稳，线稿偶尔会把关节圆圈带进画面。构图仍建议写清「全身、坐地、双手后撑、镜头拉远」，模型对场景和服装的理解会更准。</small>}
+      {poseSlot && <div className="ffs-pose-mode" role="group" aria-label="姿势结构控制方式">
+        <span>结构控制</span>
+        {([['auto', '自动判断'], ['depth', '深度图'], ['lineart', '线稿']] as const).map(([value, label]) =>
+          <button key={value} type="button" aria-pressed={poseControl === value} disabled={disabled || busy}
+            onClick={() => setPoseControl(value)}>{label}</button>)}
+        <small>{poseControl === 'auto' ? '按素材所在分类猜，猜错就手动选' : poseControl === 'depth' ? '锁身体轮廓，最稳' : '锁外轮廓，关节圆圈可能被画进衣服'}</small>
+      </div>}
       <PromptWriter disabled={disabled || busy} prompt={prompt}
         context={{
           project_id: projectId, profile, aspect, seed,
@@ -588,11 +642,11 @@ export default function FirstFrameStudio({ projectId, disabled, defaultAspect, c
 
     {error && <p className="sf-error" role="alert">{error}</p>}
     {status && <p className="qt-status">{busy && <LoaderCircle size={14} className="sf-spin" />}{status}</p>}
-    <ProgressBar progress={progress} />
+    <ProgressBar progress={busy ? progress : null} />
 
     <div className="ffs-actions">
       <button type="button" className="sf-primary" disabled={disabled || busy} onClick={() => void submit()}>
-        {busy ? '生成中…' : frame ? '再生成一张' : '生成首帧'}
+        {busy ? '生成中…' : frame ? '再生成一张' : (purpose === 'still' ? '生成真图' : '生成首帧')}
       </button>
       {frame && <button type="button" className="sf-secondary" disabled={disabled || busy} onClick={() => setInpaintOpen(true)}>
         <Paintbrush size={14} /> 局部重绘
@@ -612,7 +666,7 @@ export default function FirstFrameStudio({ projectId, disabled, defaultAspect, c
       <div className="ffs-frame-head">
         <span><ImageIcon size={13} /> 首帧{history.length > 1 ? ` · ${history.length} 张` : ''}</span>
         <span className="ffs-frame-actions">
-          <button type="button" className="sf-inline-link" onClick={() => onChange(frame)}>重新用作开始画面</button>
+          {purpose === 'video' && <button type="button" className="sf-inline-link" onClick={() => onChange(frame)}>重新用作开始画面</button>}
           <button type="button" className="sf-inline-link" disabled={disabled || busy}
             onClick={() => { setSaveOpen(open => !open); setSaveNote(null); setSaveTitle(defaultTitle()); }}>
             <Bookmark size={12} /> 存入素材库
@@ -634,18 +688,30 @@ export default function FirstFrameStudio({ projectId, disabled, defaultAspect, c
       {/* 同一页里连续生成的每一版都留在这儿并排摆着，点哪张就把它设成开始画面。
           以前这里只显示最新一张、历史缩成 52×68 的小方块，看起来就像被覆盖了。 */}
       {history.length ? <div className="ffs-grid">
-        {history.map(entry => <div key={entry.id} className={entry.path === frame ? 'ffs-cell is-current' : 'ffs-cell'}>
-          <button type="button" className="ffs-cell-pick" disabled={disabled || busy}
-            title={entry.prompt || '（没有记录提示词）'}
-            onClick={() => pickFrame(entry)}>
-            <img src={mediaUrl(entry.path)} alt="" loading="lazy" />
-            {entry.path === frame && <em className="ffs-cell-badge">当前</em>}
+        {history.map(entry => {
+          // 文件已经不在的那张不能选：选了也只会得到一块空白，还会把「当前」标在空图上。
+          const missing = broken.has(entry.path);
+          return <div key={entry.id}
+            className={`ffs-cell${entry.path === frame && !missing ? ' is-current' : ''}${missing ? ' is-missing' : ''}`}>
+          <button type="button" className="ffs-cell-pick" disabled={disabled || busy || missing}
+            title={missing ? '这张的文件已经不在了，只能移除' : (entry.prompt || '（没有记录提示词）')}
+            onClick={() => { if (!missing) pickFrame(entry); }}>
+            {missing
+              ? <span className="ffs-cell-missing"><ImageIcon size={16} />文件已不在<small>{entry.path.split(/[\\/]/).pop()}</small></span>
+              : <img src={mediaUrl(entry.path)} alt="" loading="lazy" onError={() => markBroken(entry.path)} />}
+            {entry.path === frame && !missing && <em className="ffs-cell-badge">当前</em>}
           </button>
           <span className="ffs-cell-meta">{(entry.prompt || '（无提示词）').slice(0, 22) || '（无提示词）'}</span>
-          <button type="button" className="sf-inline-link" disabled={disabled || busy}
-            onClick={() => restore(entry)}>切回这一版</button>
-        </div>)}
-      </div> : <img src={mediaUrl(frame)} alt="首帧" />}
+          {missing
+            ? <button type="button" className="sf-inline-link" disabled={disabled || busy}
+                onClick={() => dropEntry(entry)}>移除这条</button>
+            : <button type="button" className="sf-inline-link" disabled={disabled || busy}
+                onClick={() => restore(entry)}>切回这一版</button>}
+        </div>;
+        })}
+      </div> : (broken.has(frame)
+        ? <p className="sf-error" role="alert">这张图的文件已不在（{frame.split(/[\\/]/).pop()}），可以重新生成一张。</p>
+        : <img src={mediaUrl(frame)} alt="首帧" onError={() => markBroken(frame)} />)}
       {saveOpen && <div className="ffs-save">
         <label><span>存进「首帧图参考」的名字</span>
           <input value={saveTitle} maxLength={48} disabled={saveBusy} placeholder={defaultTitle()}
@@ -659,10 +725,14 @@ export default function FirstFrameStudio({ projectId, disabled, defaultAspect, c
       </div>}
       {saveNote && <p className={saveNote.error ? 'sf-error' : 'sf-fine'} role={saveNote.error ? 'alert' : 'status'}>{saveNote.text}</p>}
       {enhanceNote && <p className={enhanceNote.error ? 'sf-error' : 'sf-fine'} role={enhanceNote.error ? 'alert' : 'status'}>{enhanceNote.text}</p>}
-      <p className="sf-fine">这张已经自动设为下面的开始画面。想再改就点「继续改这张」，它会成为参考图1。</p>
+      <p className="sf-fine">{purpose === 'video'
+        ? '这张已经自动设为下面的开始画面。想再改就点「继续改这张」，它会成为参考图1。'
+        : '已生成。可以「继续改这张」做局部重绘或液化，也可以直接存入素材库。'}</p>
     </div>}
 
-    {!frame && !busy && <p className="sf-fine ffs-tip"><Sparkles size={12} /> 提示：只想把已有图片改成别的样子，可以先在下面用「上传图片」设成开始画面，再选好素材后点生成。</p>}
+    {!frame && !busy && <p className="sf-fine ffs-tip"><Sparkles size={12} /> {purpose === 'video'
+      ? '提示：只想把已有图片改成别的样子，可以先在下面用「上传图片」设成开始画面，再选好素材后点生成。'
+      : '提示：先在上面「姿势」里选一张线稿或深度图，它就是骨架；再挑脸型和服装，写一句画面描述即可。'}</p>}
     {inpaintOpen && frame && <InpaintDialog projectId={projectId} imagePath={frame} profile={profile}
       onClose={() => setInpaintOpen(false)}
       onDone={(path, text) => {

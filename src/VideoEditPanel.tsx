@@ -415,7 +415,7 @@ export default function VideoEditPanel({ projectId }: { projectId: string }) {
     </section>
 
     {status && <p className="qt-status">{busy && <LoaderCircle size={14} className="sf-spin" />}{status}</p>}
-    <ProgressBar progress={progress} />
+    <ProgressBar progress={busy ? progress : null} />
     <div className="ve-actions">
       <button type="button" className="sf-primary" disabled={busy || !clips.length} onClick={() => void submit()}>
         {busy ? '导出中…' : `导出成片 · ${clock(total)}`}

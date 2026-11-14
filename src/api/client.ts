@@ -22,6 +22,18 @@ export class ApiError extends Error {
 
 function describe(detail: unknown, status: number): { message: string; code?: string } {
   if (typeof detail === 'string' && detail) return { message: detail };
+  // FastAPI 的参数校验失败是数组：[{loc: ['body','seed'], msg: '...'}]。
+  // 以前这种情况一律显示「请求失败（HTTP 422）」，把真正原因藏掉了。
+  if (Array.isArray(detail) && detail.length) {
+    const parts = detail.slice(0, 3).map(item => {
+      if (!item || typeof item !== 'object') return String(item);
+      const entry = item as { loc?: unknown; msg?: unknown; type?: unknown };
+      const loc = Array.isArray(entry.loc) ? entry.loc.filter(part => part !== 'body').join('.') : '';
+      const why = typeof entry.msg === 'string' && entry.msg ? entry.msg : String(entry.type || '参数不合法');
+      return loc ? `${loc}：${why}` : why;
+    });
+    return { message: `参数不合法 · ${parts.join('；')}`, code: 'validation_error' };
+  }
   if (detail && typeof detail === 'object') {
     const value = detail as { message?: unknown; code?: unknown };
     const message = typeof value.message === 'string' && value.message

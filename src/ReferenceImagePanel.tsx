@@ -181,7 +181,10 @@ export default function ReferenceImagePanel({ projectId, onComplete, restore }: 
   const polish = async () => {
     const current = prompt.trim();
     if (!current) { setError('先识别或写一段提示词，再点润色'); return; }
-    setPolishing(true); setError(''); setMessage('正在润色…');
+    setPolishing(true); setError('');
+    setMessage(visionProvider === 'local'
+      ? '正在润色…（本机模型没运行时会先拉起，首次约 20 秒，别重复点）'
+      : '正在润色…');
     try {
       const data = await request<{ prompt: string; provider?: string; started_service?: boolean }>(
         '/api/prompt-writer/draft',

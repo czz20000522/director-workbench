@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import CreativeSettingsBar from './CreativeSettingsBar';
 import TaskQueueStatus, { type QueueReceipt } from './TaskQueueStatus';
+import SamplePlayer from './SamplePlayer';
 import { ApiError, mediaUrl, request as apiRequest } from './api/client';
 import { consumeBringIn, onBringIn } from './libraryBus';
 
@@ -268,7 +269,7 @@ export default function MusicPanel({ projectId, onComplete, initialCard, initial
       {message && <p className="sf-post-message" role="status" aria-live="polite">{message}</p>}
       {task?.error && <p className="sf-post-message" role="status" aria-live="polite">{task.error}</p>}
       {result?.output && <div className="sf-post-subblock">
-        <audio controls preload="metadata" aria-label="配乐候选试听" src={mediaUrl(result.output)} />
+        <SamplePlayer src={mediaUrl(result.output || '') || ''} label="配乐候选" />
         <p className="sf-post-hint">实测时长以文件为准；标签「{result.music?.tags?.slice(0, 40)}」· BPM {result.music?.bpm ?? '—'} · {result.music?.keyscale ?? '—'} · 随机编号 {result.music?.seed ?? '—'}。听完再决定是否放进音轨。</p>
       </div>}
       <div className="sf-post-actions">

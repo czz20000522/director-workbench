@@ -1387,6 +1387,53 @@ def prepare_pipeline_payload(payload: dict[str, Any], stage_id: str, values: dic
     return prepared
 
 
+def _video_target_ratio(graph: dict[str, Any]) -> float | None:
+    """图生视频图的画幅比例：ResolutionSelector 决定 width/height，也决定首帧会被拉成什么形状。"""
+    for node in graph.values():
+        if node.get('class_type') != 'ResolutionSelector':
+            continue
+        raw = str((node.get('inputs') or {}).get('aspect_ratio') or '')
+        match = re.match(r'\s*(\d+)\s*:\s*(\d+)', raw)
+        if match:
+            width, height = int(match.group(1)), int(match.group(2))
+            if width > 0 and height > 0:
+                return width / height
+    return None
+
+
+def _cover_crop_image(source: Path, destination: Path, ratio: float) -> bool:
+    """居中裁到目标比例。返回是否真的裁过。
+
+    H3 的图生视频会把首帧直接缩放到 ResolutionSelector 的尺寸：横图配竖屏方案
+    不是裁切而是**拉伸**（实测 1344×768 首帧出片 608×1056，首帧与原图的拉伸版
+    MSE 21.9，裁切版 9201）。所以在送进引擎前先按目标比例裁好，拉伸就变成了等比。
+    """
+    try:
+        from PIL import Image
+        with Image.open(source) as image:
+            width, height = image.size
+            if not width or not height:
+                return False
+            if abs(width / height - ratio) <= 0.01:
+                return False
+            if width / height > ratio:
+                new_width = max(1, round(height * ratio))
+                left = (width - new_width) // 2
+                box = (left, 0, left + new_width, height)
+            else:
+                new_height = max(1, round(width / ratio))
+                top = (height - new_height) // 2
+                box = (0, top, width, top + new_height)
+            cropped = image.convert('RGB').crop(box)
+            if destination.suffix.lower() in ('.jpg', '.jpeg'):
+                cropped.save(destination, quality=95)
+            else:
+                cropped.save(destination)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def stage_comfy_input_files(graph: dict[str, Any], project_id: str) -> list[dict[str, Any]]:
     """Freeze input media under ComfyUI's input root and bind relative names.
 
@@ -1395,6 +1442,7 @@ def stage_comfy_input_files(graph: dict[str, Any], project_id: str) -> list[dict
     其实没吃到素材」。
     """
     input_root = Path(COMFY_INPUT_ROOT).resolve()
+    target_ratio = _video_target_ratio(graph)
     project_folder = "".join(char if char.isalnum() or char in "-_" else "-" for char in project_id)
     attempt = uuid.uuid4().hex
     staged: list[dict[str, Any]] = []
@@ -1419,13 +1467,22 @@ def stage_comfy_input_files(graph: dict[str, Any], project_id: str) -> list[dict
         destination = input_root / "导演工作台工作目录" / project_folder / "任务素材" / attempt / f"{len(staged) + 1:02d}{source.suffix.lower()}"
         destination.parent.mkdir(parents=True, exist_ok=True)
         before = source.stat()
-        shutil.copy2(source, destination)
+        # 图生视频的首帧/尾帧：先按方案比例裁好，别让引擎拉伸（会把人脸拉长）。
+        cropped = False
+        if node.get('class_type') == 'LoadImage' and target_ratio:
+            cropped = _cover_crop_image(source, destination, target_ratio)
+        if not cropped:
+            shutil.copy2(source, destination)
         after = source.stat()
-        if destination.stat().st_size != before.st_size or after.st_size != before.st_size or after.st_mtime_ns != before.st_mtime_ns:
+        if not cropped and (destination.stat().st_size != before.st_size or after.st_size != before.st_size or after.st_mtime_ns != before.st_mtime_ns):
             raise ValueError("素材复制时发生变化，请重新提交")
         reference = destination.relative_to(input_root).as_posix()
         node["inputs"][field] = reference
-        staged.append({"node_id": node_id, "input": field, "source": str(source), "path": str(destination), "reference": reference, "size_bytes": before.st_size})
+        # 记录的是**落地文件**的大小：裁切版和原图不一样，写 before 会让执行前的
+        # 「冻结素材大小」校验永远对不上。
+        staged.append({"node_id": node_id, "input": field, "source": str(source), "path": str(destination),
+                       "reference": reference, "size_bytes": destination.stat().st_size,
+                       **({"cropped": True} if cropped else {})})
     return staged
 
 
@@ -4451,6 +4508,12 @@ from .routers.batch_assembly import (
 # 下面两行必须留在原位置：路由注册顺序决定 /api/... 的匹配结果。
 from .routers.gpu_idle import ROUTER as _gpu_idle_router
 app.include_router(_gpu_idle_router)
+# 绘图引擎预热：打开生成面板就先拉 ComfyUI，把冷启动的一分钟藏进用户写提示词的时间。
+from .routers.engine import ROUTER as _engine_router
+app.include_router(_engine_router)
+
+from .routers.client_errors import ROUTER as _client_errors_router
+app.include_router(_client_errors_router)
 # 这些名称原本定义在 app.py 模块层，拆出后按原样再导出：
 # app.py、private_mode.py 与既有测试都以 backend.<名称> 取用它们。
 from .routers.gpu_idle import (

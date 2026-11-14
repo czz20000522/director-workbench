@@ -23,7 +23,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from .. import app as backend
 from .. import generated_orphans as orphan_scan
-from .. import library_archive, production_presets, trash
+from .. import library_archive, preset_library, production_presets, trash
 from .. import task_scheduler
 from ..schemas import QuickTaskAdoptRequest, TaskBatchDeleteRequest, TaskBatchPlanRequest
 
@@ -129,7 +129,7 @@ MUSIC_FORM_FIELDS = ('tags', 'lyrics', 'duration_seconds', 'bpm', 'keyscale', 't
                      'temperature', 'top_p', 'top_k', 'min_p')
 
 
-def quick_task_reuse(payload: dict[str, Any]) -> dict[str, Any] | None:
+def quick_task_reuse(payload: dict[str, Any], produced: str = '') -> dict[str, Any] | None:
     """The editable inputs of a finished single-step task, in the tool form's own field names.
 
     首页「编辑重生成」把这些值带回对应工具，由你改完再显式提交——工作台不会自动重跑。
@@ -229,6 +229,10 @@ def quick_task_reuse(payload: dict[str, Any]) -> dict[str, Any] | None:
         music = backend._portable(payload.get('music_overlay'))
         if music:
             values['music_track'] = music
+        # 上一版成片也带回去：重编辑时右栏能继续播放，台词工位的「上一段音轨」也才有来源。
+        clip = backend._portable(produced)
+        if clip:
+            values['video'] = clip
         return {'tool': 'image-video' if frame else 'text-video', 'values': values}
     if kind == 'speech':
         request = payload.get('request') or {}
@@ -314,8 +318,17 @@ def _card_outputs(result: dict[str, Any]) -> list[str]:
             outputs.append(f'output/{item}')
     # 关键帧/清晰化把唯一产物放在 output（视频另有 video_path），没有 outputs 列表。
     single = result.get('output') or result.get('video_path')
-    if isinstance(single, str) and single and single not in outputs:
-        outputs.insert(0, single)
+    if isinstance(single, str) and single:
+        # 音频/媒体任务会同时写 output 和 outputs，而两边的写法不一样：
+        # output 是绝对路径，outputs 里是 `output/<相对路径>`。直接比字符串会判成两个文件，
+        # 结果弹窗就出现两个一模一样的标签（同一段音频被列了两次）。
+        def _same(left: str, right: str) -> bool:
+            def norm(value: str) -> str:
+                text = value.replace('\\', '/').lstrip('/')
+                return text[7:] if text.startswith('output/') else text
+            return norm(left) == norm(right) or norm(left).endswith('/' + norm(right)) or norm(right).endswith('/' + norm(left))
+        if not any(_same(single, item) for item in outputs):
+            outputs.insert(0, single)
     return outputs
 
 
@@ -353,7 +366,7 @@ def quick_task_card(task: dict[str, Any]) -> dict[str, Any]:
         'error': task.get('error'), 'revision': payload.get('revision', 0),
         'retry_of': payload.get('retry_of'), 'queue': task.get('queue') or {},
         'progress': backend.comfy_progress.visible_progress(task),
-        'reuse': backend.quick_task_reuse(payload),
+        'reuse': backend.quick_task_reuse(payload, outputs[0] if outputs else ''),
         'deletable': backend._delete_blocker(task) is None,
         'delete_blocker': backend._delete_blocker(task),
     }
@@ -491,6 +504,27 @@ def _batch_rows(task_ids: list[str]) -> list[dict[str, Any]]:
     return selected
 
 
+def _task_outputs(task: dict[str, Any]) -> list[str]:
+    result = task.get('result')
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except ValueError:
+            result = {}
+    if not isinstance(result, dict):
+        return []
+    paths: list[str] = []
+    single = result.get('output') or result.get('video_path') or result.get('audio_output')
+    if isinstance(single, str) and single:
+        paths.append(single)
+    for item in result.get('outputs') or []:
+        if isinstance(item, str) and item:
+            paths.append(item)
+        elif isinstance(item, dict) and isinstance(item.get('path'), str):
+            paths.append(item['path'])
+    return paths
+
+
 @ROUTER.post('/api/tasks/deletion-plan')
 def tasks_deletion_plan(request: TaskBatchPlanRequest) -> dict[str, Any]:
     """Freeze which tasks would go, and what their removal touches."""
@@ -502,7 +536,11 @@ def tasks_deletion_plan(request: TaskBatchPlanRequest) -> dict[str, Any]:
         files = backend._snapshot_files(task, str(task.get('project_id') or ''))
         entries.append({'task_id': task['id'], 'project_id': task.get('project_id'), 'status': task['status'],
                         'title': backend.quick_prompt_excerpt(task), 'asset_id': task.get('asset_id'),
-                        'snapshots': [str(path) for path in files]})
+                        'snapshots': [str(path) for path in files],
+                        # 素材已经存进音色库/配乐库的话，这里带上库名与时间；
+                        # 前端据此显示「素材已归档」，不必再勾一次归档和二次确认。
+                        'archived': preset_library.archived_for_task(
+                            task['id'], _task_outputs(task))})
     plan_id = secrets.token_hex(12)
     directory = backend.task_plan_directory()
     directory.mkdir(parents=True, exist_ok=True)

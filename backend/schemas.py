@@ -387,6 +387,8 @@ class ReferenceSlot(BaseModel):
 
     role: Literal['底图', '脸型', '造型', '服装', '姿势', '人像'] = '脸型'
     material_id: str = Field(min_length=1, max_length=160)
+    # 只对「姿势」槽有效：线稿和深度图长得像，靠文件名猜经常猜错，允许显式指定。
+    control: Literal['auto', 'lineart', 'depth'] = 'auto'
 
 
 class KeyframeRequest(BaseModel):
@@ -621,6 +623,8 @@ class MusicRequest(BaseModel):
 class CreativeSettingRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     params: dict[str, Any]
+    # 这张卡由哪条任务生成：删任务时用来判断「素材已归档」，不参与生成参数。
+    source_task_id: str | None = Field(default=None, max_length=64)
 
 
 class MediaOperationRequest(BaseModel):

@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import StudioFlowLive from './StudioFlowLive';
 import LibraryPage from './LibraryPage';
 import LoginGate from './LoginGate';
+import { installClientErrorHandlers, reportClientError } from './clientErrorReporter';
 import './styles.css';
 
 class ErrorBoundary extends React.Component<React.PropsWithChildren, { error: Error | null }> {
@@ -14,6 +15,13 @@ class ErrorBoundary extends React.Component<React.PropsWithChildren, { error: Er
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
     console.error('Director Workbench 渲染异常', error, info.componentStack);
+    // 控制台只有用户自己能看到；写一份到后端日志，排查时不用再让用户截图。
+    reportClientError({
+      message: error.message || '渲染异常',
+      stack: error.stack,
+      component_stack: info.componentStack || '',
+      kind: 'render',
+    });
   }
 
   retry = () => this.setState({ error: null });
@@ -44,6 +52,7 @@ function installRandomUuidFallback() {
 }
 
 installRandomUuidFallback();
+installClientErrorHandlers();
 
 function useHashRoute() {
   const [hash, setHash] = React.useState(() => window.location.hash);

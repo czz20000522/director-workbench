@@ -251,7 +251,8 @@ def start_keyframe_task(project_id: str, request: KeyframeRequest) -> dict[str, 
             for slot in request.references:
                 staged, material = reference_library.stage_material(backend.ROOT, slot.material_id, workspace)
                 slots.append({'role': slot.role, 'path': str(staged), 'label': material.get('title') or '',
-                              'category': material.get('category') or ''})
+                              'category': material.get('category') or '',
+                              'control': getattr(slot, 'control', 'auto')})
             if not slots:
                 raise HTTPException(422, '参考图模式需要至少一个参考槽')
             payload = keyframes.prepare_text(task_id, request.prompt, workspace / 'keyframe-tasks', prefix,

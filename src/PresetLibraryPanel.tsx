@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { AudioLines, BookOpen, Headphones, LoaderCircle, Music, Search, Trash2, Volume2 } from 'lucide-react';
 import { ApiError, request } from './api/client';
 import LibraryExpand from './LibraryExpand';
+import SamplePlayer from './SamplePlayer';
 import type { LibrarySection } from './LibraryExpand';
 import { forgetSample, listSamples, onPresetLibraryChanged, onSamplesChanged, sampleFor, sampleSrc, stageSample } from './timbreSamples';
 import type { TimbreSample } from './timbreSamples';
@@ -32,7 +33,6 @@ function summary(kind: PresetKind, params: Record<string, unknown>): string {
 
 /** 后端卡片将来带 sample_path / sample_url 就优先用；否则退回浏览器里记的小样索引。 */
 function cardSample(kind: PresetKind, card: Card): TimbreSample | null {
-  if (kind !== 'timbre') return null;
   const params = card.params;
   const nested = typeof params.sample === 'object' && params.sample !== null
     ? (params.sample as Record<string, unknown>).path : params.sample;
@@ -41,6 +41,7 @@ function cardSample(kind: PresetKind, card: Card): TimbreSample | null {
     return { path: raw.trim(), description: String(params.voice_description || ''), name: card.name,
       duration_seconds: Number(params.sample_duration_seconds) || undefined, created_at: 0, source: 'library' };
   }
+  if (kind !== 'timbre') return null;
   return sampleFor(String(params.voice_description || ''), card.name);
 }
 
@@ -117,6 +118,12 @@ export default function PresetLibraryPanel({ kind, onUse }: {
         onClick={() => { setRenaming(card.name); setDraftName(card.name); }}>重命名</button>;
 
   const cardActions = (card: Card) => <>
+    {kind === 'music' && (() => {
+      // 存过成品的配乐卡可以直接试听：文件已经复制进库，删掉原任务也还在。
+      const sample = cardSample(kind, card);
+      return sample ? <SamplePlayer src={sampleSrc(sample.path)} duration={sample.duration_seconds}
+        label={card.name} variant="compact" /> : null;
+    })()}
     <button type="button" className="lex-primary" onClick={() => use(card)}>
       {kind === 'timbre' ? '带入音色设计' : '带入配乐'}</button>
     {!card.builtin && renameControl(card)}
@@ -132,7 +139,8 @@ export default function PresetLibraryPanel({ kind, onUse }: {
           return <div className="pl-card" role="listitem" key={`${card.name}-${card.builtin}`}>
             <strong>{card.name}{card.modified ? '（已改）' : ''}</strong>
             <span>{summary(kind, card.params)}</span>
-            {sample && <audio className="pl-mini-audio" controls preload="none" src={sampleSrc(sample.path)} aria-label={`试听 ${card.name}`} />}
+            {sample && <SamplePlayer src={sampleSrc(sample.path)} duration={sample.duration_seconds}
+              label={card.name} variant="compact" />}
             <div className="pl-card-actions">
               <small>{card.builtin ? '内置起点' : '我的卡片'}{generatedBy(kind, card.params) ? ` · ${generatedBy(kind, card.params)}` : ''}</small>
               <button className="sf-ghost" type="button" onClick={() => use(card)}>带入</button>
@@ -182,7 +190,8 @@ export default function PresetLibraryPanel({ kind, onUse }: {
                         String(card.params.language || '—')].join(' · ')}
                 </p>
                 {sample && <div className="lex-sample">
-                  <audio controls preload="none" src={sampleSrc(sample.path)} aria-label={`试听 ${card.name} 的小样`} />
+                  <SamplePlayer src={sampleSrc(sample.path)} duration={sample.duration_seconds}
+                    label={`${card.name} 的小样`} />
                   <small>小样 · {durationLabel(sample)} · 不用重新生成，直接点播放</small>
                 </div>}
                 <div className="lex-card-actions">{cardActions(card)}</div>
@@ -202,7 +211,8 @@ export default function PresetLibraryPanel({ kind, onUse }: {
         : <div className="lex-rows">{samples.map(sample => <div className="lex-row" key={sample.path}>
             <div className="lex-row-head"><strong>{sample.description || '未命名音色'}</strong>
               <span>{new Date(sample.created_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })} · {durationLabel(sample)}</span></div>
-            <audio controls preload="none" src={sampleSrc(sample.path)} aria-label={`试听 ${sample.description}`} />
+            <SamplePlayer src={sampleSrc(sample.path)} duration={sample.duration_seconds}
+              label={sample.description || '音色小样'} />
             <div className="lex-row-actions">
               <button type="button" className="lex-primary" onClick={() => {
                 stageSample(sample);

@@ -305,3 +305,101 @@ def test_variant_api_rejects_unknown_material_and_non_png(data_root: Path, monke
                      files={'file': ('x.png', PNG, 'image/png')}, data={'title': '液化测试'})
     assert ok.status_code == 200, ok.text
     assert ok.json()['material']['title'] == '液化测试'
+
+
+def _library_images(root: Path) -> tuple[Path, Path, Path]:
+    # 素材库根目录由 LIBRARY_DIRECTORY 决定（reference-library），不是中文目录名。
+    folder = library.library_root(root) / '角色'
+    folder.mkdir(parents=True, exist_ok=True)
+    first = folder / '11 角色_删除测试甲.png'
+    second = folder / '12 角色_删除测试乙.png'
+    first.write_bytes(PNG)
+    second.write_bytes(PNG)
+    (folder / 'labels.json').write_text(json.dumps({
+        '11 角色_删除测试甲.png': '删除测试甲',
+        '12 角色_删除测试乙.png': '删除测试乙',
+    }, ensure_ascii=False), encoding='utf-8')
+    # 子库必须登记在配置里才会被索引；素材库目录不会自动全扫。
+    config_path = root / 'config' / 'reference-library.json'
+    config = json.loads(config_path.read_text(encoding='utf-8'))
+    config['image_directories'].append({'title': '角色', 'category': '角色', 'path': str(folder)})
+    config_path.write_text(json.dumps(config, ensure_ascii=False), encoding='utf-8')
+    library.invalidate(root)
+    return folder, first, second
+
+
+def _fake_recycle(monkeypatch):
+    from backend import trash
+    moved: list[Path] = []
+
+    def recycle(paths):
+        for item in paths:
+            path = Path(item)
+            if path.is_file():
+                path.unlink()
+                moved.append(path)
+        return [str(path) for path in moved], []
+
+    monkeypatch.setattr(trash, 'recycle', recycle)
+    return moved
+
+
+def test_delete_moves_the_file_to_recycle_and_clears_labels_and_thumb(data_root: Path, monkeypatch) -> None:
+    folder, first, second = _library_images(data_root)
+    index = library.build_index(data_root)
+    target = next(item for item in index['materials'] if item['filename'] == first.name)
+    thumbs = library.thumb_root(data_root)
+    thumbs.mkdir(parents=True, exist_ok=True)
+    cached = thumbs / f"{target['id']}-123.jpg"
+    cached.write_bytes(b'thumb')
+    moved = _fake_recycle(monkeypatch)
+
+    result = library.delete_materials(data_root, [target['id']])
+
+    assert [item['id'] for item in result['deleted']] == [target['id']]
+    assert result['blocked'] == []
+    assert moved == [first.resolve()]
+    assert not first.exists() and second.is_file()
+    labels = json.loads((folder / 'labels.json').read_text(encoding='utf-8'))
+    assert first.name not in labels and second.name in labels
+    assert not cached.exists()
+    # 重新索引后这张图不该再出现在素材库里。
+    library.invalidate(data_root)
+    remaining = {item['filename'] for item in library.build_index(data_root)['materials']}
+    assert first.name not in remaining and second.name in remaining
+
+
+def test_delete_refuses_files_outside_the_library_root(data_root: Path, monkeypatch) -> None:
+    """外部挂进来的目录（示例里的 images/）只登记不删，避免误删出片原始文件。"""
+    index = library.build_index(data_root)
+    external = next(item for item in index['materials']
+                    if str(data_root / 'images') in item['path'])
+    moved = _fake_recycle(monkeypatch)
+
+    result = library.delete_materials(data_root, [external['id']])
+
+    assert result['deleted'] == []
+    assert result['blocked'][0]['id'] == external['id']
+    assert '外部目录' in result['blocked'][0]['reason']
+    assert moved == []
+    assert Path(external['path']).is_file()
+
+
+def test_delete_api_reports_deleted_and_blocked(data_root: Path, monkeypatch) -> None:
+    monkeypatch.setattr(backend, 'ROOT', data_root)
+    _, first, _ = _library_images(data_root)
+    index = library.build_index(data_root)
+    inside = next(item for item in index['materials'] if item['filename'] == first.name)
+    external = next(item for item in index['materials']
+                    if str(data_root / 'images') in item['path'])
+    _fake_recycle(monkeypatch)
+    client = TestClient(backend.app)
+
+    response = client.post('/api/reference-library/materials/delete',
+                           json={'material_ids': [inside['id'], external['id'], 'mat-missing']})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [item['id'] for item in body['deleted']] == [inside['id']]
+    assert body['blocked'][0]['id'] == external['id']
+    assert body['missing'] == ['mat-missing']
+    assert client.post('/api/reference-library/materials/delete', json={'material_ids': []}).status_code == 422

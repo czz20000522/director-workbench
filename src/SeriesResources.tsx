@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ChevronLeft, FolderOpen, Music2, Package, RefreshCw, Users } from 'lucide-react';
+import { FolderOpen, Music2, Package, RefreshCw, Users } from 'lucide-react';
 
 type PackAsset = { asset_id: string; role?: string; view?: string; filename?: string };
 type Pack = { id: string; kind: string; title: string; version: number; status: string; assets?: PackAsset[] };
@@ -36,7 +36,6 @@ export default function SeriesResources({ series, episodes, onBack, onOpen }: {
   useEffect(() => { void load(); }, [series]);
 
   return <div className="sf-series-page">
-    <button className="sf-back" onClick={onBack}><ChevronLeft size={15} /> 全部系列</button>
     <div className="sf-series-head">
       <div><p className="sf-step-label">系列</p><h1>{series}</h1><p className="sf-lede">一个系列包含多集作品；角色、场景、道具和声音资源在这里复用。</p></div>
       <button className="sf-secondary" onClick={() => void load()} disabled={loading}><RefreshCw size={15} /> 刷新</button>

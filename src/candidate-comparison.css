@@ -7,7 +7,7 @@
 .candidate-comparison-card { min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: white; }
 .candidate-comparison-card > label { display: flex; align-items: center; gap: 12px; font-size: 12px; }
 .candidate-comparison-card select { flex: 1; min-width: 0; padding: 8px; color: var(--ink); font: inherit; border: 1px solid var(--line-strong); border-radius: 6px; background: white; }
-.candidate-comparison-card video { display: block; width: 100%; max-height: 360px; aspect-ratio: 16 / 9; object-fit: contain; background: #17202c; border-radius: 7px; margin: 12px 0; }
+.candidate-comparison-card video { display: block; width: 100%; height: auto; max-height: min(360px, 56vh); object-fit: contain; background: #17202c; border-radius: 7px; margin: 12px 0; }
 .candidate-comparison-facts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .candidate-comparison-facts > span { padding: 3px 7px; border-radius: 6px; color: #35548f; background: #e8eefb; font-size: 11px; }
 .candidate-comparison-facts small { width: 100%; color: var(--muted); overflow-wrap: anywhere; }

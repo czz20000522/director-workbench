@@ -368,13 +368,23 @@
 
 /* 局部重绘：图上涂蒙版，只重画涂到的区域 */
 .ffs-inpaint-backdrop { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; padding: 18px; background: rgba(18, 22, 30, .55); }
-.ffs-inpaint { width: min(760px, 100%); max-height: calc(100vh - 36px); overflow: auto; display: grid; gap: 10px; padding: 16px; border-radius: 14px; background: #fff; box-shadow: 0 24px 60px rgba(15, 23, 42, .32); color: var(--post-ink, #202124); }
+.ffs-inpaint { width: min(1080px, calc(100vw - 40px)); max-height: calc(100vh - 36px); overflow: auto; display: grid; gap: 10px; padding: 16px; border-radius: 14px; background: #fff; box-shadow: 0 24px 60px rgba(15, 23, 42, .32); color: var(--post-ink, #202124); }
 .ffs-inpaint-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .ffs-inpaint-head strong { font-size: 14px; }
 .ffs-inpaint-head span { display: block; margin-top: 3px; color: var(--post-muted, #60646c); font-size: 11px; line-height: 1.45; }
 .ffs-inpaint-stage { position: relative; display: grid; place-items: center; min-height: 140px; border-radius: 10px; background: #f2f4f7; overflow: hidden; }
-.ffs-inpaint-base, .ffs-inpaint-mask { display: block; width: 100%; height: auto; max-height: 52vh; }
-.ffs-inpaint-mask { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+/* 底图与蒙版必须严格同框：用 grid 同一格叠放、同一套缩放规则。
+   以前底图 width:100% + max-height 会把竖图压扁，蒙版又按 stage 尺寸铺满，
+   于是涂抹位置和实际像素对不上。 */
+.ffs-inpaint-base, .ffs-inpaint-mask {
+  grid-area: 1 / 1;
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 56vh;
+}
+.ffs-inpaint-mask { position: static; cursor: crosshair; touch-action: none; }
 .ffs-inpaint-loading { position: absolute; display: inline-flex; align-items: center; gap: 6px; color: var(--post-muted, #60646c); font-size: 11px; }
 .ffs-inpaint-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .ffs-inpaint-tools button { display: inline-flex; align-items: center; gap: 4px; padding: 5px 9px; border: 1px solid var(--post-line, #d9dce2); border-radius: 7px; background: #fff; color: var(--post-ink, #202124); font-size: 11px; cursor: pointer; }
@@ -621,3 +631,12 @@
 .ve-origin-tabs button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border: 1px solid var(--post-line); border-radius: 999px; background: #fff; color: var(--post-muted); font: inherit; font-size: 11px; cursor: pointer; }
 .ve-origin-tabs button span { font-size: 10px; opacity: .7; }
 .ve-origin-tabs button[aria-pressed="true"] { background: #202124; border-color: #202124; color: #fff; }
+
+/* 首帧历史 · 文件已不在的占位（以前这里是一块空白，看不出是没加载还是没了） */
+.ffs-cell-missing { display: grid; place-items: center; gap: 4px; aspect-ratio: 3 / 4; padding: 8px; border-radius: 7px; background: #f6f7f9; color: var(--post-muted, #6b7280); font-size: 11px; text-align: center; }
+.ffs-cell-missing small { font-size: 10px; opacity: .8; word-break: break-all; }
+
+/* 首帧历史 · 文件已不在的那张：可以移除，但不能被选中当开始画面 */
+.ffs-cell.is-missing { opacity: .72; }
+.ffs-cell.is-missing .ffs-cell-pick { cursor: not-allowed; }
+.ffs-cell.is-missing .ffs-cell-pick:hover { border-color: var(--post-line); }

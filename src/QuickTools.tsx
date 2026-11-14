@@ -1,5 +1,5 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { AudioLines, BookOpen, ChevronLeft, Image, ImagePlus, LoaderCircle, Music, Play, Scissors, Upload, Wand2 } from 'lucide-react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { AudioLines, BookOpen, Image, ImagePlus, LoaderCircle, Music, Play, Scissors, Upload, Wand2 } from 'lucide-react';
 import { mediaUrl, request } from './api/client';
 import type { AspectRatio, OutputResolution } from './ResolutionPicker';
 import { capVideoQuality, detectQualityIntent, qualityLabel } from './qualityIntent';
@@ -12,14 +12,15 @@ import PromptWriter from './PromptWriter';
 import TranslateButton from './TranslateButton';
 import StyleBlockPicker, { readStyleBlock } from './StyleBlockPicker';
 import VideoPresetPicker, { type VideoPreset, type HardwareSummary } from './VideoPresetPicker';
+import { lazyWithReload } from './lazyWithReload';
 
-const KeyframePanel = lazy(() => import('./KeyframePanel'));
-const EnhancementPanel = lazy(() => import('./EnhancementPanel'));
-const MusicPanel = lazy(() => import('./MusicPanel'));
-const TimbrePanel = lazy(() => import('./TimbrePanel'));
-const VideoEditPanel = lazy(() => import('./VideoEditPanel'));
+const KeyframePanel = lazyWithReload(() => import('./KeyframePanel'), 'KeyframePanel');
+const EnhancementPanel = lazyWithReload(() => import('./EnhancementPanel'), 'EnhancementPanel');
+const MusicPanel = lazyWithReload(() => import('./MusicPanel'), 'MusicPanel');
+const TimbrePanel = lazyWithReload(() => import('./TimbrePanel'), 'TimbrePanel');
+const VideoEditPanel = lazyWithReload(() => import('./VideoEditPanel'), 'VideoEditPanel');
 
-export type QuickTool = 'image' | 'text-video' | 'image-video' | 'reference-image' | 'enhance' | 'music' | 'timbre' | 'video-edit';
+export type QuickTool = 'image' | 'text-video' | 'image-video' | 'reference-image' | 'virtual-image' | 'enhance' | 'music' | 'timbre' | 'video-edit';
 /** 首页「编辑重生成」把上次那条任务的可编辑输入原样带回来；fromTask 说明来源。 */
 export type QuickSeed = {
   prompt?: string; frame?: string; timbre?: string; music?: Record<string, unknown>;
@@ -32,6 +33,8 @@ export type QuickSeed = {
   /** 视频任务关联过的人物声音（口型锁定）与配乐，编辑重生成时一起带回。 */
   voice?: string;
   musicTrack?: string;
+  /** 这条任务当时产出的视频：重编辑时右栏接着播。 */
+  video?: string;
   /** 参考图生成的底图：编辑重生成时放回参考图槽。 */
   image?: string;
   /** 参考图生成的「降噪」开关，跟任务一起带回来。 */
@@ -49,14 +52,29 @@ const videoClarity: { value: OutputResolution; label: string; note: string }[] =
   { value: '2k', label: '2K', note: '上采样' },
   { value: '4k', label: '4K', note: '上采样' },
 ];
-type Task = { id: string; status: string; error?: string; progress?: TaskProgress };
+type Task = { id: string; status: string; error?: string; progress?: TaskProgress; result?: unknown };
 type Version = { task_id: string; video_path: string; is_current?: boolean };
+
+/** 配音/视频的回执里有 output 与 duration_seconds，任务行本身不带这两个字段。 */
+function readReceipt(value: unknown): { path: string; seconds: number } {
+  let record: Record<string, unknown> = {};
+  if (typeof value === 'string') {
+    try { record = JSON.parse(value) as Record<string, unknown>; } catch { record = {}; }
+  } else if (value && typeof value === 'object') {
+    record = value as Record<string, unknown>;
+  }
+  return {
+    path: typeof record.output === 'string' ? record.output : '',
+    seconds: Number(record.duration_seconds) || 0,
+  };
+}
 
 const meta: Record<Tool, { title: string; note: string; icon: typeof Image }> = {
   image: { title: '文生图', note: '输入提示词，生成一张图片。工作台只执行你明确提交的任务。', icon: Image },
   'text-video': { title: '文生视频', note: '选择制作方案，输入提示词，生成一个镜头。', icon: Play },
   'image-video': { title: '图生视频', note: '上传一张开始画面，或用素材库拼一张首帧，再选择图生方案生成镜头。', icon: Upload },
   'reference-image': { title: '参考图生成', note: '图生图：上传一张参考图，本地或在线模型识别成提示词，改顺了再批量生成相似但不重样的图。', icon: ImagePlus },
+  'virtual-image': { title: '虚图生真图', note: '用素材库的姿势线稿/深度图当骨架，配上人脸、服装和提示词，生成一张真实画面。', icon: Wand2 },
   enhance: { title: '清晰化', note: '上传图片或视频，提高分辨率。', icon: Wand2 },
   music: { title: '配乐', note: '写风格标签与时长，生成一段新音乐候选。', icon: Music },
   timbre: { title: '音色设计', note: 'VoxCPM2 凭文字造音色，或 IndexTTS 克隆参考音频，出可复用样本。', icon: AudioLines },
@@ -85,12 +103,14 @@ function quickWorkspace(): Promise<string> {
 const LOCKED_AUDIO_PRESET = 'h3-first-locked-audio';
 
 function QuickVideo({ mode, workspaceId, adoptInto, initialFrame, initialPrompt, initialDuration, initialQuality, initialPreset,
-  initialVoice, initialMusic, promptTicket, frameTicket, restore }: {
+  initialVoice, initialMusic, initialVideo, promptTicket, frameTicket, restore }: {
   mode: 'text-video' | 'image-video'; workspaceId?: string; initialFrame?: string; initialPrompt?: string;
   initialDuration?: number; initialQuality?: OutputResolution;
   /** 「编辑重生成」带回来的关联声音：改提示词重跑时不用重新选。 */
   initialVoice?: string;
   initialMusic?: string;
+  /** 重编辑带回来的上一版成片：填进右栏预览，不用重新生成就能回看。 */
+  initialVideo?: string;
   /** 选了作品归属：任务仍落草稿箱（不写该作品分镜），成功后由后端自动复制归入。 */
   adoptInto?: string;
   /** 「编辑重生成」带回来的制作方案：不还原它，表单会按另一条路线重跑。 */
@@ -139,13 +159,24 @@ function QuickVideo({ mode, workspaceId, adoptInto, initialFrame, initialPrompt,
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
   const [progress, setProgress] = useState<TaskProgress | null>(null);
-  const [video, setVideo] = useState('');
+  // 重编辑会带上一次那条成片：右栏继续能播，台词也能直接拿它的音轨当参考。
+  const [video, setVideo] = useState(initialVideo || '');
   // 记住产出这条视频的任务号，后续配乐/音色靠它建立归属。
   const [videoTaskId, setVideoTaskId] = useState('');
   // 关联已有声音：默认都不选 —— 不选就是按提示词让模型自己出声。
   // 人物声音＝口型锁定（需要首帧）；配乐＝生成后混入音轨，不重新出画面。
   const [audioAssets, setAudioAssets] = useState<{ id: string; title: string; path: string }[]>([]);
   const [voicePath, setVoicePath] = useState(initialVoice || '');
+  // 首帧的真实比例：和方案画幅不一致时，后端会居中裁切（以前是直接拉伸，人脸会被拉长）。
+  const [frameRatio, setFrameRatio] = useState(0);
+  // 台词 → 配音 → 口型：台词框里写了话，就先按「音色参考」合成这句，再喂给视频锁口型。
+  const [dialogue, setDialogue] = useState('');
+  // 音色从哪来：上一段视频的音轨 / 上面选的人物声音 / 素材库里的某条音频。
+  const [dialogueVoice, setDialogueVoice] = useState<'last' | 'voice' | 'asset'>('last');
+  const [dialogueAsset, setDialogueAsset] = useState('');
+  const [dialogueAudio, setDialogueAudio] = useState<{ path: string; seconds: number } | null>(null);
+  // 同一句台词 + 同一个音色来源只配一次：生成失败重试时不用再等两分钟配音。
+  const [dialogueKey, setDialogueKey] = useState('');
   const [musicPath, setMusicPath] = useState(initialMusic || '');
   const [error, setError] = useState('');
   const [projectId, setProjectId] = useState(workspaceId || '');
@@ -218,6 +249,81 @@ function QuickVideo({ mode, workspaceId, adoptInto, initialFrame, initialPrompt,
     };
   };
 
+  useEffect(() => {
+    setFrameRatio(0);
+    if (!firstFrame) return;
+    const probe = new window.Image();
+    probe.onload = () => { if (probe.naturalWidth && probe.naturalHeight) setFrameRatio(probe.naturalWidth / probe.naturalHeight); };
+    const url = mediaUrl(firstFrame);
+    if (url) probe.src = url;
+  }, [firstFrame]);
+
+  /** 锁定方案只认 4–15 秒；配音比这长就截，短了就补，别让预检先报错。 */
+  const fitDuration = (seconds: number) => Math.min(15, Math.max(4, Math.round(seconds || 4)));
+
+  // 还没有上一段视频时，「上一段音轨」这个默认值是空的：自动退到能用的那一个，
+  // 否则下拉框停在一个选不中的选项上，看着像坏了。
+  useEffect(() => {
+    if (video || dialogueVoice !== 'last') return;
+    if (voicePath) setDialogueVoice('voice');
+    else if (audioAssets.length) setDialogueVoice('asset');
+  }, [video, voicePath, audioAssets.length, dialogueVoice]);
+
+  // 选「素材库音频」时给一个默认项，省得用户还要多点一次。
+  useEffect(() => {
+    if (dialogueVoice === 'asset' && !dialogueAsset && audioAssets.length) setDialogueAsset(audioAssets[0].path);
+  }, [dialogueVoice, dialogueAsset, audioAssets]);
+
+  /** 台词要克隆的那条音色：优先用上一段视频的音轨（截 10 秒），其次人物声音、素材库。 */
+  const dialogueReference = async (id: string): Promise<string> => {
+    if (dialogueVoice === 'last') {
+      if (!video) throw new Error('还没有上一段视频：把音色来源换成「素材库音频」或上面的人物声音');
+      const clip = await request<{ path: string }>(`/api/projects/${id}/dialogue/audio`, {
+        json: { source: video, seconds: 10 }, timeoutMs: 90_000,
+      });
+      return clip.path;
+    }
+    if (dialogueVoice === 'voice') {
+      if (!voicePath) throw new Error('还没选「人物声音」——它就是这段台词的音色来源');
+      return voicePath;
+    }
+    if (!dialogueAsset) throw new Error('还没选素材库里的音频');
+    return dialogueAsset;
+  };
+
+  /** 台词 → 配音。返回音频路径和真实时长，后面按它对齐视频。 */
+  const speakDialogue = async (id: string): Promise<{ path: string; seconds: number }> => {
+    setStatus('1/2 正在按台词配音…');
+    const startedAt = Date.now();
+    const reference = await dialogueReference(id);
+    const created = await request<{ id: string }>(`/api/projects/${id}/speech-tasks`, {
+      json: {
+        // voxcpm-2 本机实测能跑（IndexTTS 的 sklearn DLL 被系统应用控制策略拦住，别默认它）。
+        engine: 'voxcpm-2', mode: 'reference', voice_reference: reference,
+        text: dialogue.trim(), idempotency_key: crypto.randomUUID(),
+      },
+      timeoutMs: 60_000,
+    });
+    for (let attempt = 0; attempt < 240; attempt += 1) {
+      const detail = await request<Task & { task?: Task; result?: unknown }>(`/api/tasks/${encodeURIComponent(created.id)}`);
+      const current = detail.task || detail;
+      if (current.status === 'succeeded') {
+        const receipt = readReceipt(current.result);
+        if (!receipt.path) throw new Error('配音完成但没拿到音频文件');
+        setDialogueAudio(receipt);
+        return receipt;
+      }
+      if (['failed', 'stopped', 'needs_reconcile'].includes(current.status)) {
+        throw new Error(current.error || '配音没有成功，先换成素材库音频再试一次');
+      }
+      // 配音引擎首次要加载权重，两分钟很正常；把秒数写出来，别让人以为卡住了。
+      const waited = Math.round((Date.now() - startedAt) / 1000);
+      setStatus(`1/2 正在按台词配音… ${waited} 秒${waited > 20 ? '（首次要加载配音模型，约 2 分钟）' : ''}`);
+      await new Promise(resolve => setTimeout(resolve, 1500));
+    }
+    throw new Error('配音等了 6 分钟还没完成，可以在「配音」工具里单独跑一次');
+  };
+
   // 方案表里已经没有这个 id（方案被移除）时清掉，免得带着一个选不中的值去提交。
   useEffect(() => {
     if (!presetId || !presets.length) return;
@@ -265,6 +371,10 @@ function QuickVideo({ mode, workspaceId, adoptInto, initialFrame, initialPrompt,
   const appliedQuality = promptIntent ? capVideoQuality(promptIntent.resolution) : quality;
   const qualityCapped = promptIntent ? appliedQuality !== promptIntent.resolution : false;
   const presetAspect = presets.find(item => item.id === presetId)?.aspect_ratio;
+  // 比例差 6% 以上才提示：轻微差异肉眼看不出来，提示多了就是噪音。
+  const targetRatio = presetAspect === '9:16' ? 9 / 16 : presetAspect === '1:1' ? 1 : 16 / 9;
+  const ratioLabel = frameRatio > 0 ? `${frameRatio > 1.2 ? '约 16:9' : frameRatio < 0.84 ? '约 9:16' : '接近方形'}` : '';
+  const frameMismatch = Boolean(frameRatio && presetAspect && Math.abs(frameRatio - targetRatio) / targetRatio > 0.06);
   // Pika 是后接的路线，方案表里一直排最后，看着像没接上。放到同组最前面。
   const orderedPresets = useMemo(() => {
     const rank = (item: VideoPreset) => (item.id.startsWith('h3-pika-') ? 0 : 1);
@@ -277,14 +387,36 @@ function QuickVideo({ mode, workspaceId, adoptInto, initialFrame, initialPrompt,
     if (!effectivePrompt.trim()) { setError('请填写提示词'); return; }
     // 原来写死 42，导致同一组参数每次出片完全一样。这里每次提交换一个，
     // 但整条链路（分镜 / 预检 / 任务）必须共用同一个值，否则会被判为参数冲突。
-    const videoSeed = Math.floor(Math.random() * 4294967295);
+    // 上限必须跟 shot_creation.GenerationSettings.seed 对齐（2147483647）：
+    // 以前取到 2^32-1，超出就被分镜接口判 422，表现是「约一半的点生成直接失败」。
+    const videoSeed = Math.floor(Math.random() * 2147483647);
     const turboValue = turbo ? 'enable' : 'disable';
-    const commonValues = { prompt: effectivePrompt.trim(), seed: videoSeed, duration, ...(isPikaPreset ? {} : { 'turbo-sampling': turboValue }) };
     setBusy(true); setError(''); setStatus('准备单步任务…'); setProgress(null);
     try {
       const id = await ensureProject();
-      setStatus('安装制作方案…');
-      const installed = await request<{ project: { pipeline?: { id: string; execution?: { references?: string[] } }[]; production_preset?: { workflow?: string } } }>(`/api/projects/${id}/production-presets/${encodeURIComponent(presetId)}`, { init: { method: 'POST' } });
+      // 台词这条链要先把配音做出来：录音 → 克隆音色 → 再喂给视频锁口型。
+      // 只有图生视频能做，因为口型要靠首帧把人物定住。
+      let runVoice = mode === 'image-video' ? voicePath : '';
+      let runDuration = duration;
+      let runPreset = presetId;
+      if (dialogue.trim() && mode === 'image-video') {
+        const key = `${dialogue.trim()}|${dialogueVoice}|${dialogueAsset}|${video}`;
+        const cached = dialogueAudio && dialogueKey === key ? dialogueAudio : null;
+        const spoken = cached ?? await speakDialogue(id);
+        if (!cached) setDialogueKey(key);
+        runVoice = spoken.path;
+        runDuration = fitDuration(spoken.seconds);
+        // 只有「锁定音频」方案会把 guide 当口型时间轴用，别的方案会静默忽略。
+        runPreset = LOCKED_AUDIO_PRESET;
+        setVoicePath(spoken.path);
+        setDuration(runDuration);
+        setPresetId(LOCKED_AUDIO_PRESET);
+        setStatus(`已配音 ${spoken.seconds.toFixed(1)} 秒 · 2/2 开始出片`);
+      }
+      const runIsPika = runPreset === presetId && isPikaPreset;
+      const commonValues = { prompt: effectivePrompt.trim(), seed: videoSeed, duration: runDuration, ...(runIsPika ? {} : { 'turbo-sampling': turboValue }) };
+      if (!dialogue.trim()) setStatus('安装制作方案…');
+      const installed = await request<{ project: { pipeline?: { id: string; execution?: { references?: string[] } }[]; production_preset?: { workflow?: string } } }>(`/api/projects/${id}/production-presets/${encodeURIComponent(runPreset)}`, { init: { method: 'POST' } });
       // 单步容器会把历次装过的方案留在 pipeline 里，所以 pipeline[0] 未必是这次选的。
       // 以 production_preset.workflow 为准，再反查它属于哪一条执行阶段。
       const presetWorkflow = installed.project.production_preset?.workflow || '';
@@ -299,10 +431,11 @@ function QuickVideo({ mode, workspaceId, adoptInto, initialFrame, initialPrompt,
         .catch(() => ({ revision: 0 }));
       const created = await request<{ segment?: { id?: string } }>(`/api/projects/${id}/plan/segments`, {
         init: { method: 'POST' }, json: {
-          segment_id: 'S01', expected_revision: plan.revision ?? 0, duration_seconds: duration, prompt: effectivePrompt.trim(),
+          segment_id: 'S01', expected_revision: plan.revision ?? 0, duration_seconds: runDuration, prompt: effectivePrompt.trim(),
           workflow, first_frame: mode === 'image-video' ? firstFrame : undefined,
           // 口型锁定：分镜上登记这段表演音频，预检会把它解析成 guide 输入。
-          audio_guide: voicePath && mode === 'image-video' ? voicePath : undefined,
+          // 台词模式下 runVoice 是刚配好的那句，不是上一次选的旧音频。
+          audio_guide: runVoice && mode === 'image-video' ? runVoice : undefined,
           // 画幅、声音模式、速度档、创作分区都由所选方案自己定（后端 generation_defaults）。
           // 前端硬传 standard / performance_reference 会在快速或成人向方案上撞 422。
           generation: { seed: videoSeed, output_resolution: appliedQuality },
@@ -334,6 +467,8 @@ function QuickVideo({ mode, workspaceId, adoptInto, initialFrame, initialPrompt,
         setStatus(statusLabels[current.status] || current.status);
         setProgress(current.progress || null);
         if (['succeeded', 'failed', 'stopped', 'needs_reconcile'].includes(current.status)) {
+          // 进终态就清进度：后面还要取版本、写提示词，别让「已完成」旁边还挂着「第 20/20 步」。
+          setProgress(null);
           if (current.status !== 'succeeded') throw new Error(current.error || `任务状态：${current.status}`);
           break;
         }
@@ -390,10 +525,10 @@ function QuickVideo({ mode, workspaceId, adoptInto, initialFrame, initialPrompt,
           </select>
         </label>
         <label className="sf-field">
-          <span>配乐</span>
+          <span>配乐（不选就没有）</span>
           <select value={musicPath} disabled={busy} onChange={event => setMusicPath(event.target.value)}
-            title="生成完成后混进成片，不重新出画面">
-            <option value="">不关联</option>
+            title="选了文件：生成后混进成片；不选：不加配乐，提示词里写了配乐就按提示词">
+            <option value="">不加配乐（按提示词）</option>
             {musicPath && !audioAssets.some(item => item.path === musicPath)
               && <option value={musicPath}>（原文件已不在）{musicPath.split(/[\\/]/).pop()}</option>}
             {audioAssets.map(item => <option key={item.id} value={item.path}>{item.title}</option>)}
@@ -406,7 +541,7 @@ function QuickVideo({ mode, workspaceId, adoptInto, initialFrame, initialPrompt,
           : mode === 'text-video'
             ? '文生视频没有首帧可锁口型；要人物对上声音，请用「图生视频」并选好开始画面。'
             : audioAssets.length
-              ? '选人物声音会改用锁定音频方案；配乐在生成后混入（保留原生音轨，压到 0.9 倍）。'
+              ? '选人物声音会改用锁定音频方案；配乐在生成后混入（保留原生音轨，压到 0.9 倍）。配乐不选就没有——提示词里写了配乐或音乐，就交给模型按提示词出。'
               : '还没有可关联的音频：先用「配音」「音色设计」或「配乐」做一条，再回来选。'}
       </small>
     </div>
@@ -465,9 +600,10 @@ function QuickVideo({ mode, workspaceId, adoptInto, initialFrame, initialPrompt,
     </div>
     </> : <p className="sf-fine">先选一套制作方案：时长、画质和步数都由它决定——Pika 固定 6 步 / 5 秒，H3 是 8 步 Turbo 或 20 步精细。</p>}
     {promptIntent && <small className="sf-fine">提示词里写了「{promptIntent.phrase}」：本次按 {qualityLabel(appliedQuality)} 输出{qualityCapped ? '（8K 视频暂以 4K 输出）' : ''}，优先于你选择的 {qualityLabel(quality)}。</small>}
+    {frameMismatch && <p className="sf-fine">开始画面是{frameRatio > 1 ? '横图' : '竖图'}（{ratioLabel}），方案是 {presetAspect}：生成时会<strong>居中裁切</strong>成 {presetAspect} 再出片，不会把人拉长；想保留完整构图，换一张同比例的首帧。</p>}
     {error && <p className="sf-error" role="alert">{error}</p>}
     {status && <p className="qt-status">{busy && <LoaderCircle size={14} className="sf-spin" />}{status}</p>}
-    <ProgressBar progress={progress} />
+    <ProgressBar progress={busy ? progress : null} />
     <div className="sf-step-actions"><button className="sf-primary" disabled={busy} onClick={() => void submit()}>{busy ? '生成中…' : '生成'}</button></div>
     {libraryOpen && <PromptLibraryDialog target={mode} onUse={text => setPrompt(text)} onClose={() => setLibraryOpen(false)} />}
     </div>
@@ -485,6 +621,43 @@ function QuickVideo({ mode, workspaceId, adoptInto, initialFrame, initialPrompt,
             ? <figure className="qt-preview-frame"><img src={mediaUrl(firstFrame)} alt="开始画面" /><figcaption>开始画面（出片后会在这里换成视频）</figcaption></figure>
             : <p className="qt-preview-empty">生成一条之后，视频会固定停在这一栏，方便你一边看一边改下面的参数。</p>}
       </section>
+      {mode === 'image-video' && <section className="qt-dialogue" aria-label="台词与口型">
+        <header className="qt-dialogue-head">
+          <strong>台词 · 口型</strong>
+          <small>{dialogue.trim() ? '会先配音，再让画面跟着这句开口' : '写一句台词，人物按这句开口'}</small>
+        </header>
+        <textarea rows={3} value={dialogue} disabled={busy}
+          onChange={event => setDialogue(event.target.value)}
+          placeholder="她低声说：还是没来。&#10;留空就按提示词让模型自己出声。" />
+        <div className="qt-dialogue-row">
+          <label className="sf-field">
+            <span>音色来源</span>
+            <select value={dialogueVoice} disabled={busy}
+              onChange={event => setDialogueVoice(event.target.value as 'last' | 'voice' | 'asset')}>
+              <option value="last" disabled={!video}>{video ? '上一段视频的音轨' : '上一段视频的音轨（还没有）'}</option>
+              <option value="voice" disabled={!voicePath}>{voicePath ? '上面选的「人物声音」' : '上面选的「人物声音」（未选）'}</option>
+              <option value="asset" disabled={!audioAssets.length}>素材库里的音频</option>
+            </select>
+          </label>
+          {dialogueVoice === 'asset' && <label className="sf-field">
+            <span>用哪一条</span>
+            <select value={dialogueAsset} disabled={busy} onChange={event => setDialogueAsset(event.target.value)}>
+              <option value="">请选择</option>
+              {audioAssets.map(item => <option key={item.id} value={item.path}>{item.title}</option>)}
+            </select>
+          </label>}
+        </div>
+        <small className="sf-fine">
+          {video
+            ? '默认拿上一段视频的音轨当音色参考：同一个人的声音，换一句新台词。'
+            : '还没有上一段视频：可以先选素材库里的音频，或在上面的「关联已有声音」里挑一条。'}
+          台词会先合成配音、再驱动口型，时长按配音对齐（4–15 秒）；音色是「像」那条参考，不是逐字复刻原录音。
+        </small>
+        {dialogueAudio && <div className="qt-dialogue-audio">
+          <span>最近一次配音 · {dialogueAudio.seconds.toFixed(1)} 秒</span>
+          <audio src={mediaUrl(dialogueAudio.path)} controls preload="metadata" />
+        </div>}
+      </section>}
       {video && videoTaskId && projectId && <section className="qt-companions" aria-label="这条视频的配套素材">
         <h3 className="qt-companions-title">配套素材</h3>
         <p className="qt-companions-note">在这条视频下面直接做，产物会记下「属于 {videoTaskId.slice(0, 8)}」；参数按默认值走，要细调再去独立工具。</p>
@@ -513,6 +686,13 @@ export default function QuickToolPage({ tool, onBack, seed }: { tool: Tool; onBa
   const [promptTicket, setPromptTicket] = useState<{ text: string; at: number } | null>(null);
   const [frameTicket, setFrameTicket] = useState<{ path: string; title: string; at: number } | null>(null);
   const info = meta[tool];
+  // 进工具就预热绘图引擎：ComfyUI 冷启动约一分钟，先拉起来，写提示词的时间正好盖住。
+  // 剪辑（ffmpeg）和音色设计不占这个引擎，不要为它们白占一份显存。
+  const needsEngine = tool !== 'video-edit' && tool !== 'timbre';
+  useEffect(() => {
+    if (!needsEngine) return;
+    void request('/api/engine/warm', { init: { method: 'POST' }, timeoutMs: 8_000 }).catch(() => undefined);
+  }, [needsEngine]);
   // 带回来的画质只认这个工具真有的档位；8K 只属于图片，视频最高 4K。
   const imageQuality: OutputResolution = seed?.quality === '2k' || seed?.quality === '4k' || seed?.quality === '8k' ? seed.quality : 'native';
   const videoQuality: OutputResolution = seed?.quality === '2k' || seed?.quality === '4k' ? seed.quality : 'native';
@@ -551,7 +731,7 @@ export default function QuickToolPage({ tool, onBack, seed }: { tool: Tool; onBa
   const withRails = Boolean(promptTarget);
 
   const body = <>
-    <button className="sf-back" onClick={onBack}><ChevronLeft size={15} /> 返回工具台</button>
+    {/* 返回入口已挪到顶部固定栏，滚动时始终可点；这里只留标题。 */}
     <header className="qt-head"><span className="qt-icon"><info.icon size={22} /></span><div><p className="sf-step-label">单步工具</p><h1>{info.title}</h1><p>{info.note}</p></div></header>
     {scoped && <div className="qt-target" aria-label="生成到哪里">
       <span className="qt-target-label">生成到</span>
@@ -570,11 +750,14 @@ export default function QuickToolPage({ tool, onBack, seed }: { tool: Tool; onBa
       restore={seed?.fromTask && seed?.image
         ? { image: seed.image, prompt: seed.prompt, aspect: seed.aspect, refine: seed.refine }
         : undefined} />}
+    {tool === 'virtual-image' && (projectId
+      ? <FirstFrameStudio projectId={projectId} purpose="still" onChange={() => { /* 真图留在面板里，可液化或存入素材库 */ }} />
+      : !error && <p className="qt-status"><LoaderCircle size={14} className="sf-spin" />正在准备单步项目…</p>)}
     {tool === 'enhance' && (projectId ? <EnhancementPanel projectId={projectId} initialSource={seed?.source || ''} onBack={onBack} /> : !error && <p className="qt-status"><LoaderCircle size={14} className="sf-spin" />正在准备单步项目…</p>)}
     {tool === 'music' && (projectId ? <MusicPanel projectId={projectId} initialCard={seed?.music || null} initialSeed={seed?.seed} onComplete={() => {}} /> : !error && <p className="qt-status"><LoaderCircle size={14} className="sf-spin" />正在准备单步项目…</p>)}
     {tool === 'timbre' && (projectId ? <TimbrePanel projectId={projectId} initialDescription={seed?.timbre} initialDraft={timbreDraft || timbreCardDraft} sourceCard={seed?.timbreCard?.name} onComplete={() => {}} /> : !error && <p className="qt-status"><LoaderCircle size={14} className="sf-spin" />正在准备单步项目…</p>)}
     {tool === 'video-edit' && (projectId ? <Suspense fallback={<p className="qt-status"><LoaderCircle size={14} className="sf-spin" />正在载入剪辑台…</p>}><VideoEditPanel projectId={projectId} /></Suspense> : !error && <p className="qt-status"><LoaderCircle size={14} className="sf-spin" />正在准备单步项目…</p>)}
-    {(tool === 'text-video' || tool === 'image-video') && <QuickVideo mode={tool} workspaceId={projectId} adoptInto={target || undefined} initialFrame={seed?.frame} initialPrompt={seed?.prompt} initialDuration={seed?.duration} initialQuality={videoQuality} initialPreset={seed?.preset} initialVoice={seed?.voice} initialMusic={seed?.musicTrack} promptTicket={promptTicket} frameTicket={frameTicket}
+    {(tool === 'text-video' || tool === 'image-video') && <QuickVideo mode={tool} workspaceId={projectId} adoptInto={target || undefined} initialFrame={seed?.frame} initialPrompt={seed?.prompt} initialDuration={seed?.duration} initialQuality={videoQuality} initialPreset={seed?.preset} initialVoice={seed?.voice} initialMusic={seed?.musicTrack} initialVideo={seed?.video} promptTicket={promptTicket} frameTicket={frameTicket}
       restore={seed?.fromTask && seed?.references?.length
         ? { prompt: seed.prompt, references: seed.references, seed: seed.seed, aspect: seed.aspect }
         : undefined} />}

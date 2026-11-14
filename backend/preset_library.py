@@ -6,8 +6,10 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -158,7 +160,10 @@ def _validate_timbre(params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _validate_music(params: dict[str, Any]) -> dict[str, Any]:
-    if set(params) - {'tags', 'bpm', 'keyscale', 'timesignature', 'duration_seconds', 'language'}:
+    # sample_path / sample_duration_seconds：这段成品音频存进库之后挂在这张卡上，
+    # 删掉原任务也不影响（文件已经复制到预置库目录里）。
+    if set(params) - {'tags', 'bpm', 'keyscale', 'timesignature', 'duration_seconds', 'language',
+                      'sample_path', 'sample_duration_seconds'}:
         raise ValueError('配乐卡片包含未知参数')
     tags = _text(params.get('tags'), '风格标签', 2000, True)
     bpm = params.get('bpm')
@@ -174,8 +179,21 @@ def _validate_music(params: dict[str, Any]) -> dict[str, Any]:
     language = str(params.get('language') or 'unknown')
     if language not in music.LANGUAGES:
         raise ValueError('配乐卡片的歌词语言不在引擎支持范围内')
-    return {'tags': tags, 'bpm': bpm, 'keyscale': keyscale, 'timesignature': timesignature,
-            'duration_seconds': float(duration), 'language': language}
+    frozen = {'tags': tags, 'bpm': bpm, 'keyscale': keyscale, 'timesignature': timesignature,
+              'duration_seconds': float(duration), 'language': language}
+    sample = _text(params.get('sample_path'), '成品音频', 1000, False)
+    if sample:
+        frozen['sample_path'] = sample
+        sample_seconds = params.get('sample_duration_seconds')
+        if type(sample_seconds) in (int, float) and float(sample_seconds) > 0:
+            frozen['sample_duration_seconds'] = round(float(sample_seconds), 3)
+    return frozen
+
+
+def _without_samples(params: dict[str, Any]) -> dict[str, Any]:
+    # 小样是「后来附上的试听」，不是用户改了起点参数：只挂小样的内置卡仍算未改，
+    # 否则一次批量生成试听会让 11 张内置卡全部显示「（已改）」。
+    return {key: value for key, value in params.items() if not str(key).startswith('sample_')}
 
 
 def cards(kind: str, path: Path | None = None) -> list[dict[str, Any]]:
@@ -187,25 +205,90 @@ def cards(kind: str, path: Path | None = None) -> list[dict[str, Any]]:
     for builtin in BUILTIN[kind]:
         name = str(builtin['name'])
         saved = mine.pop(name, None)
+        changed = bool(saved) and _without_samples(saved['params']) != _without_samples(builtin['params'])
         merged.append({'name': name, 'params': saved['params'] if saved else builtin['params'],
-                       'builtin': True, 'modified': bool(saved)})
-    merged.extend({'name': name, 'params': item['params'], 'builtin': False, 'modified': False}
+                       'builtin': True, 'modified': changed,
+                       # 这两个字段给「删任务时判断素材是否已归档」用，界面可以忽略。
+                       'saved_at': (saved or {}).get('saved_at'),
+                       'source_task_id': (saved or {}).get('source_task_id')})
+    merged.extend({'name': name, 'params': item['params'], 'builtin': False, 'modified': False,
+                   'saved_at': item.get('saved_at'), 'source_task_id': item.get('source_task_id')}
                   for name, item in sorted(mine.items()))
     return merged
 
 
 def save(kind: str, name: str, params: dict[str, Any], *, now: float | None = None,
-         path: Path | None = None) -> dict[str, Any]:
+         path: Path | None = None, source_task_id: str | None = None) -> dict[str, Any]:
     label, frozen = clean_name(name), validate_params(kind, params)
+    # 手动存卡也走一遍复制：卡片只引用素材库里的副本，删掉原任务不会让试听变 404。
+    if isinstance(frozen.get('sample_path'), str) and frozen['sample_path'].strip():
+        frozen['sample_path'] = _stable_sample_path(
+            frozen['sample_path'], label, '音色库' if kind == 'timbre' else '配乐库')
     with _LOCK:
         document = load(path)
+        previous = next((item for item in document[kind] if item.get('name') == label), None)
         others = [item for item in document[kind] if item.get('name') != label]
         if len(others) >= MAX_CARDS:
             raise ValueError(f'每个分区最多保存 {MAX_CARDS} 张卡片')
         entry = {'name': label, 'params': frozen, 'saved_at': time.time() if now is None else now}
+        # 记下这张卡是从哪条任务来的：删除任务时用它显示「素材已归档」。
+        # 改卡时没带来源就保留原来的，避免编辑一次就丢掉关联。
+        linked = str(source_task_id or '').strip() or str((previous or {}).get('source_task_id') or '').strip()
+        if linked:
+            entry['source_task_id'] = linked
         document[kind] = others + [entry]
         _write(document, path)
     return entry
+
+
+def _stable_sample_path(file_path: str, description: str, library: str = '音色库') -> str:
+    """把任务产物复制进素材库，卡片只引用这份副本。
+
+    直接引用 ``speech-tasks/<id>/result/speech.wav`` 的话，用户删掉那条单步任务，
+    文件会随任务进回收站，卡片上的播放键就变成 404——这正是「删任务会不会清空音色库」
+    要避免的情况。复制失败就退回原路径，不阻断已经成功的配音。
+    """
+    source = Path(str(file_path))
+    if not source.is_file():
+        return str(file_path)
+    try:
+        from . import app as backend
+        folder = Path(backend.ASSETS_ROOT) / library
+        resolved = source.resolve()
+        if resolved.is_relative_to(folder.resolve()):
+            return str(resolved)  # 已经在素材库里，不重复复制
+        folder.mkdir(parents=True, exist_ok=True)
+        token = hashlib.sha1(str(description or resolved.name).encode('utf-8')).hexdigest()[:12]
+        target = folder / f'card-{token}{resolved.suffix.lower() or ".wav"}'
+        shutil.copy2(resolved, target)
+        return str(target.resolve())
+    except OSError:
+        return str(source.resolve())
+
+
+def archived_for_task(task_id: str, sample_paths: list[str] | None = None) -> dict[str, Any] | None:
+    """这条任务的产物是否已经收进某个预设库。
+
+    两种认定：
+    - 卡片记了 ``source_task_id``（新流程，保存时写入）；
+    - 卡片的 sample_path 正好是这条任务的产物（老卡片，按路径认）。
+
+    返回 ``{library, name, at}``，没有就返回 None。
+    """
+    wanted_task = str(task_id or '').strip()
+    wanted_paths = {str(item).replace('\\', '/').strip() for item in (sample_paths or []) if item}
+    best: dict[str, Any] | None = None
+    for kind, label in (('timbre', '音色库'), ('music', '配乐库')):
+        for card in cards(kind):
+            linked = wanted_task and str(card.get('source_task_id') or '').strip() == wanted_task
+            sample = str(card['params'].get('sample_path') or '').replace('\\', '/').strip()
+            by_path = bool(sample) and sample in wanted_paths
+            if not (linked or by_path):
+                continue
+            saved_at = float(card.get('saved_at') or 0)
+            if best is None or saved_at > float(best.get('at') or 0):
+                best = {'library': label, 'name': card.get('name') or '', 'at': saved_at}
+    return best
 
 
 def attach_sample(description: str, *, source_card: str | None, sample_path: str,
@@ -221,6 +304,8 @@ def attach_sample(description: str, *, source_card: str | None, sample_path: str
     file_path = str(sample_path or '').strip()
     if not wanted or not file_path:
         return None
+    # 先落一份到素材库再记账：之后删任务不会影响这张卡的试听。
+    file_path = _stable_sample_path(file_path, wanted)
     existing = cards('timbre', path)
     target = None
     label = str(source_card or '').strip()

@@ -126,11 +126,27 @@ export default function DubbingPanel({ projectId, options, videos, onBrowse, onC
   }
   // 音色库 → 锚点配音：只有点「带入」才会走这里，自动应用一次后即清空。
   useEffect(() => {
-    const apply = (params: Record<string, unknown>) => {
+    const apply = async (params: Record<string, unknown>) => {
       if (current.current.pending) return;
       const description = typeof params.voice_description === 'string' ? params.voice_description.trim() : '';
       const reference = typeof params.voice_reference === 'string' ? params.voice_reference : '';
       const engine = description ? 'voxcpm-2' as const : (params.engine === 'indextts-2.5' ? 'indextts-2.5' as const : 'voxcpm-2' as const);
+      // 卡片只是指针：它引用的参考音频可能已经随原任务被删了。带进来再提交，
+      // 只会在后端撞 422「音色参考不是可用音频文件」——那种报错看不出是卡片坏了。
+      if (reference) {
+        const probe = mediaUrl(reference);
+        const reachable = probe
+          ? await fetch(probe, { method: 'HEAD' }).then(response => response.ok).catch(() => false)
+          : false;
+        if (!reachable) {
+          setMessage('这张音色卡的参考音频已经不在了（原任务或文件被删过），换一张卡，或在下面重新选一段参考。');
+          return;
+        }
+      }
+      if (engine === 'indextts-2.5') {
+        setMessage('IndexTTS 在这台机器上被系统安全策略拦住了（它会加载一个没被允许的依赖），请改用 VoxCPM 的音色卡。');
+        return;
+      }
       persist({ ...current.current, draft: { ...current.current.draft, engine,
         timbre: description ? 'design' as const : 'reference' as const,
         voice_description: description || current.current.draft.voice_description,
@@ -141,8 +157,8 @@ export default function DubbingPanel({ projectId, options, videos, onBrowse, onC
       setMessage('已从音色库带入音色；生成前请确认台词、时间点和参考音频。');
     };
     const queued = consumeBringIn('timbre');
-    if (queued) apply(queued);
-    return onBringIn(detail => { if (detail.kind === 'timbre') apply(detail.params); });
+    if (queued) void apply(queued);
+    return onBringIn(detail => { if (detail.kind === 'timbre') void apply(detail.params); });
   }, []);
   useEffect(() => {
     alive.current = true;
